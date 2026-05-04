@@ -2,7 +2,7 @@
 
 In-app help system with two books: a **User Guide** (task-first, "how do I…") and a **Technical Reference** (system-first, "how does it work"). Same window, same renderer, different TOC. Frozen markdown shipped as bundle resources — content edits happen in source, not at runtime.
 
-**Status as of 2026-05-05.** Slices 1, 2, 3a (priority Technical Reference), and 4 (long-tail user guide) shipped on branch `v2-plan`. The remaining work is Slice 3b — tier-2 technical pages, opportunistic.
+**Status as of 2026-05-05.** All slices shipped on branch `v2-plan`. The help system is feature-complete: 25 pages across the User Guide and Technical Reference, plus search, deep-linking, and TestKit guards. Future work is content maintenance — keeping the pages in sync with the codebase as features land.
 
 ---
 
@@ -64,7 +64,7 @@ External `https:` links pass through to `NSWorkspace.shared.open(url)`.
 │  Slice 2   Memory user guide + ? buttons      ✅ 2026-05-04      │
 │  Slice 3a  Tech reference (priority tier)     ✅ 2026-05-05      │
 │  Slice 4   Long-tail user guide               ✅ 2026-05-05      │
-│  Slice 3b  Tech reference (tier 2, opportunistic)                │
+│  Slice 3b  Tech reference (tier 2)            ✅ 2026-05-05      │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -156,9 +156,26 @@ Prioritised because the load-bearing pages return value to future-me as much as 
 | `tech-prompt-assembly` | Prompt assembly | Cache-aware layout, per-template assembly, last-user-turn extras, continuation mode, budget overflow handling. |
 | `tech-memory-pipeline` | Memory pipeline | The six-layer contract, side-calls (summarizer / extractor / blurber), rolling vs scene summaries, entity supersession, retrieval eligibility, world-info matching. |
 
-### Tier 2 (Slice 3b, opportunistic)
+### Tier 2 (Slice 3b) ✅ shipped 2026-05-05
 
-`tech-storage`, `tech-kobold-client`, `tech-templates`, `tech-summarizer`, `tech-fact-extractor`, `tech-retrieval` (chunker + embeddings + vector store + retrieval engine), `tech-world-info-injector`, `tech-entities`, `tech-scene-summaries`, `tech-app-state`, `tech-testing`.
+Nine pages covering the remaining subsystems:
+
+| Slug | Title | Hook |
+|---|---|---|
+| `tech-app-state` | AppState & UI wiring | Singleton ownership, mutation funnels, notification model, generation entry points, per-turn maintenance, UI thread discipline. |
+| `tech-storage` | Storage layer | On-disk layout, atomic-write pattern, encoder/decoder config, schema-versioning approach (forward/backward compatible). |
+| `tech-kobold-client` | KoboldClient & SSE | Endpoint map, streaming + side-call flow, abort double-action (client + server), token counting, embeddings batching, error model, health checks. |
+| `tech-summarizer` | Summarizer | Trigger paths, slice selection (~25% ctx, 4-turn floor), split-then-merge two-call structure, scene-break vs. summarize, failure modes. |
+| `tech-fact-extractor` | Fact extractor | GBNF grammar, instruction shape, 15-user-turn window, priority topic hints, trust-layer contract, eval window. |
+| `tech-retrieval` | Retrieval pipeline | Chunker windowing, contextual blurbs, vector store API, eligibility predicate (the load-bearing rule), persistence ordering. |
+| `tech-world-info-injector` | World-info injector | Match algorithm by mode/scope, word-boundary semantics, sort + budget, what's deliberately not implemented (vector mode, fuzzy match). |
+| `tech-entities` | Entity store | Data shape, on-stage gating, salience sort, render-time topic supersession, block budget eviction order, header-prose rationale, v3 migration. |
+| `tech-testing` | Testing (TestKit) | TestKit anatomy, suite list, conventions, what's deliberately not tested, how to add a regression case. |
+
+Two pages from the original plan were folded into existing material rather than authored separately:
+
+- **`tech-templates`** — covered by [templates](Sources/RPClientCore/Help/templates.md) (User Guide) plus the per-template implementation notes in [tech-prompt-assembly](Sources/RPClientCore/Help/tech-prompt-assembly.md).
+- **`tech-scene-summaries`** — covered by the "Rolling vs. scene summaries" section in [tech-memory-pipeline](Sources/RPClientCore/Help/tech-memory-pipeline.md) and the past-tense framing material in [tech-prompt-assembly](Sources/RPClientCore/Help/tech-prompt-assembly.md).
 
 ---
 

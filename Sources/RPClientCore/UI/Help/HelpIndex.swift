@@ -57,6 +57,16 @@ enum HelpIndex {
         HelpPage(id: "tech-architecture",     title: "Architecture overview", book: .technical),
         HelpPage(id: "tech-prompt-assembly",  title: "Prompt assembly",       book: .technical),
         HelpPage(id: "tech-memory-pipeline",  title: "Memory pipeline",       book: .technical),
+        // Slice 3b — Technical Reference (tier 2).
+        HelpPage(id: "tech-app-state",          title: "AppState & UI wiring",   book: .technical),
+        HelpPage(id: "tech-storage",            title: "Storage layer",          book: .technical),
+        HelpPage(id: "tech-kobold-client",      title: "KoboldClient & SSE",     book: .technical),
+        HelpPage(id: "tech-summarizer",         title: "Summarizer",             book: .technical),
+        HelpPage(id: "tech-fact-extractor",     title: "Fact extractor",         book: .technical),
+        HelpPage(id: "tech-retrieval",          title: "Retrieval pipeline",     book: .technical),
+        HelpPage(id: "tech-world-info-injector", title: "World-info injector",   book: .technical),
+        HelpPage(id: "tech-entities",           title: "Entity store",           book: .technical),
+        HelpPage(id: "tech-testing",            title: "Testing (TestKit)",      book: .technical),
     ]
 
     static func page(id: String) -> HelpPage? {
