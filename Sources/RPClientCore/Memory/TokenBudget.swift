@@ -75,21 +75,17 @@ enum TokenBudget {
         kobold: KoboldClient,
         completion: @escaping (PromptAssembly) -> Void
     ) {
-        // 4a — plumbed through but not yet consumed. Consumed in 4b/4f.
-        _ = character
-        _ = persona
-        // Prepend "[The user's name is X.]" to the memory block so the model
-        // addresses the user by name. Lives inside memoryBlock to stay above
-        // the prompt-cache boundary — userName changes are rare so the prefix
-        // keeps reusable. Empty userName falls back to the chat's raw memory.
-        let trimmedName = userName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let effectiveMemory: String = {
-            let mem = chat.memory
-            guard !trimmedName.isEmpty else { return mem }
-            let line = "The user's name is \(trimmedName)."
-            if mem.isEmpty { return line }
-            return line + "\n\n" + mem
-        }()
+        _ = persona // 4f consumes this
+        // Memory block composition (system_prompt + userName line + card
+        // biographical prefix + chat.memory) lives in
+        // `PromptBuilder.composeMemoryBlock` so the test path and production
+        // path see the same shape. Lives above the cache boundary — these
+        // pieces change rarely so the prefill prefix stays reusable.
+        let effectiveMemory: String = PromptBuilder.composeMemoryBlock(
+            chat: chat,
+            character: character,
+            userName: userName
+        ) ?? ""
         let group = DispatchGroup()
         let counter = TokenCounter.shared
 

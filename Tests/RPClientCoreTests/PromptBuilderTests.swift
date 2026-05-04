@@ -260,5 +260,117 @@ func promptBuilderTests() -> TestSuite {
         try expectEqual(PromptBuilder.truncateToCharCap("anything", capChars: 0), "")
     }
 
+    // MARK: - composeMemoryBlock (Phase 3 §4.4 step 4b)
+
+    s.test("composeMemoryBlock returns nil when nothing to inject") {
+        let chat = Chat()
+        try expectNil(PromptBuilder.composeMemoryBlock(chat: chat, character: nil, userName: ""))
+    }
+
+    s.test("composeMemoryBlock with no character returns chat.memory + userName line") {
+        var chat = Chat()
+        chat.memory = "Sarah loves Metallica."
+        let block = try expectNotNil(PromptBuilder.composeMemoryBlock(chat: chat, character: nil, userName: "Kev"))
+        try expectTrue(block.contains("The user's name is Kev."))
+        try expectTrue(block.contains("Sarah loves Metallica."))
+        // userName line must come before chat.memory.
+        let nameRange = try expectNotNil(block.range(of: "The user's name is Kev."))
+        let memRange = try expectNotNil(block.range(of: "Sarah loves Metallica."))
+        try expectTrue(nameRange.lowerBound < memRange.lowerBound)
+    }
+
+    s.test("composeMemoryBlock with character but no system_prompt keeps chat.memory in both modes") {
+        var chat = Chat()
+        chat.memory = "user memory"
+        var card = Character(name: "Nyx")
+        card.description = "Mysterious."
+        // override mode (default) — no system_prompt means nothing to override; memory rides through.
+        let overrideBlock = try expectNotNil(PromptBuilder.composeMemoryBlock(chat: chat, character: card, userName: ""))
+        try expectTrue(overrideBlock.contains("Description: Mysterious."))
+        try expectTrue(overrideBlock.contains("user memory"))
+
+        chat.systemPromptMode = .merge
+        let mergeBlock = try expectNotNil(PromptBuilder.composeMemoryBlock(chat: chat, character: card, userName: ""))
+        try expectTrue(mergeBlock.contains("Description: Mysterious."))
+        try expectTrue(mergeBlock.contains("user memory"))
+    }
+
+    s.test("composeMemoryBlock override mode + system_prompt suppresses chat.memory") {
+        var chat = Chat()
+        chat.memory = "USER NOTES"
+        chat.systemPromptMode = .override
+        var card = Character(name: "Nyx")
+        card.systemPrompt = "You are Nyx, a witch of the moor."
+        card.description = "Quiet."
+        let block = try expectNotNil(PromptBuilder.composeMemoryBlock(chat: chat, character: card, userName: ""))
+        try expectTrue(block.contains("You are Nyx, a witch of the moor."))
+        try expectTrue(block.contains("Description: Quiet."), "biographical prefix should still ride along")
+        try expectFalse(block.contains("USER NOTES"), "override mode hides chat.memory when system_prompt present")
+    }
+
+    s.test("composeMemoryBlock merge mode + system_prompt keeps both chat.memory and system_prompt") {
+        var chat = Chat()
+        chat.memory = "USER NOTES"
+        chat.systemPromptMode = .merge
+        var card = Character(name: "Nyx")
+        card.systemPrompt = "You are Nyx."
+        let block = try expectNotNil(PromptBuilder.composeMemoryBlock(chat: chat, character: card, userName: ""))
+        try expectTrue(block.contains("You are Nyx."))
+        try expectTrue(block.contains("USER NOTES"))
+        // system_prompt above chat.memory.
+        let spRange = try expectNotNil(block.range(of: "You are Nyx."))
+        let memRange = try expectNotNil(block.range(of: "USER NOTES"))
+        try expectTrue(spRange.lowerBound < memRange.lowerBound)
+    }
+
+    s.test("composeMemoryBlock card prefix ordering: description, personality, scenario") {
+        var chat = Chat()
+        var card = Character(name: "Nyx")
+        card.description = "DESC"
+        card.personality = "PERS"
+        card.scenario = "SCEN"
+        let block = try expectNotNil(PromptBuilder.composeMemoryBlock(chat: chat, character: card, userName: ""))
+        let d = try expectNotNil(block.range(of: "Description: DESC"))
+        let p = try expectNotNil(block.range(of: "Personality: PERS"))
+        let s = try expectNotNil(block.range(of: "Scenario: SCEN"))
+        try expectTrue(d.lowerBound < p.lowerBound)
+        try expectTrue(p.lowerBound < s.lowerBound)
+        try expectTrue(block.contains(PromptBuilder.cardPrefixHeader))
+    }
+
+    s.test("composeMemoryBlock omits empty card fields without leaving stray separators") {
+        var chat = Chat()
+        var card = Character(name: "Nyx")
+        card.description = "Just a desc."
+        // personality + scenario both empty
+        let block = try expectNotNil(PromptBuilder.composeMemoryBlock(chat: chat, character: card, userName: ""))
+        try expectTrue(block.contains("Description: Just a desc."))
+        try expectFalse(block.contains("Personality:"))
+        try expectFalse(block.contains("Scenario:"))
+    }
+
+    s.test("composeMemoryBlock whitespace-only system_prompt is treated as absent") {
+        var chat = Chat()
+        chat.memory = "USER NOTES"
+        chat.systemPromptMode = .override
+        var card = Character(name: "Nyx")
+        card.systemPrompt = "   \n  "
+        let block = try expectNotNil(PromptBuilder.composeMemoryBlock(chat: chat, character: card, userName: ""))
+        // Override is a no-op when the card has nothing to override with — chat.memory must survive.
+        try expectTrue(block.contains("USER NOTES"))
+    }
+
+    s.test("build injects card system_prompt and biographical prefix into the prompt") {
+        var chat = Chat()
+        chat.templateId = "gemma"
+        chat.turns = [Turn(role: .user, text: "hello")]
+        var card = Character(name: "Nyx")
+        card.systemPrompt = "You are Nyx."
+        card.description = "Witch of the moor."
+        let (prompt, _) = PromptBuilder.build(chat: chat, character: card)
+        try expectTrue(prompt.contains("You are Nyx."))
+        try expectTrue(prompt.contains("Description: Witch of the moor."))
+    }
+
     return s
 }

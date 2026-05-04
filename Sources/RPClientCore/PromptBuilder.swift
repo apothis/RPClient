@@ -151,11 +151,11 @@ struct PromptBuilder {
     /// nil for the free-form chat path. Step 4a plumbs them through; later
     /// sub-steps consume them.
     static func build(chat: Chat, character: Character? = nil, persona: Persona? = nil, relevantMemories: String? = nil, continuation: Bool = false, qwenThinking: Bool = false) -> (prompt: String, stops: [String]) {
-        _ = character
         _ = persona
+        let memoryBlock = composeMemoryBlock(chat: chat, character: character, userName: "")
         let template = Templates.byId(chat.templateId, qwenThinking: qwenThinking)
         let prompt = template.assemble(
-            memoryBlock: chat.memory.isEmpty ? nil : chat.memory,
+            memoryBlock: memoryBlock,
             entitiesBlock: entitiesBlock(chat: chat),
             sceneSummaries: renderableScenes(chat: chat),
             summary: chat.summary.isEmpty ? nil : chat.summary,
@@ -168,6 +168,86 @@ struct PromptBuilder {
             continuation: continuation
         )
         return (prompt, template.stopSequences)
+    }
+
+    /// Header on the read-only "from card" block (description + personality +
+    /// scenario). Plain-prose framing — same pattern as `worldInfoHeader` and
+    /// the entities block — so the model treats it as a private reference
+    /// card rather than a heading to restate verbatim. See V2_PLAN §4.4.
+    static let cardPrefixHeader = "(Character card — reference details for continuity. Use silently; do not restate, quote, or copy these lines into your reply.)"
+
+    /// Compose the memory-block string the templates see at the top of the
+    /// prompt (slot 1/3 of the cache-friendly layout). Pure function of its
+    /// inputs so both `PromptBuilder.build` (test path) and
+    /// `TokenBudget.assemble` (production) can share it.
+    ///
+    /// Layering, top-to-bottom, when each piece is non-empty:
+    /// 1. `character.systemPrompt` — directive at the top.
+    /// 2. `userName` line — "The user's name is X."
+    /// 3. `[from card]` block — description / personality / scenario,
+    ///    each on their own line under a single header.
+    /// 4. `chat.memory` — user-editable notes. **Suppressed** when
+    ///    `chat.systemPromptMode == .override` AND `character.systemPrompt`
+    ///    is non-empty (the override is *of chat memory*, not of the card
+    ///    biographical prefix). In `.merge` mode, both ride together.
+    ///
+    /// Returns nil when nothing would be emitted, so callers can pass that
+    /// through to the templates' `memoryBlock: String?` slot unchanged.
+    static func composeMemoryBlock(chat: Chat, character: Character?, userName: String) -> String? {
+        let trimmedName = userName.trimmingCharacters(in: .whitespacesAndNewlines)
+        var sections: [String] = []
+
+        if let c = character, let sp = c.systemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !sp.isEmpty {
+            sections.append(sp)
+        }
+        if !trimmedName.isEmpty {
+            sections.append("The user's name is \(trimmedName).")
+        }
+        if let c = character {
+            let cardPrefix = renderCardPrefix(c)
+            if !cardPrefix.isEmpty {
+                sections.append(cardPrefix)
+            }
+        }
+
+        // Decide whether to include the user-editable chat memory. The toggle
+        // only matters when the card actually carried a system_prompt — with
+        // no system_prompt there's nothing to "override" and chat.memory rides
+        // through regardless of mode.
+        let cardHasSystemPrompt: Bool = {
+            guard let sp = character?.systemPrompt else { return false }
+            return !sp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }()
+        let suppressUserMemory = cardHasSystemPrompt && chat.systemPromptMode == .override
+        if !suppressUserMemory {
+            let mem = chat.memory.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !mem.isEmpty {
+                sections.append(chat.memory)
+            }
+        }
+
+        if sections.isEmpty { return nil }
+        return sections.joined(separator: "\n\n")
+    }
+
+    /// Render the read-only `[from card]` biographical prefix
+    /// (description / personality / scenario). Returns "" when all three are
+    /// blank so the caller can drop the section entirely. Empty fields are
+    /// omitted individually so a card with only a description doesn't render
+    /// stray blank lines.
+    static func renderCardPrefix(_ c: Character) -> String {
+        let pieces: [(String, String)] = [
+            ("Description", c.description),
+            ("Personality", c.personality),
+            ("Scenario", c.scenario),
+        ]
+        let body = pieces
+            .map { ($0.0, $0.1.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .filter { !$0.1.isEmpty }
+            .map { "\($0.0): \($0.1)" }
+            .joined(separator: "\n")
+        if body.isEmpty { return "" }
+        return cardPrefixHeader + "\n" + body
     }
 
     /// Framing line that prefixes the world-info block. Same pattern as the
