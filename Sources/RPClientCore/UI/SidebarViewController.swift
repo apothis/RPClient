@@ -25,7 +25,7 @@ final class SidebarViewController: NSViewController {
         tableView.delegate = self
         tableView.target = self
         tableView.action = #selector(rowClicked)
-        tableView.rowHeight = 44
+        tableView.rowHeight = 56
         tableView.style = .sourceList
         tableView.menu = makeContextMenu()
 
@@ -52,6 +52,11 @@ final class SidebarViewController: NSViewController {
             name: AppNotification.chatUpdated, object: nil)
         nc.addObserver(self, selector: #selector(reload),
             name: AppNotification.currentChatChanged, object: nil)
+        // Re-render badges once the model probe lands (and on each
+        // statusChanged tick) so chats whose template doesn't match the
+        // currently-loaded model flip red.
+        nc.addObserver(self, selector: #selector(reload),
+            name: AppNotification.statusChanged, object: nil)
     }
 
     deinit {
@@ -128,6 +133,22 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         subtitle.translatesAutoresizingMaskIntoConstraints = false
         cell.addSubview(subtitle)
 
+        // Template badge on its own line below the subtitle. Lets the user
+        // spot at a glance whether a chat's template matches the currently
+        // loaded model — mismatch means empty / echoed replies. Tinted red
+        // when the chat's template doesn't match the auto-detected one.
+        let detected = AppState.shared.detectedTemplateId
+        let mismatch = (detected != nil) && (detected != chat.templateId)
+        let badge = NSTextField(labelWithString: chat.templateId)
+        badge.font = Theme.mono(9)
+        badge.textColor = mismatch ? .systemRed : .tertiaryLabelColor
+        badge.toolTip = mismatch
+            ? "This chat uses '\(chat.templateId)' but the loaded model looks like '\(detected!)'. Replies may be empty or echoed until you switch."
+            : "Prompt template for this chat"
+        badge.lineBreakMode = .byTruncatingTail
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(badge)
+
         NSLayoutConstraint.activate([
             tf.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
             tf.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
@@ -135,7 +156,11 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
 
             subtitle.leadingAnchor.constraint(equalTo: tf.leadingAnchor),
             subtitle.trailingAnchor.constraint(equalTo: tf.trailingAnchor),
-            subtitle.topAnchor.constraint(equalTo: tf.bottomAnchor, constant: 1)
+            subtitle.topAnchor.constraint(equalTo: tf.bottomAnchor, constant: 1),
+
+            badge.leadingAnchor.constraint(equalTo: tf.leadingAnchor),
+            badge.trailingAnchor.constraint(equalTo: tf.trailingAnchor),
+            badge.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 1)
         ])
         return cell
     }
