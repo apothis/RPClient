@@ -443,7 +443,6 @@ Before starting V2, produce a short `MEMORY_RESEARCH.md` summarizing findings on
 - Lorebook editor UI.
 - Group chats.
 - Per-character voices.
-- Bonjour/mDNS server discovery.
 - Multiple-server switching.
 
 ---
