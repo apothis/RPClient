@@ -1,6 +1,6 @@
 import AppKit
 
-final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDelegate, EmptyStateViewDelegate {
+final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDelegate, EmptyStateViewDelegate, NSMenuItemValidation {
     private let scrollView = NSScrollView()
     private let stackView = NSStackView()
     private let inputBar = InputBar()
@@ -188,6 +188,7 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             let tv = TurnView(turn: t)
             tv.delegate = self
             tv.isLastAssistant = (i == lastAssistantIdx)
+            tv.setVariantState(active: t.activeVariant, count: t.variants.count)
             tv.translatesAutoresizingMaskIntoConstraints = false
             stackView.addArrangedSubview(tv)
             tv.widthAnchor.constraint(
@@ -252,6 +253,18 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         if chat.turns.count != turnViews.count {
             rebuild()
             return
+        }
+        // Variant state can change without the turn count moving — regen now
+        // adds a variant in place, paging changes the active index, etc.
+        // Push the latest pair to each view so the pager redraws.
+        for (i, t) in chat.turns.enumerated() where i < turnViews.count {
+            let tv = turnViews[i]
+            tv.setVariantState(active: t.activeVariant, count: t.variants.count)
+            // Paging changes which variant's text is mirrored on `text`; the
+            // bubble needs to reflect that immediately.
+            if tv.currentText != t.text {
+                tv.setText(t.text)
+            }
         }
         // Update titles potentially in status bar handled elsewhere.
         statusBar.refresh()
@@ -381,6 +394,69 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
 
     func turnViewDidRequestContinue(_ view: TurnView) {
         AppState.shared.continueGeneration()
+    }
+
+    func turnViewDidRequestPreviousVariant(_ view: TurnView) {
+        AppState.shared.selectPreviousVariant(turnId: view.turnId)
+    }
+
+    func turnViewDidRequestNextVariant(_ view: TurnView) {
+        // ▶ extends past the last variant when this is the trailing assistant
+        // turn — the click acts like a swipe-add. On non-trailing turns or
+        // when the user is mid-list, just page forward.
+        guard let chat = AppState.shared.currentChat,
+              let turn = chat.turns.first(where: { $0.id == view.turnId }) else { return }
+        let atEnd = turn.activeVariant >= turn.variants.count - 1
+        if atEnd && view.isLastAssistant && !AppState.shared.isStreaming {
+            AppState.shared.regenerate()
+        } else {
+            AppState.shared.selectNextVariant(turnId: view.turnId)
+        }
+    }
+
+    // MARK: - Variant menu actions (⌘← / ⌘→)
+
+    /// Page back through swipes on the trailing assistant turn. Targets the
+    /// last assistant turn so the shortcut Just Works without the user having
+    /// to focus a particular bubble first.
+    @objc func previousVariant(_ sender: Any?) {
+        guard let chat = AppState.shared.currentChat,
+              !AppState.shared.isStreaming,
+              let last = chat.turns.last(where: { $0.role == .assistant }) else { return }
+        AppState.shared.selectPreviousVariant(turnId: last.id)
+    }
+
+    /// Page forward through swipes on the trailing assistant turn, or
+    /// generate a new variant if already on the last one.
+    @objc func nextVariant(_ sender: Any?) {
+        guard let chat = AppState.shared.currentChat,
+              !AppState.shared.isStreaming,
+              let last = chat.turns.last(where: { $0.role == .assistant }) else { return }
+        let atEnd = last.activeVariant >= last.variants.count - 1
+        if atEnd {
+            AppState.shared.regenerate()
+        } else {
+            AppState.shared.selectNextVariant(turnId: last.id)
+        }
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        let sel = menuItem.action
+        if sel == #selector(previousVariant(_:)) {
+            guard let chat = AppState.shared.currentChat,
+                  !AppState.shared.isStreaming,
+                  let last = chat.turns.last(where: { $0.role == .assistant }) else { return false }
+            return last.activeVariant > 0
+        }
+        if sel == #selector(nextVariant(_:)) {
+            guard let chat = AppState.shared.currentChat,
+                  !AppState.shared.isStreaming,
+                  chat.turns.contains(where: { $0.role == .assistant }) else { return false }
+            // ▶ on the trailing assistant always lights up: at end-of-list it
+            // generates a new variant (AppState.regenerate enforces the cap).
+            return true
+        }
+        return true
     }
 
     // MARK: - EmptyStateViewDelegate

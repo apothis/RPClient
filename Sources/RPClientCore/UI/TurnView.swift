@@ -6,6 +6,12 @@ protocol TurnViewDelegate: AnyObject {
     func turnViewDidRequestCopy(_ view: TurnView)
     func turnViewDidRequestRegen(_ view: TurnView)
     func turnViewDidRequestContinue(_ view: TurnView)
+    /// Page back through the swipe variants on this assistant turn.
+    func turnViewDidRequestPreviousVariant(_ view: TurnView)
+    /// Page forward through the swipe variants. The delegate decides whether
+    /// to page or to extend past the last variant (which generates a new one
+    /// on the trailing assistant turn).
+    func turnViewDidRequestNextVariant(_ view: TurnView)
 }
 
 private final class FocusAwareTextView: NSTextView {
@@ -59,6 +65,12 @@ final class TurnView: NSView, NSTextViewDelegate {
     private let deleteButton: NSButton
     private let saveButton: NSButton
     private let cancelButton: NSButton
+    /// Variant pager: ◀ N/M ▶. Lives at the start of the toolbar so it
+    /// hover-reveals alongside the other actions. All three controls are
+    /// hidden until `setVariantState` reports a swipe-set worth showing.
+    private let prevVariantButton: NSButton
+    private let nextVariantButton: NSButton
+    private let variantLabel = NSTextField(labelWithString: "")
 
     private var baseFont: NSFont { Theme.font(15) }
 
@@ -75,7 +87,37 @@ final class TurnView: NSView, NSTextViewDelegate {
         didSet {
             guard oldValue != isLastAssistant else { return }
             updateToolbarForEditState()
+            refreshVariantPagerEnabled()
         }
+    }
+
+    /// Number of swipe variants on this assistant turn. Drives the pager
+    /// visibility (hidden at ≤ 1 to avoid clutter on the common single-reply
+    /// case) and the disabled state of the ◀ / ▶ controls.
+    private(set) var variantCount: Int = 0
+    /// Active swipe index. Reflected in the "N / M" label.
+    private(set) var activeVariantIndex: Int = 0
+
+    func setVariantState(active: Int, count: Int) {
+        guard activeVariantIndex != active || variantCount != count else { return }
+        activeVariantIndex = active
+        variantCount = count
+        variantLabel.stringValue = count > 1 ? "\(active + 1) / \(count)" : ""
+        let show = role == .assistant && count > 1
+        prevVariantButton.isHidden = !show
+        variantLabel.isHidden = !show
+        nextVariantButton.isHidden = !show
+        refreshVariantPagerEnabled()
+    }
+
+    private func refreshVariantPagerEnabled() {
+        let busy = isStreaming
+        prevVariantButton.isEnabled = !busy && activeVariantIndex > 0
+        // ▶ is enabled when there's a next variant, OR when this is the
+        // trailing assistant (delegate extends past end by generating a new
+        // variant). Disabled mid-stream regardless.
+        let canPage = activeVariantIndex < variantCount - 1
+        nextVariantButton.isEnabled = !busy && (canPage || isLastAssistant)
     }
 
     private var isHovering: Bool = false
@@ -85,6 +127,7 @@ final class TurnView: NSView, NSTextViewDelegate {
         didSet {
             guard isStreaming != oldValue else { return }
             updateStreamingIndicator()
+            refreshVariantPagerEnabled()
         }
     }
 
@@ -119,6 +162,8 @@ final class TurnView: NSView, NSTextViewDelegate {
         deleteButton = TurnView.makeIconButton(symbol: "trash", tooltip: "Delete")
         saveButton = TurnView.makeIconButton(symbol: "checkmark", tooltip: "Save (⌘↵)")
         cancelButton = TurnView.makeIconButton(symbol: "xmark", tooltip: "Cancel (esc)")
+        prevVariantButton = TurnView.makeIconButton(symbol: "chevron.left", tooltip: "Previous variant (⌘←)")
+        nextVariantButton = TurnView.makeIconButton(symbol: "chevron.right", tooltip: "Next variant (⌘→)")
 
         super.init(frame: .zero)
         wantsLayer = true
@@ -174,6 +219,8 @@ final class TurnView: NSView, NSTextViewDelegate {
         deleteButton.target = self;   deleteButton.action   = #selector(deleteTapped)
         saveButton.target = self;     saveButton.action     = #selector(saveTapped)
         cancelButton.target = self;   cancelButton.action   = #selector(cancelTapped)
+        prevVariantButton.target = self; prevVariantButton.action = #selector(prevVariantTapped)
+        nextVariantButton.target = self; nextVariantButton.action = #selector(nextVariantTapped)
 
         saveButton.contentTintColor = .systemBlue
         cancelButton.contentTintColor = .secondaryLabelColor
@@ -183,13 +230,26 @@ final class TurnView: NSView, NSTextViewDelegate {
         continueButton.isHidden = !(role == .assistant)
         saveButton.isHidden = true
         cancelButton.isHidden = true
+        // Pager stays hidden until setVariantState reports >1 variant.
+        prevVariantButton.isHidden = true
+        nextVariantButton.isHidden = true
+        variantLabel.isHidden = true
+
+        variantLabel.font = Theme.font(11, weight: .medium)
+        variantLabel.textColor = .secondaryLabelColor
+        variantLabel.alignment = .center
+        variantLabel.translatesAutoresizingMaskIntoConstraints = false
+        // Reserve width for "NN / NN" so the label doesn't wiggle as the
+        // active index changes.
+        variantLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 30).isActive = true
 
         toolbar.orientation = .horizontal
         toolbar.spacing = 2
         toolbar.alignment = .centerY
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         toolbar.alphaValue = 0
-        for b in [copyButton, editButton, regenButton, continueButton, deleteButton,
+        for b in [prevVariantButton as NSView, variantLabel, nextVariantButton,
+                  copyButton, editButton, regenButton, continueButton, deleteButton,
                   saveButton, cancelButton] {
             toolbar.addArrangedSubview(b)
         }
@@ -308,6 +368,14 @@ final class TurnView: NSView, NSTextViewDelegate {
     @objc private func saveTapped() { commitEdit() }
     @objc private func cancelTapped() { cancelEdit() }
 
+    @objc private func prevVariantTapped() {
+        delegate?.turnViewDidRequestPreviousVariant(self)
+    }
+
+    @objc private func nextVariantTapped() {
+        delegate?.turnViewDidRequestNextVariant(self)
+    }
+
     /// Commit the user's pending edits and exit edit mode.
     private func commitEdit() {
         // Resigning fires onResignFirstResponder → exitEditMode, which saves.
@@ -334,6 +402,14 @@ final class TurnView: NSView, NSTextViewDelegate {
         deleteButton.isHidden = editing
         saveButton.isHidden = !editing
         cancelButton.isHidden = !editing
+        // Pager visibility tracks both edit state and the variant count —
+        // hide everywhere while editing (Save/Cancel are the only valid
+        // actions), and otherwise only show when there's actually more than
+        // one variant to page through.
+        let showPager = !editing && role == .assistant && variantCount > 1
+        prevVariantButton.isHidden = !showPager
+        variantLabel.isHidden = !showPager
+        nextVariantButton.isHidden = !showPager
         if editing {
             // Force-visible while editing so the user sees Save/Cancel without hovering.
             toolbar.alphaValue = 1

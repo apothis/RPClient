@@ -112,6 +112,21 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             title: "Toggle Inspector",
             action: #selector(toggleInspector),
             keyEquivalent: "i"))
+        viewMenu.addItem(NSMenuItem.separator())
+        // Swipe paging on the trailing assistant turn. Action is `nil` so the
+        // selector travels up the responder chain to ChatViewController.
+        let prevVariant = NSMenuItem(
+            title: "Previous Variant",
+            action: Selector(("previousVariant:")),
+            keyEquivalent: String(format: "%C", 0xF702))   // NSLeftArrowFunctionKey
+        prevVariant.keyEquivalentModifierMask = .command
+        viewMenu.addItem(prevVariant)
+        let nextVariant = NSMenuItem(
+            title: "Next Variant",
+            action: Selector(("nextVariant:")),
+            keyEquivalent: String(format: "%C", 0xF703))   // NSRightArrowFunctionKey
+        nextVariant.keyEquivalentModifierMask = .command
+        viewMenu.addItem(nextVariant)
         viewMenuItem.submenu = viewMenu
 
         let editMenuItem = NSMenuItem()
