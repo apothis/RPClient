@@ -7,6 +7,7 @@ let suites: [TestSuite] = [
     vectorStoreTests(),
     chatCodableTests(),
     worldInfoEntryCodableTests(),
+    worldInfoInjectorTests(),
     memoryAuditRegressionTests(),
 ]
 
