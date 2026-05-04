@@ -405,6 +405,17 @@ final class AppState {
         scheduleUsageRecompute()
     }
 
+    /// Resolve a role-routed client AND log the resolution so misrouting is
+    /// visible from the debug log. Mirrors the `server-resolve:` line on the
+    /// generation path; covers the four side-call dispatch points (retrieve,
+    /// index, summarize, extract).
+    private func sideCallClient(_ role: ServerRole) -> KoboldClient {
+        let c = registry.client(for: role, chatOverride: nil)
+        let name = settings.servers.first(where: { $0.baseURL == c.baseURL })?.name ?? "?"
+        DebugLog.shared.write("side-call: role=\(role.rawValue) resolved=\(name) baseURL=\(c.baseURL.absoluteString)")
+        return c
+    }
+
     func refreshServerInfo() {
         kobold.fetchModel { [weak self] result in
             guard let self = self else { return }
@@ -743,7 +754,7 @@ final class AppState {
         }
         RetrievalEngine.shared.retrieve(
             chat: chat,
-            embedder: registry.client(for: .embeddings, chatOverride: nil),
+            embedder: sideCallClient(.embeddings),
             settings: settings.retrieval
         ) { [weak self] hits in
             guard let self = self else { return }
@@ -934,8 +945,8 @@ final class AppState {
         DebugLog.shared.write("retrieval: indexing chat=\(chat.id) turns=\(chat.turns.count)")
         RetrievalEngine.shared.index(
             chat: chat,
-            embedder: registry.client(for: .embeddings, chatOverride: nil),
-            blurber: registry.client(for: .summarizer, chatOverride: nil),
+            embedder: sideCallClient(.embeddings),
+            blurber: sideCallClient(.summarizer),
             contextual: settings.retrieval.contextual,
             effectiveCtx: effectiveContext
         ) { [weak self] result in
@@ -1072,7 +1083,7 @@ final class AppState {
         let chatId = chat.id
         Summarizer.run(
             chat: chat,
-            kobold: registry.client(for: .summarizer, chatOverride: nil),
+            kobold: sideCallClient(.summarizer),
             effectiveCtx: effectiveContext
         ) { [weak self] result in
             DispatchQueue.main.async {
@@ -1225,7 +1236,7 @@ final class AppState {
 
         FactExtractor.run(
             chat: chat,
-            kobold: registry.client(for: .extractor, chatOverride: nil),
+            kobold: sideCallClient(.extractor),
             effectiveCtx: effectiveContext,
             lastN: scanWindow
         ) { [weak self] result in
