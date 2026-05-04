@@ -764,9 +764,12 @@ final class AppState {
         let replyMax = settings.replyTokensOverride > 0 ? settings.replyTokensOverride : preset.maxLength
         let resolvedCharacter = character(id: chat.characterId)
         let resolvedPersona = persona(id: chat.personaId)
-        // 4b diagnostic — confirm card composition is reaching the prompt.
+        // 4b/4f diagnostic — confirm card + persona composition is reaching
+        // the prompt. Caught a stale-binary regression once already; cheap to
+        // emit and surfaces the two indirections that are easy to break.
         let composed = PromptBuilder.composeMemoryBlock(chat: chat, character: resolvedCharacter, userName: settings.userName) ?? ""
-        DebugLog.shared.write("card-compose: chat.characterId=\(chat.characterId?.uuidString ?? "nil") resolved=\(resolvedCharacter?.name ?? "nil") composedChars=\(composed.count) systemPromptMode=\(chat.systemPromptMode.rawValue)")
+        let personaBlock = PromptBuilder.renderPersonaBlock(resolvedPersona) ?? ""
+        DebugLog.shared.write("card-compose: chat.characterId=\(chat.characterId?.uuidString ?? "nil") resolved=\(resolvedCharacter?.name ?? "nil") composedChars=\(composed.count) systemPromptMode=\(chat.systemPromptMode.rawValue) persona=\(resolvedPersona?.name ?? "nil") personaChars=\(personaBlock.count)")
         TokenBudget.assemble(
             chat: chat,
             effectiveCtx: ctx,
