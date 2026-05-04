@@ -132,7 +132,12 @@ enum TokenBudget {
             group.enter()
             counter.count(chat.authorsNote.text, kobold: kobold) { n in anTok = n; group.leave() }
         }
-        let wiText = chat.worldInfo.map(\.content).joined(separator: "\n\n")
+        // Count only what the prompt-builder actually injects (selective hits,
+        // each truncated to the entry's tokenCap). Counting the full union
+        // of entry bodies would over-report — the model only ever sees the
+        // matched subset.
+        let wiHits = PromptBuilder.worldInfoHits(chat: chat)
+        let wiText = wiHits.joined(separator: "\n\n")
         if !wiText.isEmpty {
             group.enter()
             counter.count(wiText, kobold: kobold) { n in wiTok = n; group.leave() }
@@ -173,7 +178,7 @@ enum TokenBudget {
                 entitiesBlock: entitiesBlock,
                 sceneSummaries: renderedScenes,
                 summary: chat.summary.isEmpty ? nil : chat.summary,
-                worldInfoHits: [],
+                worldInfoHits: wiHits,
                 authorsNote: chat.authorsNote.text.isEmpty ? nil : chat.authorsNote,
                 relevantMemories: relevantMemories,
                 tailMemoryDigest: tailDigest,

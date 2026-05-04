@@ -136,7 +136,7 @@ struct PromptBuilder {
             entitiesBlock: entitiesBlock(chat: chat),
             sceneSummaries: renderableScenes(chat: chat),
             summary: chat.summary.isEmpty ? nil : chat.summary,
-            worldInfoHits: [],
+            worldInfoHits: worldInfoHits(chat: chat),
             authorsNote: chat.authorsNote.text.isEmpty ? nil : chat.authorsNote,
             relevantMemories: relevantMemories,
             tailMemoryDigest: tailMemoryDigest(chat: chat, continuation: continuation),
@@ -145,6 +145,35 @@ struct PromptBuilder {
             continuation: continuation
         )
         return (prompt, template.stopSequences)
+    }
+
+    /// Selective world-info injection. Runs the injector against the chat's
+    /// verbatim turn window and returns each matched entry's `content`
+    /// truncated to roughly `tokenCap * charsPerToken` characters at a word
+    /// boundary. Order matches the injector (priority desc, then name).
+    /// See V2_PLAN.md §2.2.
+    static func worldInfoHits(chat: Chat, charsPerToken: Int = 4) -> [String] {
+        let matched = WorldInfoInjector.matchingEntries(
+            entries: chat.worldInfo,
+            turns: chat.turns
+        )
+        return matched.map { entry in
+            truncateToCharCap(entry.content, capChars: max(0, entry.tokenCap) * charsPerToken)
+        }
+    }
+
+    /// Word-aligned hard truncate. If the text is already within the cap,
+    /// returns it unchanged; otherwise drops at the last whitespace inside
+    /// the cap and appends an ellipsis. A `capChars` of 0 returns "".
+    static func truncateToCharCap(_ text: String, capChars: Int) -> String {
+        if capChars <= 0 { return "" }
+        if text.count <= capChars { return text }
+        let cap = text.index(text.startIndex, offsetBy: capChars)
+        let head = text[..<cap]
+        if let lastSpace = head.lastIndex(where: { $0.isWhitespace }) {
+            return String(text[..<lastSpace]) + "…"
+        }
+        return String(head) + "…"
     }
 
     /// Tiny "the recent turns are authoritative" nudge injected at the very

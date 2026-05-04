@@ -200,5 +200,59 @@ func promptBuilderTests() -> TestSuite {
         try expectEqual(stops, GemmaTemplate().stopSequences)
     }
 
+    s.test("worldInfoHits returns matched entries' content") {
+        var chat = makeChat(turns: [Turn(role: .user, text: "I draw the Mournbringer.")])
+        chat.worldInfo = [
+            WorldInfoEntry(name: "Mournbringer", keys: ["Mournbringer"], content: "humming blade"),
+            WorldInfoEntry(name: "Dragon", keys: ["dragon"], content: "fire-breather"),
+        ]
+        try expectEqual(PromptBuilder.worldInfoHits(chat: chat), ["humming blade"])
+    }
+
+    s.test("worldInfoHits truncates content past entry's tokenCap") {
+        var chat = makeChat(turns: [Turn(role: .user, text: "Mournbringer.")])
+        let longContent = String(repeating: "alpha beta ", count: 50) // ~550 chars
+        chat.worldInfo = [
+            WorldInfoEntry(name: "M", keys: ["Mournbringer"], content: longContent, tokenCap: 10),
+        ]
+        let hits = PromptBuilder.worldInfoHits(chat: chat)
+        try expectEqual(hits.count, 1)
+        try expectTrue(hits[0].count <= 10 * 4 + 1, "expected ≤ 41 chars, got \(hits[0].count)")
+        try expectTrue(hits[0].hasSuffix("…"), "expected ellipsis suffix")
+    }
+
+    s.test("worldInfoHits returns [] when no entries match") {
+        var chat = makeChat(turns: [Turn(role: .user, text: "totally unrelated text")])
+        chat.worldInfo = [WorldInfoEntry(name: "M", keys: ["sword"], content: "x")]
+        try expectTrue(PromptBuilder.worldInfoHits(chat: chat).isEmpty)
+    }
+
+    s.test("build injects matched world-info into the prompt") {
+        var chat = makeChat(turns: [Turn(role: .user, text: "Tell me about the Mournbringer.")])
+        chat.templateId = "gemma"
+        chat.worldInfo = [
+            WorldInfoEntry(name: "Mournbringer", keys: ["Mournbringer"], content: "An ancient humming blade."),
+            WorldInfoEntry(name: "Dragon", keys: ["dragon"], content: "Fire-breathing menace."),
+        ]
+        let (prompt, _) = PromptBuilder.build(chat: chat)
+        try expectTrue(prompt.contains("An ancient humming blade."), "matched entry should be in the prompt")
+        try expectTrue(!prompt.contains("Fire-breathing menace."), "non-matching entry should be absent")
+    }
+
+    s.test("truncateToCharCap leaves short text alone") {
+        try expectEqual(PromptBuilder.truncateToCharCap("hi there", capChars: 100), "hi there")
+    }
+
+    s.test("truncateToCharCap word-aligns and adds ellipsis") {
+        let out = PromptBuilder.truncateToCharCap("the quick brown fox", capChars: 12)
+        try expectTrue(out.hasSuffix("…"))
+        try expectTrue(out.count <= 13)
+        try expectTrue(!out.contains("brown"), "should not include the word that crossed the cap")
+    }
+
+    s.test("truncateToCharCap returns empty for cap 0") {
+        try expectEqual(PromptBuilder.truncateToCharCap("anything", capChars: 0), "")
+    }
+
     return s
 }
