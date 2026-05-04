@@ -743,7 +743,7 @@ final class AppState {
         }
         RetrievalEngine.shared.retrieve(
             chat: chat,
-            kobold: kobold,
+            embedder: registry.client(for: .embeddings, chatOverride: nil),
             settings: settings.retrieval
         ) { [weak self] hits in
             guard let self = self else { return }
@@ -934,7 +934,8 @@ final class AppState {
         DebugLog.shared.write("retrieval: indexing chat=\(chat.id) turns=\(chat.turns.count)")
         RetrievalEngine.shared.index(
             chat: chat,
-            kobold: kobold,
+            embedder: registry.client(for: .embeddings, chatOverride: nil),
+            blurber: registry.client(for: .summarizer, chatOverride: nil),
             contextual: settings.retrieval.contextual,
             effectiveCtx: effectiveContext
         ) { [weak self] result in
@@ -1071,7 +1072,7 @@ final class AppState {
         let chatId = chat.id
         Summarizer.run(
             chat: chat,
-            kobold: kobold,
+            kobold: registry.client(for: .summarizer, chatOverride: nil),
             effectiveCtx: effectiveContext
         ) { [weak self] result in
             DispatchQueue.main.async {
@@ -1224,7 +1225,7 @@ final class AppState {
 
         FactExtractor.run(
             chat: chat,
-            kobold: kobold,
+            kobold: registry.client(for: .extractor, chatOverride: nil),
             effectiveCtx: effectiveContext,
             lastN: scanWindow
         ) { [weak self] result in

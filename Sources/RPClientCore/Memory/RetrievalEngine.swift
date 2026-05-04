@@ -47,12 +47,21 @@ final class RetrievalEngine {
     static let shared = RetrievalEngine()
     private var stores: [UUID: VectorStore] = [:]
     private let lock = NSLock()
+    private let storesDirOverride: URL?
+
+    init(storesDir: URL? = nil) {
+        self.storesDirOverride = storesDir
+    }
+
+    private var storesDir: URL {
+        storesDirOverride ?? Storage.shared.vectorsDir
+    }
 
     func store(for chatId: UUID) -> VectorStore {
         lock.lock()
         defer { lock.unlock() }
         if let s = stores[chatId] { return s }
-        let s = VectorStore(chatId: chatId, dir: Storage.shared.vectorsDir)
+        let s = VectorStore(chatId: chatId, dir: storesDir)
         stores[chatId] = s
         return s
     }
@@ -69,7 +78,8 @@ final class RetrievalEngine {
     /// when contextual retrieval is enabled.
     func index(
         chat: Chat,
-        kobold: KoboldClient,
+        embedder: KoboldEmbedding,
+        blurber: KoboldGenerating,
         contextual: Bool = false,
         effectiveCtx: Int = 4096,
         completion: @escaping (Result<Int, Error>) -> Void
@@ -114,10 +124,10 @@ final class RetrievalEngine {
         // back to embedding the raw chunk text for that one entry.
         annotateWithBlurbs(
             toEmbed, contextual: contextual, chat: chat,
-            kobold: kobold, effectiveCtx: effectiveCtx, store: store
+            blurber: blurber, effectiveCtx: effectiveCtx, store: store
         ) { [weak self] annotated in
             guard let self = self else { return }
-            self.embedBatched(annotated, kobold: kobold, store: store) { result in
+            self.embedBatched(annotated, embedder: embedder, store: store) { result in
                 store.save()
                 completion(result)
             }
@@ -128,7 +138,7 @@ final class RetrievalEngine {
         _ chunks: [Chunk],
         contextual: Bool,
         chat: Chat,
-        kobold: KoboldClient,
+        blurber: KoboldGenerating,
         effectiveCtx: Int,
         store: VectorStore,
         completion: @escaping ([Chunk]) -> Void
@@ -152,7 +162,7 @@ final class RetrievalEngine {
                 return
             }
             ContextBlurber.run(
-                chunk: chunk, chat: chat, kobold: kobold, effectiveCtx: effectiveCtx
+                chunk: chunk, chat: chat, kobold: blurber, effectiveCtx: effectiveCtx
             ) { result in
                 DispatchQueue.main.async {
                     switch result {
@@ -175,7 +185,7 @@ final class RetrievalEngine {
 
     private func embedBatched(
         _ chunks: [Chunk],
-        kobold: KoboldClient,
+        embedder: KoboldEmbedding,
         store: VectorStore,
         batchSize: Int = 16,
         completion: @escaping (Result<Int, Error>) -> Void
@@ -193,7 +203,7 @@ final class RetrievalEngine {
             // Embed `embeddingText` (blurb + text when present, else just
             // text) so the contextual retrieval signal gets baked into the
             // vector itself.
-            kobold.embed(texts: batch.map(\.embeddingText)) { result in
+            embedder.embed(texts: batch.map(\.embeddingText)) { result in
                 switch result {
                 case .failure(let e):
                     completion(.failure(e))
@@ -241,7 +251,7 @@ final class RetrievalEngine {
     /// Returns hits in descending similarity order.
     func retrieve(
         chat: Chat,
-        kobold: KoboldClient,
+        embedder: KoboldEmbedding,
         settings: RetrievalSettings,
         completion: @escaping ([VectorStore.Hit]) -> Void
     ) {
@@ -258,7 +268,7 @@ final class RetrievalEngine {
         }.joined(separator: "\n\n")
         guard !query.isEmpty else { completion([]); return }
 
-        kobold.embed(texts: [query]) { result in
+        embedder.embed(texts: [query]) { result in
             DispatchQueue.main.async {
                 guard case .success(let vecs) = result, let q = vecs.first else {
                     completion([])

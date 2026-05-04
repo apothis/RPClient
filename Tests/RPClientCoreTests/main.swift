@@ -15,6 +15,7 @@ let suites: [TestSuite] = [
     helpIndexTests(),
     settingsServersCodableTests(),
     koboldClientRegistryTests(),
+    retrievalEngineRoutingTests(),
 ]
 
 exit(TestRunner.run(suites))

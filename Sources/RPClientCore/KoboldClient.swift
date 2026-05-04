@@ -15,7 +15,48 @@ enum KoboldError: Error {
     case transport(Error)
 }
 
-final class KoboldClient: NSObject, URLSessionDataDelegate {
+/// The subset of KoboldClient that side-call viewmodels (Summarizer,
+/// FactExtractor, ContextBlurber, RetrievalEngine.blurber) actually invoke.
+/// Carved out as a protocol so the registry can hand role-specific clients to
+/// each caller and tests can verify routing with fakes.
+protocol KoboldGenerating: AnyObject {
+    func generate(
+        prompt: String,
+        stopSequences: [String],
+        preset: SamplerPreset,
+        maxContextLength: Int,
+        grammar: String?,
+        maxLengthOverride: Int?,
+        completion: @escaping (Result<String, Error>) -> Void
+    )
+}
+
+extension KoboldGenerating {
+    /// Convenience overload matching the historical default-arg call shape so
+    /// existing call sites (Summarizer/FactExtractor/ContextBlurber) that pass
+    /// neither grammar nor maxLengthOverride compile unchanged.
+    func generate(
+        prompt: String,
+        stopSequences: [String],
+        preset: SamplerPreset,
+        maxContextLength: Int,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        generate(prompt: prompt, stopSequences: stopSequences, preset: preset,
+                 maxContextLength: maxContextLength,
+                 grammar: nil, maxLengthOverride: nil,
+                 completion: completion)
+    }
+}
+
+protocol KoboldEmbedding: AnyObject {
+    func embed(
+        texts: [String],
+        completion: @escaping (Result<[[Float]], Error>) -> Void
+    )
+}
+
+final class KoboldClient: NSObject, URLSessionDataDelegate, KoboldGenerating, KoboldEmbedding {
     private(set) var baseURL: URL
     private lazy var session: URLSession = {
         let cfg = URLSessionConfiguration.default

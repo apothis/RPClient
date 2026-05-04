@@ -29,7 +29,7 @@ enum ContextBlurber {
     static func run(
         chunk: Chunk,
         chat: Chat,
-        kobold: KoboldClient,
+        kobold: KoboldGenerating,
         effectiveCtx: Int,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
