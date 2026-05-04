@@ -73,6 +73,44 @@ func chatCodableTests() -> TestSuite {
         try expectEqual(chat.systemPromptMode, .override)
     }
 
+    s.test("serverId defaults to nil for new chats and round-trips when set") {
+        // Phase 4 §5.4 — chat can pin a specific koboldcpp profile for its
+        // generation calls. Default Chat() has no pin (nil = use settings.default).
+        let stamp = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+        var fresh = Chat(title: "Fresh")
+        fresh.created = stamp
+        fresh.modified = stamp
+        try expectNil(fresh.serverId)
+
+        let pin = UUID()
+        var pinned = Chat(title: "Pinned")
+        pinned.created = stamp
+        pinned.modified = stamp
+        pinned.serverId = pin
+        let data = try encoder.encode(pinned)
+        let decoded = try decoder.decode(Chat.self, from: data)
+        try expectEqual(decoded.serverId, pin)
+    }
+
+    s.test("legacy chat decodes with serverId == nil when key missing") {
+        // Pre-Phase-4 chats were written without a `serverId` key. Their
+        // generation calls must transparently use settings.defaultServerId,
+        // i.e. decode as nil — never default to some random UUID.
+        let now = ISO8601DateFormatter().string(from: Date())
+        let json = """
+        {
+            "id": "\(UUID().uuidString)",
+            "title": "Pre-Phase-4",
+            "created": "\(now)",
+            "modified": "\(now)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced"
+        }
+        """
+        let chat = try decoder.decode(Chat.self, from: Data(json.utf8))
+        try expectNil(chat.serverId)
+    }
+
     s.test("systemPromptMode round-trips through encode/decode") {
         let stamp = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
         var chat = Chat(title: "Merge mode")

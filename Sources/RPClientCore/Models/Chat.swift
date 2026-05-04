@@ -115,6 +115,11 @@ struct Chat: Codable, Equatable, Identifiable {
     /// Default `.override` matches SillyTavern. Existing chats without this
     /// key decode as `.override`. See `CardPromptMode`.
     var systemPromptMode: CardPromptMode
+    /// Server pin for this chat's generation calls (Phase 4 §5.4). Nil = use
+    /// `Settings.defaultServerId`. Side-call routing (summarizer, extractor,
+    /// embeddings) ignores this field — those go through the role overrides
+    /// on Settings instead. Pre-Phase-4 chats decode as nil.
+    var serverId: UUID?
 
     init(
         id: UUID = UUID(),
@@ -151,6 +156,7 @@ struct Chat: Codable, Equatable, Identifiable {
         self.characterId = nil
         self.personaId = nil
         self.systemPromptMode = .override
+        self.serverId = nil
     }
 
     init(from decoder: Decoder) throws {
@@ -223,6 +229,7 @@ struct Chat: Codable, Equatable, Identifiable {
         characterId = try c.decodeIfPresent(UUID.self, forKey: .characterId)
         personaId = try c.decodeIfPresent(UUID.self, forKey: .personaId)
         systemPromptMode = try c.decodeIfPresent(CardPromptMode.self, forKey: .systemPromptMode) ?? .override
+        serverId = try c.decodeIfPresent(UUID.self, forKey: .serverId)
     }
 
     /// Best-effort parse of a `memory` string (one fact per line) into entities.
