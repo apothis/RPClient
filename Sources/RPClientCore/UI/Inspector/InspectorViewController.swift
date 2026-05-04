@@ -34,6 +34,7 @@ final class InspectorViewController: NSViewController {
         tabs = [
             Tab(label: "Memory",       make: { MemoryPane() }),
             Tab(label: "Entities",     make: { EntitiesPane() }),
+            Tab(label: "World",        make: { WorldInfoPane() }),
             Tab(label: "Suggestions",  make: { SuggestionsPane() }),
             Tab(label: "Extraction",   make: { ExtractionPane() }),
             Tab(label: "Summary",      make: { SummaryPane() }),

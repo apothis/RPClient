@@ -200,13 +200,16 @@ func promptBuilderTests() -> TestSuite {
         try expectEqual(stops, GemmaTemplate().stopSequences)
     }
 
-    s.test("worldInfoHits returns matched entries' content") {
+    s.test("worldInfoHits returns header plus labelled matched entries' content") {
         var chat = makeChat(turns: [Turn(role: .user, text: "I draw the Mournbringer.")])
         chat.worldInfo = [
             WorldInfoEntry(name: "Mournbringer", keys: ["Mournbringer"], content: "humming blade"),
             WorldInfoEntry(name: "Dragon", keys: ["dragon"], content: "fire-breather"),
         ]
-        try expectEqual(PromptBuilder.worldInfoHits(chat: chat), ["humming blade"])
+        let hits = PromptBuilder.worldInfoHits(chat: chat)
+        try expectEqual(hits.count, 2)
+        try expectEqual(hits[0], PromptBuilder.worldInfoHeader)
+        try expectEqual(hits[1], "[Mournbringer]\nhumming blade")
     }
 
     s.test("worldInfoHits truncates content past entry's tokenCap") {
@@ -216,9 +219,12 @@ func promptBuilderTests() -> TestSuite {
             WorldInfoEntry(name: "M", keys: ["Mournbringer"], content: longContent, tokenCap: 10),
         ]
         let hits = PromptBuilder.worldInfoHits(chat: chat)
-        try expectEqual(hits.count, 1)
-        try expectTrue(hits[0].count <= 10 * 4 + 1, "expected ≤ 41 chars, got \(hits[0].count)")
-        try expectTrue(hits[0].hasSuffix("…"), "expected ellipsis suffix")
+        // [header, "[M]\n<truncated body>"]
+        try expectEqual(hits.count, 2)
+        try expectTrue(hits[1].hasSuffix("…"), "expected ellipsis suffix")
+        // body length excluding the "[M]\n" label
+        let body = hits[1].split(separator: "\n", maxSplits: 1).last.map(String.init) ?? ""
+        try expectTrue(body.count <= 10 * 4 + 1, "expected ≤ 41 chars, got \(body.count)")
     }
 
     s.test("worldInfoHits returns [] when no entries match") {

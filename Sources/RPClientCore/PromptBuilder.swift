@@ -121,12 +121,28 @@ struct PromptBuilder {
     /// If the summary is empty, ignore `summarizedThrough` and return all turns —
     /// this self-heals chats where a side-call advanced the index but produced
     /// no summary content (otherwise those turns would silently vanish from the prompt).
+    ///
+    /// A trailing **empty** assistant turn is dropped: that turn is the UI's
+    /// stream target (added by `sendUserMessage` / `regenerate`), not a
+    /// historical reply. Including it renders an empty
+    /// `<start_of_turn>model\n<end_of_turn>\n` block right before the
+    /// generation marker, which the model pattern-matches and continues by
+    /// emitting another empty turn — particularly visible on fresh chats
+    /// where there's no prior non-empty assistant content to outweigh the
+    /// signal. See `Templates` continuation flag for the resume case (where
+    /// the trailing assistant is non-empty and intentionally left open).
     static func verbatimTurns(_ chat: Chat) -> [Turn] {
-        if chat.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return chat.turns
+        let raw: [Turn] = {
+            if chat.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return chat.turns
+            }
+            let start = max(0, min(chat.summarizedThrough, chat.turns.count))
+            return Array(chat.turns[start...])
+        }()
+        if let last = raw.last, last.role == .assistant, last.text.isEmpty {
+            return Array(raw.dropLast())
         }
-        let start = max(0, min(chat.summarizedThrough, chat.turns.count))
-        return Array(chat.turns[start...])
+        return raw
     }
 
     static func build(chat: Chat, relevantMemories: String? = nil, continuation: Bool = false, qwenThinking: Bool = false) -> (prompt: String, stops: [String]) {
@@ -147,19 +163,35 @@ struct PromptBuilder {
         return (prompt, template.stopSequences)
     }
 
+    /// Framing line that prefixes the world-info block. Same pattern as the
+    /// entities block: an imperative aside framed in plain prose so the model
+    /// treats the body as a private reference rather than something to
+    /// restate verbatim.
+    static let worldInfoHeader = "(World info — background facts about this setting and its inhabitants. Use these silently for continuity; do not restate, quote, or copy them into your reply.)"
+
     /// Selective world-info injection. Runs the injector against the chat's
-    /// verbatim turn window and returns each matched entry's `content`
-    /// truncated to roughly `tokenCap * charsPerToken` characters at a word
-    /// boundary. Order matches the injector (priority desc, then name).
+    /// verbatim turn window and returns the framing header followed by each
+    /// matched entry's `content` (labelled `[name]`) truncated to roughly
+    /// `tokenCap * charsPerToken` characters at a word boundary. Order
+    /// matches the injector (priority desc, then name).
     /// See V2_PLAN.md §2.2.
     static func worldInfoHits(chat: Chat, charsPerToken: Int = 4) -> [String] {
         let matched = WorldInfoInjector.matchingEntries(
             entries: chat.worldInfo,
             turns: chat.turns
         )
-        return matched.map { entry in
-            truncateToCharCap(entry.content, capChars: max(0, entry.tokenCap) * charsPerToken)
+        guard !matched.isEmpty else { return [] }
+        var out: [String] = [worldInfoHeader]
+        for entry in matched {
+            let body = truncateToCharCap(entry.content, capChars: max(0, entry.tokenCap) * charsPerToken)
+            if body.isEmpty { continue }
+            let label = entry.name.isEmpty ? "Untitled" : entry.name
+            out.append("[\(label)]\n\(body)")
         }
+        // If every match's content was empty after truncation, drop the
+        // header too — emitting a lone framing line with no body underneath
+        // is worse than emitting nothing.
+        return out.count > 1 ? out : []
     }
 
     /// Word-aligned hard truncate. If the text is already within the cap,
