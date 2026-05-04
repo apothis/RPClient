@@ -207,6 +207,7 @@ final class AppState {
         if let greeting = AppState.makeGreetingTurn(character: character) {
             c.turns = [greeting]
         }
+        c.worldInfo = AppState.mergedWorldInfo(existing: c.worldInfo, charBook: character.charBook)
         Storage.shared.saveChat(c)
         chats.insert(c, at: 0)
         currentChatId = c.id
@@ -214,6 +215,46 @@ final class AppState {
         lastCacheRatio = nil
         NotificationCenter.default.post(name: AppNotification.chatListChanged, object: nil)
         NotificationCenter.default.post(name: AppNotification.currentChatChanged, object: nil)
+    }
+
+    /// Prefix that marks a `WorldInfoEntry` as having been merged in from a
+    /// character card's `character_book`. Drives 4e idempotency — re-running
+    /// the merge against the same chat is a no-op because each card entry's
+    /// expected name is "[from card] <orig>" and that's exact-match checked
+    /// before append. The user can edit the body and the prefix preserves
+    /// provenance for the WorldInfoPane.
+    static let cardBookEntryPrefix = "[from card] "
+
+    /// Pure helper: returns `existing` plus any entries from `charBook` that
+    /// aren't already present (by the prefixed name). Tested directly so the
+    /// idempotency contract is explicit.
+    static func mergedWorldInfo(existing: [WorldInfoEntry], charBook: [WorldInfoEntry]) -> [WorldInfoEntry] {
+        guard !charBook.isEmpty else { return existing }
+        let presentNames = Set(existing.map(\.name))
+        var out = existing
+        for entry in charBook {
+            let originalName = entry.name.isEmpty ? (entry.keys.first ?? "Untitled") : entry.name
+            let prefixedName = cardBookEntryPrefix + originalName
+            if presentNames.contains(prefixedName) { continue }
+            // Copy the entry but replace its identity / name. New UUID so the
+            // chat's entry is independent of the card's (user can edit
+            // freely; card edits won't bleed across).
+            var copy = entry
+            copy = WorldInfoEntry(
+                id: UUID(),
+                name: prefixedName,
+                keys: copy.keys,
+                secondaryKeys: copy.secondaryKeys,
+                content: copy.content,
+                tokenCap: copy.tokenCap,
+                enabled: copy.enabled,
+                injectionMode: copy.injectionMode,
+                matchScope: copy.matchScope,
+                priority: copy.priority
+            )
+            out.append(copy)
+        }
+        return out
     }
 
     /// Build the seeded greeting turn for a new chat with `character`.

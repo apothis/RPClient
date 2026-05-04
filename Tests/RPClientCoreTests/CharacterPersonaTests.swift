@@ -207,6 +207,69 @@ func characterPersonaTests() -> TestSuite {
         try expectEqual(turn.variants[2].text, "Another real alt.")
     }
 
+    // MARK: - charBook merge (Phase 3 §4.4 step 4e)
+
+    s.test("mergedWorldInfo no-ops when card has empty charBook") {
+        let existing = [WorldInfoEntry(name: "Mine", keys: ["mine"], content: "x")]
+        let merged = AppState.mergedWorldInfo(existing: existing, charBook: [])
+        try expectEqual(merged.count, 1)
+        try expectEqual(merged[0].name, "Mine")
+    }
+
+    s.test("mergedWorldInfo prefixes card entries and appends them") {
+        let existing: [WorldInfoEntry] = []
+        let charBook = [
+            WorldInfoEntry(name: "The Ship", keys: ["ship"], content: "wooden hull"),
+            WorldInfoEntry(name: "The Strait", keys: ["strait"], content: "narrow channel"),
+        ]
+        let merged = AppState.mergedWorldInfo(existing: existing, charBook: charBook)
+        try expectEqual(merged.count, 2)
+        try expectEqual(merged[0].name, "[from card] The Ship")
+        try expectEqual(merged[1].name, "[from card] The Strait")
+        // Body / keys / priority preserved.
+        try expectEqual(merged[0].content, "wooden hull")
+        try expectEqual(merged[0].keys, ["ship"])
+    }
+
+    s.test("mergedWorldInfo is idempotent — second pass adds nothing") {
+        let charBook = [
+            WorldInfoEntry(name: "The Ship", keys: ["ship"], content: "wooden hull"),
+        ]
+        let firstPass = AppState.mergedWorldInfo(existing: [], charBook: charBook)
+        let secondPass = AppState.mergedWorldInfo(existing: firstPass, charBook: charBook)
+        try expectEqual(secondPass.count, 1)
+        try expectEqual(secondPass[0].name, "[from card] The Ship")
+    }
+
+    s.test("mergedWorldInfo preserves user entries and only appends new card entries") {
+        let existing = [
+            WorldInfoEntry(name: "User Note", keys: ["x"], content: "user content"),
+            WorldInfoEntry(name: "[from card] The Ship", keys: ["ship"], content: "user-edited body"),
+        ]
+        let charBook = [
+            WorldInfoEntry(name: "The Ship", keys: ["ship"], content: "ORIGINAL body"),
+            WorldInfoEntry(name: "The Strait", keys: ["strait"], content: "narrow channel"),
+        ]
+        let merged = AppState.mergedWorldInfo(existing: existing, charBook: charBook)
+        try expectEqual(merged.count, 3, "user note + the existing ship + new strait")
+        // The user's edits to "[from card] The Ship" must not be overwritten.
+        let ship = try expectNotNil(merged.first(where: { $0.name == "[from card] The Ship" }))
+        try expectEqual(ship.content, "user-edited body")
+        // New entry appended with the prefix.
+        try expectTrue(merged.contains(where: { $0.name == "[from card] The Strait" }))
+    }
+
+    s.test("mergedWorldInfo falls back to first key when entry name empty") {
+        let charBook = [
+            WorldInfoEntry(name: "", keys: ["fallback-key"], content: "x"),
+        ]
+        let merged = AppState.mergedWorldInfo(existing: [], charBook: charBook)
+        // WorldInfoEntry.init seeds name from keys[0] when name is empty,
+        // so the merged entry should land as "[from card] fallback-key".
+        try expectEqual(merged.count, 1)
+        try expectEqual(merged[0].name, "[from card] fallback-key")
+    }
+
     return s
 }
 
