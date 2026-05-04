@@ -694,10 +694,14 @@ final class AppState {
 
     private func assembleAndStream(chat: Chat, ctx: Int, preset: SamplerPreset, relevantMemories: String?, continuation: Bool = false) {
         let replyMax = settings.replyTokensOverride > 0 ? settings.replyTokensOverride : preset.maxLength
+        let resolvedCharacter = character(id: chat.characterId)
+        let resolvedPersona = persona(id: chat.personaId)
         TokenBudget.assemble(
             chat: chat,
             effectiveCtx: ctx,
             replyReserve: replyMax,
+            character: resolvedCharacter,
+            persona: resolvedPersona,
             relevantMemories: relevantMemories,
             continuation: continuation,
             userName: settings.userName,

@@ -1,5 +1,14 @@
 import Foundation
 
+/// How a character card's `system_prompt` interacts with chat memory at the
+/// top of the prompt. `.override` (default) replaces `chat.memory` for the
+/// session; `.merge` prepends and keeps both. Per-chat by design — global
+/// defaulting can be added to `Settings` later if the need actually emerges.
+enum CardPromptMode: String, Codable, Equatable {
+    case override
+    case merge
+}
+
 struct FactExtractionPriority: Codable, Equatable, Identifiable {
     let id: UUID
     var text: String
@@ -102,6 +111,10 @@ struct Chat: Codable, Equatable, Identifiable {
     /// `Settings.userName`). Same indirection as `characterId`: the persona
     /// description lives on the `Persona`, not the chat.
     var personaId: UUID?
+    /// How the linked character's `system_prompt` interacts with `memory`.
+    /// Default `.override` matches SillyTavern. Existing chats without this
+    /// key decode as `.override`. See `CardPromptMode`.
+    var systemPromptMode: CardPromptMode
 
     init(
         id: UUID = UUID(),
@@ -137,6 +150,7 @@ struct Chat: Codable, Equatable, Identifiable {
         self.tokensReceived = 0
         self.characterId = nil
         self.personaId = nil
+        self.systemPromptMode = .override
     }
 
     init(from decoder: Decoder) throws {
@@ -208,6 +222,7 @@ struct Chat: Codable, Equatable, Identifiable {
         tokensReceived = try c.decodeIfPresent(Int.self, forKey: .tokensReceived) ?? 0
         characterId = try c.decodeIfPresent(UUID.self, forKey: .characterId)
         personaId = try c.decodeIfPresent(UUID.self, forKey: .personaId)
+        systemPromptMode = try c.decodeIfPresent(CardPromptMode.self, forKey: .systemPromptMode) ?? .override
     }
 
     /// Best-effort parse of a `memory` string (one fact per line) into entities.

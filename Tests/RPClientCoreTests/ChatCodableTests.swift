@@ -68,6 +68,20 @@ func chatCodableTests() -> TestSuite {
         try expectEqual(chat.factExtractionScanTurns, 0)
         try expectTrue(chat.factExtractionPriorities.isEmpty)
         try expectTrue(chat.sceneSummaries.isEmpty)
+        // Phase 3 §4 — pre-existing chats without the systemPromptMode key
+        // must default to .override (matches SillyTavern, spec'd in V2_PLAN §4.4).
+        try expectEqual(chat.systemPromptMode, .override)
+    }
+
+    s.test("systemPromptMode round-trips through encode/decode") {
+        let stamp = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+        var chat = Chat(title: "Merge mode")
+        chat.created = stamp
+        chat.modified = stamp
+        chat.systemPromptMode = .merge
+        let data = try encoder.encode(chat)
+        let decoded = try decoder.decode(Chat.self, from: data)
+        try expectEqual(decoded.systemPromptMode, .merge)
     }
 
     s.test("sceneSummaries decode falls back from legacy [String]") {

@@ -145,7 +145,14 @@ struct PromptBuilder {
         return raw
     }
 
-    static func build(chat: Chat, relevantMemories: String? = nil, continuation: Bool = false, qwenThinking: Bool = false) -> (prompt: String, stops: [String]) {
+    /// `character` / `persona` are looked up by the caller from `AppState` and
+    /// passed in rather than fetched here so `PromptBuilder` stays a pure
+    /// function of its inputs (testable without AppState). Both default to
+    /// nil for the free-form chat path. Step 4a plumbs them through; later
+    /// sub-steps consume them.
+    static func build(chat: Chat, character: Character? = nil, persona: Persona? = nil, relevantMemories: String? = nil, continuation: Bool = false, qwenThinking: Bool = false) -> (prompt: String, stops: [String]) {
+        _ = character
+        _ = persona
         let template = Templates.byId(chat.templateId, qwenThinking: qwenThinking)
         let prompt = template.assemble(
             memoryBlock: chat.memory.isEmpty ? nil : chat.memory,

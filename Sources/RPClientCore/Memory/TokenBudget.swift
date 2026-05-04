@@ -66,6 +66,8 @@ enum TokenBudget {
         chat: Chat,
         effectiveCtx: Int,
         replyReserve: Int,
+        character: Character? = nil,
+        persona: Persona? = nil,
         relevantMemories: String? = nil,
         continuation: Bool = false,
         userName: String = "",
@@ -73,6 +75,9 @@ enum TokenBudget {
         kobold: KoboldClient,
         completion: @escaping (PromptAssembly) -> Void
     ) {
+        // 4a — plumbed through but not yet consumed. Consumed in 4b/4f.
+        _ = character
+        _ = persona
         // Prepend "[The user's name is X.]" to the memory block so the model
         // addresses the user by name. Lives inside memoryBlock to stay above
         // the prompt-cache boundary — userName changes are rare so the prefix
