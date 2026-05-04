@@ -16,7 +16,6 @@ From [`PLAN.md`](PLAN.md) §10 (with cross-links to the existing fragmented note
 | V4 | Personas (user side) | PLAN.md §10 only | Not started |
 | V5 | Lorebook editor UI | NEXT_STAGES C1 | Data model exists ([`WorldInfoEntry.swift`](Sources/RPClientCore/Models/WorldInfoEntry.swift)); no UI, no injector |
 | V6 | Per-character voices | NEXT_STAGES F2 | Not started |
-| V7 | Bonjour / mDNS server discovery | PLAN.md §10 only | Not started |
 | V8 | Multi-server / multi-server switching | NEXT_STAGES F1 | Not started |
 | V9 | Group chats | PLAN.md §10 only | Not started |
 | V10 | Avatars / image rendering | NEXT_STAGES C3 | Not started |
@@ -34,7 +33,7 @@ The order below is the recommended path. Each phase ends with a shippable, runna
 │  Phase 1   V5 Lorebook UI            (closes data-model gap)    │
 │  Phase 2   V1 Swipes                 (high-value, no deps)      │
 │  Phase 3   V3 Character cards + V4 Personas  (paired)           │
-│  Phase 4   V8 Multi-server  →  V7 Bonjour    (paired)           │
+│  Phase 4   V8 Multi-server                                      │
 │  Phase 5   V10 Avatars                (small; unlocks V3 polish)│
 │  Phase 6   V6 Per-character voices    (depends on Entity store) │
 │  Phase 7   V2 Full branching          (refactor; design doc)    │
@@ -47,7 +46,6 @@ Rationale for the order:
 - **V5 first** because the data model is sitting unused and the prompt-builder injection path is the smallest of the lot — it's the cheapest "complete a thing already half-built" win and unblocks any future world-info-aware features.
 - **V1 (swipes) before V2 (branching)** because swipes solve 90% of the user need with a non-breaking storage change (`Turn.alternatives: [Variant]`). Branching is a tree-of-turns refactor — defer until swipes prove the UX shape.
 - **V3 + V4 paired** because character cards naturally include a persona slot for the user, and the import path lands cleaner if `Chat.persona` and `Chat.character` exist in the same change.
-- **V8 before V7** because Bonjour just discovers entries that flow into the multi-server picker; without the picker there's nowhere to land discovered servers.
 - **V10 before V6** because avatars give us the per-entity image slot V6 wants for its speaker indicator.
 - **V6 depends on the Entity store** (already shipped in Memory V2 Step C) — speaker→voice mapping is per-entity.
 - **V2 (branching) and V9 (group chats)** are both architecture-shifts and each warrants its own design doc before code. They sit at the end so V1/V3/V8 can inform their final shape.
@@ -319,7 +317,7 @@ Persona injection: on Gemma, the persona description folds into the first user t
 
 ---
 
-## 5. Phase 4 — V8 Multi-server + V7 Bonjour discovery
+## 5. Phase 4 — V8 Multi-server
 
 ### 5.1 Multi-server data model
 
@@ -372,43 +370,28 @@ New Servers tab in [`SettingsWindowController`](Sources/RPClientCore/UI/Settings
 - Server list: name, base URL, last-probed model, status dot.
 - Per-server: edit name/URL, "Test connection" button (probes `/api/v1/model` + `/api/extra/version`), delete (blocked if it's the default).
 - Role assignment: dropdowns for Default / Summarizer / Extractor / Embeddings.
-- "Add server" → free-text URL or "Discover on network" (Phase 4b).
+- "Add server" → free-text URL.
 
 ### 5.4 Per-chat picker
 
 In the chat header (next to template + sampler picker): server dropdown showing "Use default" or a specific profile. Persists to `Chat.serverId`.
 
-### 5.5 Bonjour discovery (V7)
-
-KoboldCpp doesn't itself advertise via mDNS today. Two implementation options:
-
-- **A. Service-type scan.** Use `NWBrowser` on `_http._tcp` with name filter — finds anything advertising HTTP. Probe each candidate's `/api/extra/version` to confirm it's KoboldCpp.
-- **B. Explicit subnet probe.** Discover the local subnet, parallel-probe `:5001` on each /24 host. Crude but fast on typical home LANs.
-
-Recommend **A first** (clean, uses framework primitives, no host scanning) with B as a fallback for users whose stack doesn't advertise.
-
-UI: in the "Add server" sheet, a "Discover" button that lists found candidates with "+ Add" beside each. Names default to the Bonjour service name; user can rename.
-
-LAN reachability requires the existing Local Network entitlement / TCC permission; that's already wired (see [`run.sh`](run.sh) and the model-probe behaviour noted in [`NEXT_STAGES.md`](NEXT_STAGES.md) operational notes).
-
-### 5.6 Files touched
+### 5.5 Files touched
 
 - `Models/Settings.swift` (rewrite)
 - `Models/Chat.swift` (add `serverId`)
 - `KoboldClient.swift` (per-instance refactor) + new `KoboldClientRegistry.swift`
 - All call sites of `KoboldClient.shared` (or equivalent) — likely [`PromptBuilder`](Sources/RPClientCore/PromptBuilder.swift), [`Memory/Summarizer`](Sources/RPClientCore/Memory/Summarizer.swift), [`Memory/FactExtractor`](Sources/RPClientCore/Memory/FactExtractor.swift), embeddings code if any.
-- `Network/BonjourBrowser.swift` (new)
 - `UI/SettingsWindowController.swift` (Servers tab)
 - `UI/ChatViewController.swift` (per-chat picker in header)
 
-### 5.7 Risks / open
+### 5.6 Risks / open
 
 - **Side-call routing must not regress today's behaviour.** Default everything to the same server initially; only switch when the user opts in.
-- **KoboldCpp Bonjour advertising.** If the upstream server doesn't advertise, the Discover button only finds servers running behind another HTTP advertiser. Document this; suggest manual entry as primary path.
 - **Capability probing latency.** Cache probe results on `ServerProfile.capabilities` with a TTL; re-probe on demand.
 - **Sampler / template incompatibility across servers.** Different servers may run different models. Per-chat already pins template + sampler — nothing extra to do, but warn if the chat's template doesn't match the server's reported model family.
 
-**Effort: 3 days for V8, +1 day for V7 (4 days total).**
+**Effort: 3 days.**
 
 ---
 
@@ -537,13 +520,13 @@ Phases 1, 2, 3, 4 all change the Chat or Settings schema. Add a `Tests/Migration
 | 1 | V5 Lorebook UI | 2 days | 2 |
 | 2 | V1 Swipes | 2-3 days | 5 |
 | 3 | V3 Character cards + V4 Personas | 3-4 days | 9 |
-| 4 | V8 Multi-server + V7 Bonjour | 4 days | 13 |
-| 5 | V10 Avatars (sidebar + turn) | 1 day | 14 |
-| 6 | V6 Per-character voices | 2 days | 16 |
-| 7 | V2 Full branching | 1 day design + 1 week+ build | ~22 |
-| 8 | V9 Group chats | 1 day design + 1-2 weeks build | ~30+ |
+| 4 | V8 Multi-server | 3 days | 12 |
+| 5 | V10 Avatars (sidebar + turn) | 1 day | 13 |
+| 6 | V6 Per-character voices | 2 days | 15 |
+| 7 | V2 Full branching | 1 day design + 1 week+ build | ~21 |
+| 8 | V9 Group chats | 1 day design + 1-2 weeks build | ~29+ |
 
-Phases 1–6 together (~16 days of focused work) ship every V2 item except branching and group chats. Phases 7–8 are best treated as separate efforts with their own design rounds.
+Phases 1–6 together (~15 days of focused work) ship every V2 item except branching and group chats. Phases 7–8 are best treated as separate efforts with their own design rounds.
 
 ---
 
