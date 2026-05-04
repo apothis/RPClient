@@ -75,7 +75,6 @@ enum TokenBudget {
         kobold: KoboldClient,
         completion: @escaping (PromptAssembly) -> Void
     ) {
-        _ = persona // 4f consumes this
         // Memory block composition (system_prompt + userName line + card
         // biographical prefix + chat.memory) lives in
         // `PromptBuilder.composeMemoryBlock` so the test path and production
@@ -86,11 +85,14 @@ enum TokenBudget {
             character: character,
             userName: userName
         ) ?? ""
+        // User-side persona block (4f). Per-template placement: Gemma folds
+        // it into the first user turn, Qwen into the system block.
+        let personaBlock = PromptBuilder.renderPersonaBlock(persona)
         let group = DispatchGroup()
         let counter = TokenCounter.shared
 
         var memTok = 0, sumTok = 0, sceneTok = 0, anTok = 0, wiTok = 0, retrTok = 0, digestTok = 0
-        var entitiesTok = 0, anchorTok = 0
+        var entitiesTok = 0, anchorTok = 0, personaTok = 0
         var turnTok: [UUID: Int] = [:]
         let lock = NSLock()
 
@@ -101,6 +103,10 @@ enum TokenBudget {
         if !effectiveMemory.isEmpty {
             group.enter()
             counter.count(effectiveMemory, kobold: kobold) { n in memTok = n; group.leave() }
+        }
+        if let pb = personaBlock, !pb.isEmpty {
+            group.enter()
+            counter.count(pb, kobold: kobold) { n in personaTok = n; group.leave() }
         }
         if let eb = entitiesBlock, !eb.isEmpty {
             group.enter()
@@ -166,7 +172,7 @@ enum TokenBudget {
             }
             var turnsTotal = turns.reduce(0) { $0 + tokens(of: $1) }
 
-            let nonTurns = memTok + entitiesTok + sumTok + sceneTok + anTok + wiTok + retrTok + digestTok + anchorTok + fixedOverhead
+            let nonTurns = memTok + entitiesTok + sumTok + sceneTok + anTok + wiTok + retrTok + digestTok + anchorTok + personaTok + fixedOverhead
             // Drop oldest pair (user + assistant) while exceeding budget. Always keep
             // the trailing pending pair so the user's just-sent message survives.
             while nonTurns + turnsTotal + replyReserve > effectiveCtx, turns.count > 2 {
@@ -179,6 +185,7 @@ enum TokenBudget {
             let template = Templates.byId(chat.templateId, qwenThinking: qwenThinking)
             let prompt = template.assemble(
                 memoryBlock: effectiveMemory.isEmpty ? nil : effectiveMemory,
+                personaBlock: personaBlock,
                 entitiesBlock: entitiesBlock,
                 sceneSummaries: renderedScenes,
                 summary: chat.summary.isEmpty ? nil : chat.summary,
@@ -192,7 +199,7 @@ enum TokenBudget {
             )
 
             let usage = BudgetUsage(
-                memory: memTok + digestTok + entitiesTok,
+                memory: memTok + digestTok + entitiesTok + personaTok,
                 summary: sumTok + sceneTok,
                 authorsNote: anTok,
                 worldInfo: wiTok,

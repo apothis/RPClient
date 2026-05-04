@@ -151,11 +151,12 @@ struct PromptBuilder {
     /// nil for the free-form chat path. Step 4a plumbs them through; later
     /// sub-steps consume them.
     static func build(chat: Chat, character: Character? = nil, persona: Persona? = nil, relevantMemories: String? = nil, continuation: Bool = false, qwenThinking: Bool = false) -> (prompt: String, stops: [String]) {
-        _ = persona
         let memoryBlock = composeMemoryBlock(chat: chat, character: character, userName: "")
+        let personaBlock = renderPersonaBlock(persona)
         let template = Templates.byId(chat.templateId, qwenThinking: qwenThinking)
         let prompt = template.assemble(
             memoryBlock: memoryBlock,
+            personaBlock: personaBlock,
             entitiesBlock: entitiesBlock(chat: chat),
             sceneSummaries: renderableScenes(chat: chat),
             summary: chat.summary.isEmpty ? nil : chat.summary,
@@ -168,6 +169,39 @@ struct PromptBuilder {
             continuation: continuation
         )
         return (prompt, template.stopSequences)
+    }
+
+    /// Soft cap (in characters) on the persona block before we start logging
+    /// a "your persona is unusually long" warning. ~200 tokens at the
+    /// project's standard 4-chars-per-token estimate. Not a hard truncate;
+    /// the user can still ship long persona blocks if they really mean to.
+    /// See V2_PLAN §4.6.
+    static let personaSoftCapChars = 800
+
+    /// Format the user-side persona for prompt injection. Returns `nil` when
+    /// no persona is set (or the persona has neither name nor description),
+    /// so callers can pass through to the templates' `personaBlock: String?`
+    /// slot. Format matches V2_PLAN §4.4: `<You are NAME>\nDESCRIPTION`. When
+    /// the persona only has a description (no name), emits just the
+    /// description as-is. Logs a soft-cap warning when the rendered block
+    /// exceeds `personaSoftCapChars`.
+    static func renderPersonaBlock(_ persona: Persona?) -> String? {
+        guard let p = persona else { return nil }
+        let name = p.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let desc = p.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.isEmpty && desc.isEmpty { return nil }
+        let body: String
+        if !name.isEmpty && !desc.isEmpty {
+            body = "<You are \(name)>\n\(desc)"
+        } else if !name.isEmpty {
+            body = "<You are \(name)>"
+        } else {
+            body = desc
+        }
+        if body.count > personaSoftCapChars {
+            DebugLog.shared.write("persona-cap-warning: rendered=\(body.count)c (~\(body.count / 4)tok) exceeds soft cap \(personaSoftCapChars)c (~\(personaSoftCapChars / 4)tok). Persona will still inject — long personas can blow the prompt budget on small-context models.")
+        }
+        return body
     }
 
     /// Header on the read-only "from card" block (description + personality +

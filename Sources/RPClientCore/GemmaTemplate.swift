@@ -7,6 +7,7 @@ struct GemmaTemplate: PromptTemplate {
 
     func assemble(
         memoryBlock: String?,
+        personaBlock: String?,
         entitiesBlock: String?,
         sceneSummaries: [SceneSummary],
         summary: String?,
@@ -20,6 +21,10 @@ struct GemmaTemplate: PromptTemplate {
     ) -> String {
         var preamble: [String] = []
         if let m = memoryBlock, !m.isEmpty { preamble.append(m) }
+        // Persona rides at the top of the first user turn for Gemma — the
+        // model has no separate "system" lane in this template, so user-side
+        // identity sits adjacent to memory in the preamble. See V2_PLAN §4.4.
+        if let p = personaBlock, !p.isEmpty { preamble.append(p) }
         if !worldInfoHits.isEmpty { preamble.append(worldInfoHits.joined(separator: "\n\n")) }
         if !sceneSummaries.isEmpty {
             preamble.append(PromptBuilder.SceneSummaryFormatter.renderBlock(sceneSummaries))

@@ -21,6 +21,7 @@ struct QwenTemplate: PromptTemplate {
 
     func assemble(
         memoryBlock: String?,
+        personaBlock: String?,
         entitiesBlock: String?,
         sceneSummaries: [SceneSummary],
         summary: String?,
@@ -34,6 +35,10 @@ struct QwenTemplate: PromptTemplate {
     ) -> String {
         var systemParts: [String] = []
         if let m = memoryBlock, !m.isEmpty { systemParts.append(m) }
+        // Qwen has a dedicated system lane — persona belongs there, not in
+        // the user turn (see V2_PLAN §4.4). Placed right after memory so
+        // user-side identity sits next to character system_prompt context.
+        if let p = personaBlock, !p.isEmpty { systemParts.append(p) }
         if !worldInfoHits.isEmpty { systemParts.append(worldInfoHits.joined(separator: "\n\n")) }
         if !sceneSummaries.isEmpty {
             systemParts.append(PromptBuilder.SceneSummaryFormatter.renderBlock(sceneSummaries))

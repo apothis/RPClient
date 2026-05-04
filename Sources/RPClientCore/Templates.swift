@@ -6,6 +6,7 @@ protocol PromptTemplate {
     var stopSequences: [String] { get }
     func assemble(
         memoryBlock: String?,
+        personaBlock: String?,
         entitiesBlock: String?,
         sceneSummaries: [SceneSummary],
         summary: String?,
@@ -30,6 +31,7 @@ extension PromptTemplate {
     ) -> String {
         assemble(
             memoryBlock: memoryBlock,
+            personaBlock: nil,
             entitiesBlock: nil,
             sceneSummaries: [],
             summary: summary,
@@ -40,6 +42,38 @@ extension PromptTemplate {
             currentSceneAnchor: nil,
             turns: turns,
             continuation: false
+        )
+    }
+
+    /// Convenience overload — same signature as the full one minus
+    /// `personaBlock` (added in 4f). Forwards `nil` so existing tests that
+    /// don't care about persona keep working without touching every callsite.
+    func assemble(
+        memoryBlock: String?,
+        entitiesBlock: String?,
+        sceneSummaries: [SceneSummary],
+        summary: String?,
+        worldInfoHits: [String],
+        authorsNote: AuthorsNote?,
+        relevantMemories: String?,
+        tailMemoryDigest: String?,
+        currentSceneAnchor: String?,
+        turns: [Turn],
+        continuation: Bool
+    ) -> String {
+        assemble(
+            memoryBlock: memoryBlock,
+            personaBlock: nil,
+            entitiesBlock: entitiesBlock,
+            sceneSummaries: sceneSummaries,
+            summary: summary,
+            worldInfoHits: worldInfoHits,
+            authorsNote: authorsNote,
+            relevantMemories: relevantMemories,
+            tailMemoryDigest: tailMemoryDigest,
+            currentSceneAnchor: currentSceneAnchor,
+            turns: turns,
+            continuation: continuation
         )
     }
 
@@ -54,6 +88,7 @@ extension PromptTemplate {
     ) -> String {
         assemble(
             memoryBlock: memoryBlock,
+            personaBlock: nil,
             entitiesBlock: nil,
             sceneSummaries: [],
             summary: summary,

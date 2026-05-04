@@ -431,6 +431,140 @@ func promptBuilderTests() -> TestSuite {
         try expectTrue(prompt.contains("Stay in third person."))
     }
 
+    // MARK: - renderPersonaBlock + per-template placement (Phase 3 §4.4 step 4f)
+
+    s.test("renderPersonaBlock returns nil for nil persona and for blank persona") {
+        try expectNil(PromptBuilder.renderPersonaBlock(nil))
+        try expectNil(PromptBuilder.renderPersonaBlock(Persona(name: "", description: "")))
+        try expectNil(PromptBuilder.renderPersonaBlock(Persona(name: "  ", description: "  ")))
+    }
+
+    s.test("renderPersonaBlock formats name + description as <You are NAME>\\nDESC") {
+        let block = try expectNotNil(PromptBuilder.renderPersonaBlock(
+            Persona(name: "Kev", description: "A weary archivist of the Inner Strait.")
+        ))
+        try expectEqual(block, "<You are Kev>\nA weary archivist of the Inner Strait.")
+    }
+
+    s.test("renderPersonaBlock with name only emits the You are line alone") {
+        let block = try expectNotNil(PromptBuilder.renderPersonaBlock(
+            Persona(name: "Kev", description: "")
+        ))
+        try expectEqual(block, "<You are Kev>")
+    }
+
+    s.test("renderPersonaBlock with description only emits the description") {
+        let block = try expectNotNil(PromptBuilder.renderPersonaBlock(
+            Persona(name: "", description: "An archivist with no name.")
+        ))
+        try expectEqual(block, "An archivist with no name.")
+    }
+
+    s.test("Qwen template lands persona inside the system block") {
+        let out = QwenTemplate().assemble(
+            memoryBlock: "MEM",
+            personaBlock: "<You are Kev>\nArchivist.",
+            entitiesBlock: nil,
+            sceneSummaries: [],
+            summary: nil,
+            worldInfoHits: [],
+            authorsNote: nil,
+            relevantMemories: nil,
+            tailMemoryDigest: nil,
+            currentSceneAnchor: nil,
+            turns: [Turn(role: .user, text: "hi")],
+            continuation: false
+        )
+        // Persona must appear inside the <|im_start|>system block, before the user turn opens.
+        let sysOpen = try expectNotNil(out.range(of: "<|im_start|>system"))
+        let sysClose = try expectNotNil(out.range(of: "<|im_end|>", range: sysOpen.upperBound..<out.endIndex))
+        let systemBody = String(out[sysOpen.upperBound..<sysClose.lowerBound])
+        try expectTrue(systemBody.contains("<You are Kev>"))
+        try expectTrue(systemBody.contains("Archivist."))
+        try expectTrue(systemBody.contains("MEM"))
+    }
+
+    s.test("Gemma template folds persona into the first user turn alongside memory") {
+        let out = GemmaTemplate().assemble(
+            memoryBlock: "MEM",
+            personaBlock: "<You are Kev>\nArchivist.",
+            entitiesBlock: nil,
+            sceneSummaries: [],
+            summary: nil,
+            worldInfoHits: [],
+            authorsNote: nil,
+            relevantMemories: nil,
+            tailMemoryDigest: nil,
+            currentSceneAnchor: nil,
+            turns: [Turn(role: .user, text: "hi")],
+            continuation: false
+        )
+        // Gemma has no separate system lane — persona rides at the top of the
+        // first user turn, alongside the memory preamble.
+        let firstTurnOpen = try expectNotNil(out.range(of: "<start_of_turn>user\n"))
+        let firstTurnClose = try expectNotNil(out.range(of: "<end_of_turn>", range: firstTurnOpen.upperBound..<out.endIndex))
+        let userBody = String(out[firstTurnOpen.upperBound..<firstTurnClose.lowerBound])
+        try expectTrue(userBody.contains("<You are Kev>"))
+        try expectTrue(userBody.contains("MEM"))
+        try expectTrue(userBody.hasSuffix("hi"), "user's actual message stays at the end of the turn body, after preamble + persona")
+    }
+
+    s.test("Templates omit persona block entirely when nil") {
+        let qwen = QwenTemplate().assemble(
+            memoryBlock: "MEM",
+            personaBlock: nil,
+            entitiesBlock: nil,
+            sceneSummaries: [],
+            summary: nil,
+            worldInfoHits: [],
+            authorsNote: nil,
+            relevantMemories: nil,
+            tailMemoryDigest: nil,
+            currentSceneAnchor: nil,
+            turns: [Turn(role: .user, text: "hi")],
+            continuation: false
+        )
+        try expectFalse(qwen.contains("<You are"))
+        let gemma = GemmaTemplate().assemble(
+            memoryBlock: "MEM",
+            personaBlock: nil,
+            entitiesBlock: nil,
+            sceneSummaries: [],
+            summary: nil,
+            worldInfoHits: [],
+            authorsNote: nil,
+            relevantMemories: nil,
+            tailMemoryDigest: nil,
+            currentSceneAnchor: nil,
+            turns: [Turn(role: .user, text: "hi")],
+            continuation: false
+        )
+        try expectFalse(gemma.contains("<You are"))
+    }
+
+    s.test("build wires persona through to the prompt for both templates") {
+        var chat = Chat()
+        chat.turns = [Turn(role: .user, text: "hi")]
+        let persona = Persona(name: "Kev", description: "Archivist.")
+
+        chat.templateId = "qwen"
+        let (qwenPrompt, _) = PromptBuilder.build(chat: chat, persona: persona)
+        try expectTrue(qwenPrompt.contains("<You are Kev>"))
+        try expectTrue(qwenPrompt.contains("Archivist."))
+
+        chat.templateId = "gemma"
+        let (gemmaPrompt, _) = PromptBuilder.build(chat: chat, persona: persona)
+        try expectTrue(gemmaPrompt.contains("<You are Kev>"))
+    }
+
+    s.test("build emits no persona content when persona is nil") {
+        var chat = Chat()
+        chat.templateId = "qwen"
+        chat.turns = [Turn(role: .user, text: "hi")]
+        let (prompt, _) = PromptBuilder.build(chat: chat, persona: nil)
+        try expectFalse(prompt.contains("<You are"))
+    }
+
     s.test("build does NOT inject card postHistoryInstructions when user note is set") {
         var chat = Chat()
         chat.templateId = "gemma"
