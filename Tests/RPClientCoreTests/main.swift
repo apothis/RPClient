@@ -6,6 +6,7 @@ let suites: [TestSuite] = [
     chunkerTests(),
     vectorStoreTests(),
     chatCodableTests(),
+    characterPersonaTests(),
     turnVariantTests(),
     worldInfoEntryCodableTests(),
     worldInfoInjectorTests(),

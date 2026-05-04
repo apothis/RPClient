@@ -88,7 +88,7 @@ enum WorldInfoInjector {
         return false
     }
 
-    private static func isWordChar(_ ch: Character) -> Bool {
+    private static func isWordChar(_ ch: Swift.Character) -> Bool {
         for scalar in ch.unicodeScalars {
             if CharacterSet.alphanumerics.contains(scalar) { return true }
             if scalar == "_" { return true }

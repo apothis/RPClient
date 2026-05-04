@@ -92,6 +92,16 @@ struct Chat: Codable, Equatable, Identifiable {
     /// matches what the server actually generated (including any tokens
     /// stripped by the think-block filter — those still cost wall time).
     var tokensReceived: Int
+    /// Character card driving this chat (nil = free-form chat with no card).
+    /// Phase 3 §4. The card's content is *not* duplicated onto the chat —
+    /// PromptBuilder reads the live `Character` out of `AppState.characters`
+    /// at send time so edits to the card propagate without rewriting chats.
+    /// Existing chats decode as nil and behave exactly as before.
+    var characterId: UUID?
+    /// User-side persona for this chat (nil = anonymous — falls back to
+    /// `Settings.userName`). Same indirection as `characterId`: the persona
+    /// description lives on the `Persona`, not the chat.
+    var personaId: UUID?
 
     init(
         id: UUID = UUID(),
@@ -125,6 +135,8 @@ struct Chat: Codable, Equatable, Identifiable {
         self.schemaVersion = 3
         self.tokensSent = 0
         self.tokensReceived = 0
+        self.characterId = nil
+        self.personaId = nil
     }
 
     init(from decoder: Decoder) throws {
@@ -194,6 +206,8 @@ struct Chat: Codable, Equatable, Identifiable {
         schemaVersion = max(decodedVersion, 3)
         tokensSent = try c.decodeIfPresent(Int.self, forKey: .tokensSent) ?? 0
         tokensReceived = try c.decodeIfPresent(Int.self, forKey: .tokensReceived) ?? 0
+        characterId = try c.decodeIfPresent(UUID.self, forKey: .characterId)
+        personaId = try c.decodeIfPresent(UUID.self, forKey: .personaId)
     }
 
     /// Best-effort parse of a `memory` string (one fact per line) into entities.

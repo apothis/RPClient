@@ -74,7 +74,7 @@ struct PromptBuilder {
             let capCount = min(80, trimmed.count)
             let cap = trimmed.index(trimmed.startIndex, offsetBy: capCount)
             let segment = trimmed[..<cap]
-            let breakers: Set<Character> = [",", ";", ".", "!", "?", ":"]
+            let breakers: Set<Swift.Character> = [",", ";", ".", "!", "?", ":"]
             var body: String
             if let cut = segment.firstIndex(where: { breakers.contains($0) }) {
                 body = String(trimmed[..<cut])

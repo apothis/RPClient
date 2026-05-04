@@ -4,6 +4,11 @@ import Foundation
 enum AppNotification {
     static let chatListChanged = Notification.Name("RPClient.chatListChanged")
     static let currentChatChanged = Notification.Name("RPClient.currentChatChanged")
+    /// Posted whenever the imported character library changes (add / update /
+    /// delete). Phase 3 §4 — step 3's library window will subscribe.
+    static let charactersChanged = Notification.Name("RPClient.charactersChanged")
+    /// Same as `charactersChanged` for the persona library.
+    static let personasChanged = Notification.Name("RPClient.personasChanged")
     static let chatUpdated = Notification.Name("RPClient.chatUpdated")
     static let streamTokenAppended = Notification.Name("RPClient.streamTokenAppended")
     static let streamFinished = Notification.Name("RPClient.streamFinished")
@@ -25,6 +30,12 @@ final class AppState {
     private(set) var settings: Settings
     private(set) var chats: [Chat]
     private(set) var currentChatId: UUID?
+    /// Imported character cards (V2 §4 — Phase 3 step 1). Loaded once at
+    /// launch and mutated through `saveCharacter` / `deleteCharacter`. Step 1
+    /// only manages the collection; the prompt builder doesn't read it yet.
+    private(set) var characters: [Character]
+    /// User-side personas. Same lifecycle as `characters`.
+    private(set) var personas: [Persona]
     private(set) var isStreaming: Bool = false
     private(set) var isSummarizing: Bool = false
     private(set) var lastSummarizerError: String?
@@ -99,6 +110,8 @@ final class AppState {
         self.settings = s
         self.chats = Storage.shared.listChats()
         self.currentChatId = chats.first?.id
+        self.characters = Storage.shared.listCharacters()
+        self.personas = Storage.shared.listPersonas()
         let url = URL(string: s.serverURL) ?? URL(string: "http://localhost:5001")!
         self.kobold = KoboldClient(baseURL: url)
         if chats.isEmpty {
@@ -185,6 +198,65 @@ final class AppState {
             NotificationCenter.default.post(name: AppNotification.currentChatChanged, object: nil)
         }
         NotificationCenter.default.post(name: AppNotification.chatListChanged, object: nil)
+    }
+
+    // MARK: - Characters
+
+    /// Insert or replace a character by id, persist it, and notify
+    /// subscribers. Sort order matches `Storage.listCharacters` (newest
+    /// first by `created`).
+    func saveCharacter(_ character: Character) {
+        Storage.shared.saveCharacter(character)
+        if let idx = characters.firstIndex(where: { $0.id == character.id }) {
+            characters[idx] = character
+        } else {
+            characters.append(character)
+        }
+        characters.sort { $0.created > $1.created }
+        NotificationCenter.default.post(name: AppNotification.charactersChanged, object: nil)
+    }
+
+    func deleteCharacter(id: UUID) {
+        Storage.shared.deleteCharacter(id: id)
+        characters.removeAll(where: { $0.id == id })
+        // Detach this card from any chats that referenced it. The chat itself
+        // survives — it just falls back to free-form behaviour.
+        for chat in chats where chat.characterId == id {
+            updateChat(id: chat.id) { c in c.characterId = nil }
+        }
+        NotificationCenter.default.post(name: AppNotification.charactersChanged, object: nil)
+    }
+
+    func character(id: UUID?) -> Character? {
+        guard let id = id else { return nil }
+        return characters.first(where: { $0.id == id })
+    }
+
+    // MARK: - Personas
+
+    func savePersona(_ persona: Persona) {
+        Storage.shared.savePersona(persona)
+        if let idx = personas.firstIndex(where: { $0.id == persona.id }) {
+            personas[idx] = persona
+        } else {
+            personas.append(persona)
+        }
+        personas.sort { $0.created > $1.created }
+        NotificationCenter.default.post(name: AppNotification.personasChanged, object: nil)
+    }
+
+    func deletePersona(id: UUID) {
+        Storage.shared.deletePersona(id: id)
+        personas.removeAll(where: { $0.id == id })
+        for chat in chats where chat.personaId == id {
+            updateChat(id: chat.id) { c in c.personaId = nil }
+        }
+        NotificationCenter.default.post(name: AppNotification.personasChanged, object: nil)
+    }
+
+    func persona(id: UUID?) -> Persona? {
+        guard let id = id else { return nil }
+        return personas.first(where: { $0.id == id })
     }
 
     func saveSettings(_ s: Settings) {
