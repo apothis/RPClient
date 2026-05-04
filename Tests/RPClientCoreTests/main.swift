@@ -18,6 +18,7 @@ let suites: [TestSuite] = [
     retrievalEngineRoutingTests(),
     serverEditingTests(),
     serverProbeParseTests(),
+    chatServerPickerTests(),
 ]
 
 exit(TestRunner.run(suites))

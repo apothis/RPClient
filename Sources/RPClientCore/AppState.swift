@@ -18,6 +18,10 @@ enum AppNotification {
     /// alerts (banner / NSAlert) without spamming on every status tick.
     static let serverReachableChanged = Notification.Name("RPClient.serverReachableChanged")
     static let fontChanged = Notification.Name("RPClient.fontChanged")
+    /// Fires after `saveSettings` writes a new Settings to disk. UI elements
+    /// that mirror Settings state (e.g. the chat header's server picker)
+    /// listen for this so they refresh when profiles are added/removed.
+    static let settingsChanged = Notification.Name("RPClient.settingsChanged")
     /// Fires on the transition edges of `AppState.isThinking` — model has
     /// just entered a `<think>` block, or just left one. The UI binds the
     /// "Thinking…" placeholder on the active assistant turn to this.
@@ -403,6 +407,7 @@ final class AppState {
         registry.updateSettings(s)
         refreshServerInfo()
         scheduleUsageRecompute()
+        NotificationCenter.default.post(name: AppNotification.settingsChanged, object: nil)
     }
 
     /// Resolve a role-routed client AND log the resolution so misrouting is

@@ -328,7 +328,7 @@ Test coverage grew from 140 → 175. Key suites: `PromptBuilderTests` (compositi
 
 ---
 
-## 5. Phase 4 — V8 Multi-server
+## 5. Phase 4 — V8 Multi-server ✅ shipped 2026-05-05
 
 ### 5.1 Multi-server data model
 
@@ -405,6 +405,21 @@ In the chat header (next to template + sampler picker): server dropdown showing 
 - **Sampler / template incompatibility across servers.** Different servers may run different models. Per-chat already pins template + sampler — nothing extra to do, but warn if the chat's template doesn't match the server's reported model family.
 
 **Effort: 3 days.**
+
+### 5.7 Shipped: 2026-05-05
+
+Sub-steps as shipped (one commit per):
+- **4a** — ServerProfile / ServerRole / ServerCapabilities models + Settings rewrite (servers + defaultServerId + per-role overrides) + Codable migration of legacy `serverURL`. 6 round-trip / migration tests.
+- **4b** — KoboldClientRegistry: caches one client per profile, role + chatOverride routing, in-place URL update preserving identity, eviction on profile removal, stable localhost sentinel for corrupt state. AppState.kobold became a computed façade. 10 unit tests on routing.
+- **4c** — Chat.serverId pin + façade plumbing. server-resolve: diagnostic includes the per-chat serverId. 2 Codable tests (round-trip + legacy nil-default).
+- **4d** — Side-call role routing in AppState: retrieve→.embeddings, index→.embeddings + .summarizer (split clients), summarize→.summarizer, extract→.extractor. Carved KoboldGenerating + KoboldEmbedding protocols out of KoboldClient so the engine's two side-calls can be wired to different clients (and so the routing is testable). RetrievalEngine grew an injectable `storesDir` so the routing test runs on a tmp dir. 3 routing tests with fake protocol doubles.
+- **4d-followup** — `side-call:` log line at every side-call dispatch point so misrouting is visible in the debug log without inspecting network traffic.
+- **4e** — Settings UI Servers section: scrollable list of profile rows (name + URL + Test + status dot + delete), four role-assignment popups, "+ Add server", short-timeout `ServerProbe` of /api/v1/model + /api/extra/version + /api/extra/true_max_context_length. Editing rules in pure `ServerEditing` helpers. 9 + 6 tests for the rules and JSON parsers.
+- **4f** — Per-chat server picker in a new chat header bar. ChatServerPicker model helpers (selectedIndex / idAtIndex / displayLabel) test-covered, AppKit popup is glue. New `settingsChanged` notification so the picker refreshes when profiles change.
+
+What landed differently from §5.6 risks:
+- Sampler / template incompatibility warning: punted to a follow-up. The routing infrastructure ships clean without it; the warning UX needs its own thinking (where does it surface? on chat open? on send?).
+- Capability probing: lazy on demand only, not on app launch. `ServerCapabilities` is cached on the profile and refreshed by the user clicking "Test connection".
 
 ---
 

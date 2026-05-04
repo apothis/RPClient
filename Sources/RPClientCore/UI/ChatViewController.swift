@@ -7,6 +7,11 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     private let statusBar = StatusBar()
     private let scrollLatestButton = NSButton()
     private let emptyStateView = EmptyStateView()
+    /// Phase 4 §5.4 — per-chat server pin. nil/(use default) = chat
+    /// generation goes to settings.defaultServerId; otherwise pinned to the
+    /// chosen profile.
+    private let chatHeader = NSView()
+    private let serverPicker = NSPopUpButton()
     private var turnViews: [TurnView] = []
     private var dividerView: ContextDivider?
     private var dividerWidthConstraint: NSLayoutConstraint?
@@ -36,6 +41,29 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(scrollView)
 
+        // Chat header bar — server picker (Phase 4 §5.4). Future home for
+        // template + sampler pickers if/when we surface those per-chat too.
+        chatHeader.translatesAutoresizingMaskIntoConstraints = false
+        chatHeader.wantsLayer = true
+        let serverLabel = NSTextField(labelWithString: "Server:")
+        serverLabel.font = Theme.font(11)
+        serverLabel.textColor = .secondaryLabelColor
+        serverLabel.translatesAutoresizingMaskIntoConstraints = false
+        serverPicker.target = self
+        serverPicker.action = #selector(serverPickerChanged(_:))
+        serverPicker.bezelStyle = .rounded
+        serverPicker.translatesAutoresizingMaskIntoConstraints = false
+        chatHeader.addSubview(serverLabel)
+        chatHeader.addSubview(serverPicker)
+        v.addSubview(chatHeader)
+        NSLayoutConstraint.activate([
+            chatHeader.heightAnchor.constraint(equalToConstant: 28),
+            serverLabel.leadingAnchor.constraint(equalTo: chatHeader.leadingAnchor, constant: 12),
+            serverLabel.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
+            serverPicker.leadingAnchor.constraint(equalTo: serverLabel.trailingAnchor, constant: 6),
+            serverPicker.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
+        ])
+
         // Stack tracks the panel width with a small symmetric gutter; turns
         // expand fully as the panel widens.
         stackView.widthAnchor.constraint(
@@ -59,7 +87,11 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         emptyStateView.translatesAutoresizingMaskIntoConstraints = false
 
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: v.topAnchor),
+            chatHeader.topAnchor.constraint(equalTo: v.topAnchor),
+            chatHeader.leadingAnchor.constraint(equalTo: v.leadingAnchor),
+            chatHeader.trailingAnchor.constraint(equalTo: v.trailingAnchor),
+
+            scrollView.topAnchor.constraint(equalTo: chatHeader.bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: v.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: v.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: inputBar.topAnchor),
@@ -93,6 +125,8 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             name: AppNotification.statusChanged, object: nil)
         nc.addObserver(self, selector: #selector(rebuild),
             name: AppNotification.fontChanged, object: nil)
+        nc.addObserver(self, selector: #selector(handleSettingsChanged),
+            name: AppNotification.settingsChanged, object: nil)
         nc.addObserver(self, selector: #selector(handleScroll),
             name: NSView.boundsDidChangeNotification, object: clip)
 
@@ -174,6 +208,7 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         dividerView?.removeFromSuperview()
         dividerView = nil
         dividerWidthConstraint = nil
+        rebuildServerPicker()
         guard let chat = AppState.shared.currentChat else {
             removeEmptyState()
             return
@@ -478,6 +513,37 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     func emptyStateDidPickStarter(_ view: EmptyStateView, text: String) {
         inputBar.textView.string = text
         view.window?.makeFirstResponder(inputBar.textView)
+    }
+
+    // MARK: - Per-chat server picker
+
+    /// Refill the popup from current settings + select the chat's pin. Called
+    /// on chat switch, chat update, and after settings save (which can change
+    /// the profile list out from under us).
+    private func rebuildServerPicker() {
+        let s = AppState.shared.settings
+        let chatPin = AppState.shared.currentChat?.serverId
+        serverPicker.removeAllItems()
+        // Index 0 — "(use default)" sentinel; falls through to
+        // settings.defaultServerId at resolve time.
+        serverPicker.addItem(withTitle: "(use default)")
+        for p in s.servers {
+            serverPicker.addItem(withTitle: p.name.isEmpty ? "(unnamed)" : p.name)
+        }
+        let idx = ChatServerPicker.selectedIndex(chatServerId: chatPin, settings: s)
+        if idx < serverPicker.numberOfItems {
+            serverPicker.selectItem(at: idx)
+        }
+    }
+
+    @objc private func handleSettingsChanged() {
+        rebuildServerPicker()
+    }
+
+    @objc private func serverPickerChanged(_ sender: NSPopUpButton) {
+        let id = ChatServerPicker.idAtIndex(sender.indexOfSelectedItem,
+                                            settings: AppState.shared.settings)
+        AppState.shared.updateCurrent { $0.serverId = id }
     }
 }
 
