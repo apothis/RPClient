@@ -15,7 +15,11 @@ struct LibraryTopic: Codable, Equatable, Identifiable {
 }
 
 struct Settings: Codable, Equatable {
-    var serverURL: String
+    var servers: [ServerProfile]
+    var defaultServerId: UUID
+    var summarizerServerId: UUID?
+    var extractorServerId: UUID?
+    var embeddingsServerId: UUID?
     /// User-chosen display name. When non-empty, prepended to the memory block
     /// as "The user's name is {name}." so the model can address them by name.
     /// Empty string disables the injection.
@@ -56,24 +60,55 @@ struct Settings: Codable, Equatable {
     /// of this — Settings just remembers the pointer.
     var defaultPersonaId: UUID?
 
-    static let `default` = Settings(
-        serverURL: "http://localhost:5001",
-        userName: "",
-        defaultTemplateId: "gemma",
-        defaultSamplerPresetId: "balanced",
-        voiceEnabled: false,
-        maxContextOverride: 0,
-        retrieval: .default,
-        uiFontOffset: 1,
-        replyTokensOverride: 0,
-        factExtractionEnabled: true,
-        factExtractionEveryNTurns: 4,
-        priorityTopicLibrary: [],
-        qwenThinkingEnabled: false,
-        defaultPersonaId: nil
-    )
+    /// Temporary façade preserving the pre-Phase-4 single-server API. Reads
+    /// the default profile's baseURL; setter mutates the default profile's
+    /// URL in place. Removed in 4b once AppState routes through the registry.
+    var serverURL: String {
+        get { defaultServer?.baseURL.absoluteString ?? "http://localhost:5001" }
+        set {
+            guard let url = URL(string: newValue),
+                  let idx = servers.firstIndex(where: { $0.id == defaultServerId })
+            else { return }
+            servers[idx].baseURL = url
+        }
+    }
 
-    init(serverURL: String, userName: String = "",
+    var defaultServer: ServerProfile? {
+        servers.first(where: { $0.id == defaultServerId })
+    }
+
+    static let `default`: Settings = {
+        let defaultId = UUID()
+        let defaultProfile = ServerProfile(
+            id: defaultId,
+            name: "Default",
+            baseURL: URL(string: "http://localhost:5001")!
+        )
+        return Settings(
+            servers: [defaultProfile],
+            defaultServerId: defaultId,
+            userName: "",
+            defaultTemplateId: "gemma",
+            defaultSamplerPresetId: "balanced",
+            voiceEnabled: false,
+            maxContextOverride: 0,
+            retrieval: .default,
+            uiFontOffset: 1,
+            replyTokensOverride: 0,
+            factExtractionEnabled: true,
+            factExtractionEveryNTurns: 4,
+            priorityTopicLibrary: [],
+            qwenThinkingEnabled: false,
+            defaultPersonaId: nil
+        )
+    }()
+
+    init(servers: [ServerProfile],
+         defaultServerId: UUID,
+         summarizerServerId: UUID? = nil,
+         extractorServerId: UUID? = nil,
+         embeddingsServerId: UUID? = nil,
+         userName: String = "",
          defaultTemplateId: String, defaultSamplerPresetId: String,
          voiceEnabled: Bool, maxContextOverride: Int, retrieval: RetrievalSettings,
          uiFontOffset: Int, replyTokensOverride: Int,
@@ -81,7 +116,11 @@ struct Settings: Codable, Equatable {
          priorityTopicLibrary: [LibraryTopic],
          qwenThinkingEnabled: Bool = false,
          defaultPersonaId: UUID? = nil) {
-        self.serverURL = serverURL
+        self.servers = servers
+        self.defaultServerId = defaultServerId
+        self.summarizerServerId = summarizerServerId
+        self.extractorServerId = extractorServerId
+        self.embeddingsServerId = embeddingsServerId
         self.userName = userName
         self.defaultTemplateId = defaultTemplateId
         self.defaultSamplerPresetId = defaultSamplerPresetId
@@ -100,7 +139,27 @@ struct Settings: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = Settings.default
-        serverURL = try c.decodeIfPresent(String.self, forKey: .serverURL) ?? d.serverURL
+
+        // Migration: pre-Phase-4 settings carry `serverURL: String`. Migrate it
+        // into a single ServerProfile named "Default" if no `servers` array.
+        if let decoded = try c.decodeIfPresent([ServerProfile].self, forKey: .servers),
+           let decodedDefaultId = try c.decodeIfPresent(UUID.self, forKey: .defaultServerId),
+           decoded.contains(where: { $0.id == decodedDefaultId }) {
+            servers = decoded
+            defaultServerId = decodedDefaultId
+        } else {
+            let legacyURL = (try c.decodeIfPresent(String.self, forKey: .serverURL))
+                .flatMap { URL(string: $0) }
+                ?? URL(string: "http://localhost:5001")!
+            let migrated = ServerProfile(name: "Default", baseURL: legacyURL)
+            servers = [migrated]
+            defaultServerId = migrated.id
+        }
+
+        summarizerServerId = try c.decodeIfPresent(UUID.self, forKey: .summarizerServerId)
+        extractorServerId = try c.decodeIfPresent(UUID.self, forKey: .extractorServerId)
+        embeddingsServerId = try c.decodeIfPresent(UUID.self, forKey: .embeddingsServerId)
+
         userName = try c.decodeIfPresent(String.self, forKey: .userName) ?? d.userName
         defaultTemplateId = try c.decodeIfPresent(String.self, forKey: .defaultTemplateId) ?? d.defaultTemplateId
         defaultSamplerPresetId = try c.decodeIfPresent(String.self, forKey: .defaultSamplerPresetId) ?? d.defaultSamplerPresetId
@@ -114,5 +173,38 @@ struct Settings: Codable, Equatable {
         priorityTopicLibrary = try c.decodeIfPresent([LibraryTopic].self, forKey: .priorityTopicLibrary) ?? d.priorityTopicLibrary
         qwenThinkingEnabled = try c.decodeIfPresent(Bool.self, forKey: .qwenThinkingEnabled) ?? d.qwenThinkingEnabled
         defaultPersonaId = try c.decodeIfPresent(UUID.self, forKey: .defaultPersonaId)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case servers, defaultServerId
+        case summarizerServerId, extractorServerId, embeddingsServerId
+        case serverURL  // legacy — migrated on decode, not encoded
+        case userName, defaultTemplateId, defaultSamplerPresetId
+        case voiceEnabled, maxContextOverride, retrieval
+        case uiFontOffset, replyTokensOverride
+        case factExtractionEnabled, factExtractionEveryNTurns
+        case priorityTopicLibrary, qwenThinkingEnabled, defaultPersonaId
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(servers, forKey: .servers)
+        try c.encode(defaultServerId, forKey: .defaultServerId)
+        try c.encodeIfPresent(summarizerServerId, forKey: .summarizerServerId)
+        try c.encodeIfPresent(extractorServerId, forKey: .extractorServerId)
+        try c.encodeIfPresent(embeddingsServerId, forKey: .embeddingsServerId)
+        try c.encode(userName, forKey: .userName)
+        try c.encode(defaultTemplateId, forKey: .defaultTemplateId)
+        try c.encode(defaultSamplerPresetId, forKey: .defaultSamplerPresetId)
+        try c.encode(voiceEnabled, forKey: .voiceEnabled)
+        try c.encode(maxContextOverride, forKey: .maxContextOverride)
+        try c.encode(retrieval, forKey: .retrieval)
+        try c.encode(uiFontOffset, forKey: .uiFontOffset)
+        try c.encode(replyTokensOverride, forKey: .replyTokensOverride)
+        try c.encode(factExtractionEnabled, forKey: .factExtractionEnabled)
+        try c.encode(factExtractionEveryNTurns, forKey: .factExtractionEveryNTurns)
+        try c.encode(priorityTopicLibrary, forKey: .priorityTopicLibrary)
+        try c.encode(qwenThinkingEnabled, forKey: .qwenThinkingEnabled)
+        try c.encodeIfPresent(defaultPersonaId, forKey: .defaultPersonaId)
     }
 }

@@ -13,6 +13,7 @@ let suites: [TestSuite] = [
     worldInfoInjectorTests(),
     memoryAuditRegressionTests(),
     helpIndexTests(),
+    settingsServersCodableTests(),
 ]
 
 exit(TestRunner.run(suites))
