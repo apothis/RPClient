@@ -10,6 +10,23 @@ func templateTests() -> TestSuite {
         try expectEqual(Templates.byId("qwen").id, "qwen")
     }
 
+    s.test("detect picks qwen for any qwen-flavoured model name") {
+        try expectEqual(Templates.detect(forModelName: "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M"), "qwen")
+        try expectEqual(Templates.detect(forModelName: "koboldcpp/Qwen2.5-7B"), "qwen")
+        try expectEqual(Templates.detect(forModelName: "QWEN-FOO"), "qwen")
+    }
+
+    s.test("detect picks gemma for gemma-flavoured names") {
+        try expectEqual(Templates.detect(forModelName: "google/gemma-2-9b-it"), "gemma")
+        try expectEqual(Templates.detect(forModelName: "Gemma3-27B"), "gemma")
+    }
+
+    s.test("detect returns nil for unknown families so caller can fall back") {
+        try expectNil(Templates.detect(forModelName: "llama3-70b"))
+        try expectNil(Templates.detect(forModelName: ""))
+        try expectNil(Templates.detect(forModelName: "—"))
+    }
+
     // MARK: - Gemma
 
     s.test("gemma wraps turns in role markers") {

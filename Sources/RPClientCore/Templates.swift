@@ -91,4 +91,17 @@ enum Templates {
             return GemmaTemplate()
         }
     }
+
+    /// Best-effort guess at the right template for a given model-name string
+    /// (e.g. the result of `/api/v1/model`). Lowercased substring match in
+    /// rough specificity order — falls back to nil when unrecognised so the
+    /// caller can keep its current default. Used by AppState when creating
+    /// new chats so the default template tracks whatever model KoboldCpp is
+    /// actually serving.
+    static func detect(forModelName name: String) -> String? {
+        let lower = name.lowercased()
+        if lower.contains("qwen") { return QwenTemplate().id }
+        if lower.contains("gemma") { return GemmaTemplate().id }
+        return nil
+    }
 }

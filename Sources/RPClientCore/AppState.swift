@@ -43,6 +43,12 @@ final class AppState {
     private(set) var lastServerError: String?
     private var healthCheckTimer: Timer?
     private(set) var modelName: String = "—"
+    /// Template id matching the currently-loaded model, derived from
+    /// `modelName` via `Templates.detect(forModelName:)`. New chats pick this
+    /// up automatically so a Qwen-loaded server doesn't keep handing out
+    /// gemma-templated chats. Nil when the model name doesn't match a
+    /// known family — caller falls back to `settings.defaultTemplateId`.
+    private(set) var detectedTemplateId: String?
     /// Best-effort name of the loaded embedding model on the server (or nil if
     /// none / probe hasn't completed). Surfaced in the status bar so the user
     /// can see at a glance that retrieval has a backing model.
@@ -151,7 +157,7 @@ final class AppState {
 
     func newChat() {
         let c = Chat(
-            templateId: settings.defaultTemplateId,
+            templateId: detectedTemplateId ?? settings.defaultTemplateId,
             samplerPresetId: settings.defaultSamplerPresetId
         )
         Storage.shared.saveChat(c)
@@ -198,6 +204,7 @@ final class AppState {
                 switch result {
                 case .success(let name):
                     self.modelName = name
+                    self.detectedTemplateId = Templates.detect(forModelName: name)
                     self.markServerReachable(true)
                 case .failure(let err):
                     self.markServerReachable(false, error: "\(err)")
@@ -272,6 +279,7 @@ final class AppState {
                 case .success(let name):
                     if self.modelName != name {
                         self.modelName = name
+                        self.detectedTemplateId = Templates.detect(forModelName: name)
                         NotificationCenter.default.post(name: AppNotification.statusChanged, object: nil)
                     }
                     self.markServerReachable(true)
