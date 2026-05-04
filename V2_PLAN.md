@@ -361,7 +361,7 @@ Migration: existing `Settings.serverURL` becomes one `ServerProfile` named "Defa
 
 ### 5.2 Client routing
 
-[`KoboldClient`](Sources/RPClientCore/KoboldClient.swift) becomes per-instance, owned by a registry:
+`KoboldClient` is already per-instance (it takes a `baseURL` in `init`). Today, `AppState.kobold` is a single shared instance with a mutable URL via `setBaseURL`. Phase 4 replaces that with a registry:
 
 ```swift
 final class KoboldClientRegistry {
@@ -371,8 +371,9 @@ final class KoboldClientRegistry {
 
 - Generation calls → `chat.serverId` ?? `settings.defaultServerId`.
 - Side-calls (summarize, extract, embed) → role-specific override ?? default.
+- Registry caches one `KoboldClient` per profile so token-count caches and URLSession state survive lookups.
 
-This unblocks "small fast model for chat, beefy model for memory side-calls" — a clear quality win once it lands.
+The current `AppState.kobold` field stays as a *façade* pointed at the chat's effective generation client, so existing callers don't all need rewriting on day one. Side-call callers (`Summarizer`, `FactExtractor`, retrieval embeddings) get migrated to the registry as a follow-up commit. This unblocks "small fast model for chat, beefy model for memory side-calls" — a clear quality win once it lands.
 
 ### 5.3 Settings UI
 
@@ -389,12 +390,13 @@ In the chat header (next to template + sampler picker): server dropdown showing 
 
 ### 5.5 Files touched
 
-- `Models/Settings.swift` (rewrite)
-- `Models/Chat.swift` (add `serverId`)
-- `KoboldClient.swift` (per-instance refactor) + new `KoboldClientRegistry.swift`
-- All call sites of `KoboldClient.shared` (or equivalent) — likely [`PromptBuilder`](Sources/RPClientCore/PromptBuilder.swift), [`Memory/Summarizer`](Sources/RPClientCore/Memory/Summarizer.swift), [`Memory/FactExtractor`](Sources/RPClientCore/Memory/FactExtractor.swift), embeddings code if any.
-- `UI/SettingsWindowController.swift` (Servers tab)
-- `UI/ChatViewController.swift` (per-chat picker in header)
+- `Models/Settings.swift` — rewrite: `serverURL: String` → `servers: [ServerProfile]` + `defaultServerId` + per-role overrides. Migrate `serverURL` into a single `ServerProfile` named "Default" on decode.
+- `Models/Chat.swift` — add `serverId: UUID?` (Codable backwards-compat: existing chats decode as nil = use default).
+- `KoboldClient.swift` — already per-instance; add `KoboldClientRegistry.swift` that owns one client per profile.
+- `AppState.swift` — replace the single `kobold: KoboldClient` field + `setBaseURL` mutation with a registry-backed accessor. Keep the `kobold` property as a façade pointed at the current chat's generation client so existing callers don't all need rewriting on day one.
+- Side-call callers — `Memory/Summarizer.swift`, `Memory/FactExtractor.swift`, `Memory/ContextBlurber.swift`, `Memory/RetrievalEngine.swift` (embeddings) — switch from `AppState.shared.kobold` to the registry's role-specific client.
+- `UI/SettingsWindowController.swift` — new "Servers" tab.
+- `UI/ChatViewController.swift` — per-chat picker in the chat header (next to template + sampler).
 
 ### 5.6 Risks / open
 
