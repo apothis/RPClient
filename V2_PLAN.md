@@ -2,7 +2,7 @@
 
 Forward plan for the V2 surface area listed in [`PLAN.md`](PLAN.md) §10. The MVP and the Memory V2 subsystem (Steps A–D, see [`MEMORY_V2_PLAN.md`](MEMORY_V2_PLAN.md)) shipped 2026-05-03. This doc plans everything outside the memory subsystem; memory polish is deferred per the user's directive and tracked in [`NEXT_STAGES.md`](NEXT_STAGES.md) §A.
 
-**Status as of 2026-05-04.** Phase 1 (V5 Lorebook UI) shipped 2026-05-04. Phase 2 (V1 Swipes) shipped 2026-05-04, including the stale-variant detection follow-up not in the original spec. Phase 3 is next.
+**Status as of 2026-05-04.** Phase 1 (V5 Lorebook UI), Phase 2 (V1 Swipes — including a stale-variant detection follow-up), and Phase 3 (V3 Character cards + V4 Personas) all shipped 2026-05-04. Phase 4 (V8 Multi-server) is next.
 
 ---
 
@@ -34,7 +34,7 @@ The order below is the recommended path. Each phase ends with a shippable, runna
 ┌─────────────────────────────────────────────────────────────────┐
 │  Phase 1   V5 Lorebook UI            ✅ shipped 2026-05-04      │
 │  Phase 2   V1 Swipes                 ✅ shipped 2026-05-04      │
-│  Phase 3   V3 Character cards + V4 Personas  ← next             │
+│  Phase 3   V3 Character cards + V4 Personas  ✅ shipped 2026-05-04 │
 │  Phase 4   V8 Multi-server                                      │
 │  Phase 5   V10 Avatars                (small; unlocks V3 polish)│
 │  Phase 6   V6 Per-character voices    (depends on Entity store) │
@@ -215,7 +215,7 @@ Hover-only when count == 1 (don't visually clutter).
 
 These two ship together: character cards include both an AI-character payload and (often) a recommended user-side persona.
 
-**Status (2026-05-04):** steps 1–3 shipped on `v2-plan` (commits `dd102db` → `50da4ab`). Step 4 (prompt-builder integration) is the remaining work and is what makes imported cards actually drive the model. Importer also gained loose v1 / Pygmalion JSON acceptance as a follow-up (commit `c941baf`).
+**Status (2026-05-04):** all of Phase 3 shipped on `v2-plan`. Steps 1–3 across `dd102db` → `50da4ab` (with v1/Pygmalion importer follow-up `c941baf`); step 4 (prompt-builder integration) shipped as sub-steps 4a–4g across `2e99602` → `342791c`. Imported cards now fully drive the model: system_prompt + biographical prefix at the top of memory, first_mes + alt greetings seeded as turn 0 with swipeable variants, postHistoryInstructions as the author's note fallback, character_book merged into chat world-info, persona injection per-template, and a read-only "from card" surface in MemoryPane with a per-chat override/merge picker.
 
 ### 4.1 Data-model additions ✅ shipped (step 1 — `dd102db`)
 
@@ -288,22 +288,19 @@ Importer UI:
 
   Landed as `LibraryWindowController` with `NSCollectionView` flow-layout grids; characters tab is import-only for now (no edit sheet — too many fields, can come later), personas tab has full create/edit/delete via a name+description sheet. Sidebar's "+" became an `NSPopUpButton` pull-down. Character chat-creation flow: `AppState.newChat(withCharacter:)` seeds `Chat.characterId` and the chat title; new chats inherit `Settings.defaultPersonaId`. Drag-drop lands PNG/JSON onto the sidebar root view (`SidebarRootView`).
 
-### 4.4 Prompt-builder integration ⏳ next (step 4 — not yet shipped)
+### 4.4 Prompt-builder integration ✅ shipped (step 4 — `2e99602` → `342791c`)
 
-When `Chat.characterId != nil`, on first turn:
+Landed as seven sub-steps, mirroring the earlier-phase cadence (model touch-up → core helpers → UI surface):
 
-- Inject `character.systemPrompt` (if present) at the top of memory block — overrides chat memory.
-- `description + personality + scenario` becomes a permanent prefix to the memory block (uneditable in Memory pane; shown read-only with a "from card" badge).
-- `firstMessage` appears as the initial assistant turn (auto-inserted on chat creation; user can swipe to `alternateGreetings`).
-- `postHistoryInstructions` injects as / replaces author's note.
-- `charBook` entries merge into chat-level world info, prefixed with `[from card]` so the user can tell.
+- **4a (`2e99602`)** — plumbing: `CardPromptMode` (override/merge, default override), `Chat.systemPromptMode` with Codable backwards-compat (existing chats decode as `.override`), `Character?` / `Persona?` threaded through `PromptBuilder.build` → `TokenBudget.assemble` → the single `AppState.assembleAndStream` callsite. No behaviour change.
+- **4b (`b9e9ade`)** — `PromptBuilder.composeMemoryBlock` is now the single source of truth for the top-of-prompt memory block: card `system_prompt` (if any) → userName line → read-only `[from card]` description/personality/scenario → user-set `chat.memory`. The user memory is suppressed only when `systemPromptMode == .override` AND the card has a non-empty `system_prompt`. Test path and production path share the same composition.
+- **4c (`123a56a`)** — `AppState.newChat(withCharacter:)` seeds `firstMessage` as turn 0 (assistant role); `alternateGreetings` ride along as swipeable variants on that same turn. Empty / whitespace-only `firstMessage` skips seeding entirely. Card-prefix header gained a one-line nudge framing `Scenario` as the *default* opening so the model defers to recent turns when the user swipes to an alt that disagrees with the static scenario field.
+- **4d (`b35b558`)** — `PromptBuilder.effectiveAuthorsNote` picks the user's note when set, otherwise synthesises one from the card's `postHistoryInstructions` inheriting the chat's existing AN depth. User-set notes always win; whitespace-only counts as empty.
+- **4e (`e2a0594`)** — `AppState.mergedWorldInfo` copies card `character_book` entries into the chat's `worldInfo`, name prefixed `[from card] <orig>`. Pure name-prefix idempotency — re-running is a no-op, and user edits to a `[from card]` entry survive subsequent merges. Each merged entry gets a fresh UUID so chat-side edits don't bleed across.
+- **4f (`403188f`)** — `PromptBuilder.renderPersonaBlock` formats persona as `<You are NAME>\nDESCRIPTION` (or just one of those when only one is populated). Per-template placement: Qwen folds it into the `<|im_start|>system` block right after memory; Gemma folds it into the first user turn alongside the preamble. Soft-cap warning logs to `DebugLog` when the rendered block exceeds ~200 tokens (V2_PLAN §4.6).
+- **4g (`342791c`)** — MemoryPane gains a "From card (read-only) · *Name*" section showing description/personality/scenario live from `AppState.character(id:)`, plus a per-chat `system_prompt: [Override | Merge]` segmented control. Both sections are NSStackViews so they cleanly collapse via `isHidden` when no character is attached. Diagnostic line in `assembleAndStream` (`card-compose: …`) reports both card and persona resolution + composed/persona char counts so the wiring is visible from logs.
 
-Persona injection: on Gemma, the persona description folds into the first user turn alongside memory. On Qwen, into the system block. Format:
-
-```
-<You are {persona.name}>
-{persona.description}
-```
+Test coverage grew from 140 → 175. Key suites: `PromptBuilderTests` (composition, AN precedence, persona format + per-template placement), `CharacterPersonaTests` (greeting seeding, charBook merge idempotency), `ChatCodableTests` (systemPromptMode default + round-trip).
 
 ### 4.5 Files touched
 
@@ -533,7 +530,7 @@ Phases 1, 2, 3, 4 all change the Chat or Settings schema. Add a `Tests/Migration
 |---|---|---|---|
 | 1 | V5 Lorebook UI | 2 days | 2 | ✅ |
 | 2 | V1 Swipes | 2-3 days | 5 | ✅ |
-| 3 | V3 Character cards + V4 Personas | 3-4 days | 9 |
+| 3 | V3 Character cards + V4 Personas | 3-4 days | 9 | ✅ |
 | 4 | V8 Multi-server | 3 days | 12 |
 | 5 | V10 Avatars (sidebar + turn) | 1 day | 13 |
 | 6 | V6 Per-character voices | 2 days | 15 |
@@ -546,6 +543,6 @@ Phases 1–6 together (~15 days of focused work) ship every V2 item except branc
 
 ## 12. Recommended next move
 
-Phases 1 and 2 are done. From a fresh context: start with **Phase 3 (V3 character cards + V4 personas)** — it's the next-biggest user-visible win and pairs cleanly because cards typically include both an AI-character payload and a recommended user persona. Spec is in §4.
+Phases 1, 2, and 3 are done. From a fresh context: start with **Phase 4 (V8 Multi-server)** — three days of work that unlocks remote KoboldCpp servers and stops the local-only assumption from leaking into UI affordances. Spec is in §5.
 
-The original recommendation was "start with Phase 1" — preserved for historical context but no longer applicable.
+Earlier recommendations preserved for historical context: the original called for "start with Phase 1"; the 2026-05-04 update called for "start with Phase 3." Both are now superseded.
