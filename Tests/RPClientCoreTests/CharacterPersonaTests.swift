@@ -156,6 +156,57 @@ func characterPersonaTests() -> TestSuite {
         try expectNil(Storage.normalizeAvatarData(bytes))
     }
 
+    // MARK: - newChat seeding (Phase 3 §4.4 step 4c)
+
+    s.test("makeGreetingTurn returns nil for empty firstMessage") {
+        let card = Character(name: "Marin", firstMessage: "")
+        try expectNil(AppState.makeGreetingTurn(character: card))
+    }
+
+    s.test("makeGreetingTurn returns nil for whitespace-only firstMessage") {
+        let card = Character(name: "Marin", firstMessage: "  \n  ")
+        try expectNil(AppState.makeGreetingTurn(character: card))
+    }
+
+    s.test("makeGreetingTurn seeds an assistant turn with firstMessage as the active variant") {
+        let card = Character(name: "Marin", firstMessage: "Welcome aboard.")
+        let turn = try expectNotNil(AppState.makeGreetingTurn(character: card))
+        try expectEqual(turn.role, .assistant)
+        try expectEqual(turn.text, "Welcome aboard.")
+        try expectEqual(turn.variants.count, 1)
+        try expectEqual(turn.variants[0].text, "Welcome aboard.")
+        try expectEqual(turn.activeVariant, 0)
+    }
+
+    s.test("makeGreetingTurn appends alternateGreetings as variants on the same turn") {
+        let card = Character(
+            name: "Marin",
+            firstMessage: "Welcome aboard.",
+            alternateGreetings: ["At the rail, glass raised.", "In her cabin, charts spread."]
+        )
+        let turn = try expectNotNil(AppState.makeGreetingTurn(character: card))
+        try expectEqual(turn.variants.count, 3)
+        try expectEqual(turn.variants[0].text, "Welcome aboard.")
+        try expectEqual(turn.variants[1].text, "At the rail, glass raised.")
+        try expectEqual(turn.variants[2].text, "In her cabin, charts spread.")
+        // Active stays at 0 — the canonical greeting is what the user lands on.
+        try expectEqual(turn.activeVariant, 0)
+        // Mirror invariant: text == variants[active].text.
+        try expectEqual(turn.text, turn.variants[turn.activeVariant].text)
+    }
+
+    s.test("makeGreetingTurn skips empty / whitespace-only alternateGreetings") {
+        let card = Character(
+            name: "Marin",
+            firstMessage: "Welcome aboard.",
+            alternateGreetings: ["Real alt.", "", "   \n  ", "Another real alt."]
+        )
+        let turn = try expectNotNil(AppState.makeGreetingTurn(character: card))
+        try expectEqual(turn.variants.count, 3) // primary + 2 real alts
+        try expectEqual(turn.variants[1].text, "Real alt.")
+        try expectEqual(turn.variants[2].text, "Another real alt.")
+    }
+
     return s
 }
 

@@ -191,8 +191,11 @@ final class AppState {
     /// window's "Start Chat" action and by the sidebar "+ New chat with
     /// character…" flow. Title is seeded from the character name so the chat
     /// is recognisable in the sidebar before the user has typed a single
-    /// turn. Step 3 doesn't yet seed `firstMessage` as turn 1 — that's
-    /// step 4's prompt-builder integration.
+    /// turn. The card's `firstMessage` is inserted as turn 0 (assistant
+    /// role) so the character speaks first; `alternateGreetings` ride along
+    /// as swipeable variants on that same turn. Empty `firstMessage` skips
+    /// seeding entirely (alternateGreetings without a primary greeting
+    /// aren't meaningful in ST's model).
     func newChat(withCharacter character: Character) {
         var c = Chat(
             templateId: detectedTemplateId ?? settings.defaultTemplateId,
@@ -201,6 +204,9 @@ final class AppState {
         c.title = character.name
         c.characterId = character.id
         c.personaId = settings.defaultPersonaId
+        if let greeting = AppState.makeGreetingTurn(character: character) {
+            c.turns = [greeting]
+        }
         Storage.shared.saveChat(c)
         chats.insert(c, at: 0)
         currentChatId = c.id
@@ -208,6 +214,27 @@ final class AppState {
         lastCacheRatio = nil
         NotificationCenter.default.post(name: AppNotification.chatListChanged, object: nil)
         NotificationCenter.default.post(name: AppNotification.currentChatChanged, object: nil)
+    }
+
+    /// Build the seeded greeting turn for a new chat with `character`.
+    /// Returns `nil` when the card has no `firstMessage` — we don't fabricate
+    /// an empty assistant turn (see `PromptBuilder.verbatimTurns` for why
+    /// trailing-empty assistant turns confuse the model). Internal so tests
+    /// can drive it directly.
+    static func makeGreetingTurn(character: Character) -> Turn? {
+        let primary = character.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !primary.isEmpty else { return nil }
+        // The Turn initialiser seeds variants[0] from `text` for assistant
+        // turns with non-empty seed content; we then append each alternate as
+        // a sibling variant. activeVariant stays at 0 so the canonical
+        // first_mes is what the user (and the prompt) sees by default.
+        var turn = Turn(role: .assistant, text: character.firstMessage)
+        for alt in character.alternateGreetings {
+            let trimmed = alt.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            turn.variants.append(TurnVariant(text: alt, ts: turn.ts))
+        }
+        return turn
     }
 
     func deleteChat(id: UUID) {
@@ -696,6 +723,9 @@ final class AppState {
         let replyMax = settings.replyTokensOverride > 0 ? settings.replyTokensOverride : preset.maxLength
         let resolvedCharacter = character(id: chat.characterId)
         let resolvedPersona = persona(id: chat.personaId)
+        // 4b diagnostic — confirm card composition is reaching the prompt.
+        let composed = PromptBuilder.composeMemoryBlock(chat: chat, character: resolvedCharacter, userName: settings.userName) ?? ""
+        DebugLog.shared.write("card-compose: chat.characterId=\(chat.characterId?.uuidString ?? "nil") resolved=\(resolvedCharacter?.name ?? "nil") composedChars=\(composed.count) systemPromptMode=\(chat.systemPromptMode.rawValue)")
         TokenBudget.assemble(
             chat: chat,
             effectiveCtx: ctx,

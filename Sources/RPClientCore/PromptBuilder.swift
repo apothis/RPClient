@@ -173,8 +173,16 @@ struct PromptBuilder {
     /// Header on the read-only "from card" block (description + personality +
     /// scenario). Plain-prose framing — same pattern as `worldInfoHeader` and
     /// the entities block — so the model treats it as a private reference
-    /// card rather than a heading to restate verbatim. See V2_PLAN §4.4.
-    static let cardPrefixHeader = "(Character card — reference details for continuity. Use silently; do not restate, quote, or copy these lines into your reply.)"
+    /// card rather than a heading to restate verbatim.
+    ///
+    /// The trailing nuance about Scenario exists because v2 cards bundle
+    /// `scenario` (a static default opening) with `alternate_greetings`
+    /// (sibling openings). When the user swipes to an alt that disagrees
+    /// with the scenario, the model otherwise leans on the system-block
+    /// scenario over the recent assistant turn — putting Marin on the
+    /// quarterdeck when the active greeting placed her in her cabin. This
+    /// hint defuses that conflict without dropping the field. See V2_PLAN §4.4.
+    static let cardPrefixHeader = "(Character card — reference details for continuity. Use silently; do not restate, quote, or copy these lines into your reply. The Scenario below describes the default opening; defer to the most recent turns for the current scene.)"
 
     /// Compose the memory-block string the templates see at the top of the
     /// prompt (slot 1/3 of the cache-friendly layout). Pure function of its
