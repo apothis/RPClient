@@ -359,19 +359,83 @@ final class AppState {
         startStreaming(freshUserTurn: true)
     }
 
+    /// Default cap on `Turn.variants.count`. Per-chat / per-app exposure of
+    /// this number is a follow-up — see V2_PLAN.md §3.6.
+    static let variantCap = 5
+
+    /// Generate a new alternative reply for the trailing assistant turn,
+    /// preserving prior swipes. If the chat ends on a user turn (e.g. the
+    /// last reply was deleted), falls back to appending a fresh empty
+    /// assistant turn. No-op when at the variant cap.
     func regenerate() {
         guard !isStreaming, var c = currentChat else { return }
         DebugLog.shared.write("trigger: regen (turnsBefore=\(c.turns.count))")
-        // Drop the trailing empty/finished assistant turn (or both if prior is user)
-        if let last = c.turns.last, last.role == .assistant {
-            c.turns.removeLast()
+        if let lastIdx = c.turns.indices.last, c.turns[lastIdx].role == .assistant {
+            if c.turns[lastIdx].variants.count >= AppState.variantCap {
+                DebugLog.shared.write(
+                    "regen: refused — variants at cap (\(AppState.variantCap))"
+                )
+                return
+            }
+            c.turns[lastIdx].addEmptyVariant(samplerPresetId: c.samplerPresetId)
+        } else {
+            c.turns.append(Turn(role: .assistant, text: ""))
         }
-        // Append a fresh empty assistant turn to stream into
-        c.turns.append(Turn(role: .assistant, text: ""))
         updateCurrent { ch in
             ch.turns = c.turns
         }
         startStreaming()
+    }
+
+    /// Destructive regen — overwrite the active variant in place rather than
+    /// adding a new one. Used by the "Replace current variant" path
+    /// (Cmd-Shift-R / context menu) so the user can opt back into the pre-V2
+    /// behaviour when they don't want the old text kept around.
+    func replaceCurrentVariant() {
+        guard !isStreaming, var c = currentChat else { return }
+        guard let lastIdx = c.turns.indices.last,
+              c.turns[lastIdx].role == .assistant,
+              !c.turns[lastIdx].variants.isEmpty else {
+            // Nothing to replace — fall through to the normal regen path so
+            // the user gets a reply regardless.
+            regenerate()
+            return
+        }
+        DebugLog.shared.write("trigger: replace-variant")
+        let active = c.turns[lastIdx].activeVariant
+        c.turns[lastIdx].variants[active].text = ""
+        c.turns[lastIdx].variants[active].edited = false
+        c.turns[lastIdx].text = ""
+        updateCurrent { ch in
+            ch.turns = c.turns
+        }
+        startStreaming()
+    }
+
+    /// Switch the active variant of `turnId` to the previous one. No-op when
+    /// already at the first variant or when the turn carries no variants.
+    func selectPreviousVariant(turnId: UUID) {
+        guard let id = currentChatId else { return }
+        updateChat(id: id) { c in
+            guard let idx = c.turns.firstIndex(where: { $0.id == turnId }) else { return }
+            let cur = c.turns[idx].activeVariant
+            guard cur > 0 else { return }
+            c.turns[idx].setActiveIndex(cur - 1)
+        }
+    }
+
+    /// Switch the active variant of `turnId` to the next one. No-op when
+    /// already at the last variant — the UI calls `regenerate()` separately
+    /// to extend past the end.
+    func selectNextVariant(turnId: UUID) {
+        guard let id = currentChatId else { return }
+        updateChat(id: id) { c in
+            guard let idx = c.turns.firstIndex(where: { $0.id == turnId }) else { return }
+            let count = c.turns[idx].variants.count
+            let cur = c.turns[idx].activeVariant
+            guard cur < count - 1 else { return }
+            c.turns[idx].setActiveIndex(cur + 1)
+        }
     }
 
     /// Resume the most recent assistant turn instead of starting a new one.
@@ -524,7 +588,7 @@ final class AppState {
                                let idx = self.chats.firstIndex(where: { $0.id == id }),
                                let lastIdx = self.chats[idx].turns.indices.last,
                                self.chats[idx].turns[lastIdx].role == .assistant {
-                                self.chats[idx].turns[lastIdx].text += tail
+                                self.chats[idx].turns[lastIdx].appendToActiveVariant(tail)
                                 NotificationCenter.default.post(
                                     name: AppNotification.streamTokenAppended, object: tail
                                 )
@@ -791,7 +855,12 @@ final class AppState {
         } else {
             displayed = tok
         }
-        chats[idx].turns[lastIdx].text += displayed
+        // Route through the variant helper so the seed variant is created
+        // on the first token of a fresh assistant turn (sendUserMessage and
+        // regenerate both leave the trailing turn with `variants = []`),
+        // and so subsequent tokens accumulate on the *active* variant rather
+        // than the now-stale `text` mirror.
+        chats[idx].turns[lastIdx].appendToActiveVariant(displayed)
         // Don't save on every token; save on finish via finish handler.
         NotificationCenter.default.post(
             name: AppNotification.streamTokenAppended, object: displayed

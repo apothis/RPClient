@@ -150,6 +150,41 @@ func turnVariantTests() -> TestSuite {
         try expectEqual(t.activeVariant, 0, "out-of-range index must clamp into [0, variants.count - 1]")
     }
 
+    s.test("regen-as-variant flow preserves prior variant and streams into the new one") {
+        // Mirrors what AppState.regenerate now does: take a finished assistant
+        // turn, append an empty variant, then drive stream tokens through
+        // appendToActiveVariant. The original variant must survive untouched
+        // and be reachable via setActiveIndex(0).
+        var t = Turn(role: .assistant, text: "first reply")
+        t.addEmptyVariant(samplerPresetId: "creative")
+        for tok in ["Sec", "ond ", "reply"] {
+            t.appendToActiveVariant(tok)
+        }
+        try expectEqual(t.variants.count, 2)
+        try expectEqual(t.activeVariant, 1)
+        try expectEqual(t.text, "Second reply")
+        try expectEqual(t.variants[0].text, "first reply")
+        try expectEqual(t.variants[1].samplerPresetId, "creative")
+        // Page back to the original.
+        t.setActiveIndex(0)
+        try expectEqual(t.text, "first reply")
+        try expectEqual(t.activeVariant, 0)
+    }
+
+    s.test("edit on a non-active variant does not bleed into the active text") {
+        // Editing an assistant turn while v1 is active must update v1's text
+        // and the mirrored `text`. v0 is left alone.
+        var t = Turn(role: .assistant, text: "v0 body")
+        t.addEmptyVariant()
+        t.appendToActiveVariant("v1 body")
+        t.setActiveVariantText("v1 body, edited")
+        try expectEqual(t.text, "v1 body, edited")
+        try expectEqual(t.variants[1].text, "v1 body, edited")
+        try expectTrue(t.variants[1].edited)
+        try expectEqual(t.variants[0].text, "v0 body")
+        try expectFalse(t.variants[0].edited, "edits on the active variant must not touch the inactive one")
+    }
+
     s.test("legacy assistant placeholder (empty text, no variants) stays empty") {
         let now = ISO8601DateFormatter().string(from: Date())
         let id = UUID().uuidString

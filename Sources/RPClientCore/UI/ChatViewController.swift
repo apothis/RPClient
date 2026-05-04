@@ -347,7 +347,13 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     func turnViewDidEditText(_ view: TurnView, newText: String) {
         let id = view.turnId
         AppState.shared.updateCurrent { c in
-            if let idx = c.turns.firstIndex(where: { $0.id == id }) {
+            guard let idx = c.turns.firstIndex(where: { $0.id == id }) else { return }
+            // Assistant turns route through the variant helper so the edit
+            // lands on the active variant (and `text` stays mirrored).
+            // User turns have no variants, so direct mutation is fine.
+            if c.turns[idx].role == .assistant {
+                c.turns[idx].setActiveVariantText(newText)
+            } else {
                 c.turns[idx].text = newText
                 c.turns[idx].edited = true
             }
