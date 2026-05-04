@@ -8,6 +8,7 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
     private let scrollView = NSScrollView()
     private let stack = NSStackView()
     private let helpLabel = NSTextField(labelWithString: "Structured entities. Only entities mentioned in recent turns are injected into the prompt.")
+    private let helpButton = HelpButton(pageId: "memory-entities")
     private let countLabel = NSTextField(labelWithString: "")
     private let searchField = NSSearchField()
     private let addButton = NSButton(title: "+ Add entity", target: nil, action: nil)
@@ -28,6 +29,7 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
         helpLabel.maximumNumberOfLines = 0
         helpLabel.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(helpLabel)
+        v.addSubview(helpButton)
 
         searchField.placeholderString = "Search entities…"
         searchField.target = self
@@ -70,7 +72,10 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
         NSLayoutConstraint.activate([
             helpLabel.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
             helpLabel.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),
-            helpLabel.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
+            helpLabel.trailingAnchor.constraint(equalTo: helpButton.leadingAnchor, constant: -6),
+
+            helpButton.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
+            helpButton.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
 
             searchField.topAnchor.constraint(equalTo: helpLabel.bottomAnchor, constant: 8),
             searchField.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),

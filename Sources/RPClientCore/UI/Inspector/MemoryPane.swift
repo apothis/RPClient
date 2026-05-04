@@ -10,6 +10,7 @@ final class MemoryPane: NSViewController, NSTextFieldDelegate {
     private let addButton = NSButton(title: "+ Add fact", target: nil, action: nil)
     private let tokenLabel = NSTextField(labelWithString: "0 / 800 tok")
     private let helpLabel = NSTextField(labelWithString: "Pinned facts. Always injected near the top of the prompt.")
+    private let helpButton = HelpButton(pageId: "memory-pinned-facts")
     private let reinforceCheck = NSButton(checkboxWithTitle: "Reinforce in latest user turn (counters drift on long Gemma chats)", target: nil, action: nil)
 
     /// Read-only display of the card's description/personality/scenario when
@@ -48,6 +49,7 @@ final class MemoryPane: NSViewController, NSTextFieldDelegate {
         helpLabel.maximumNumberOfLines = 0
         helpLabel.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(helpLabel)
+        v.addSubview(helpButton)
 
         // Card section (4g) — read-only display of the card's
         // description/personality/scenario. NSStackView so toggling
@@ -135,7 +137,10 @@ final class MemoryPane: NSViewController, NSTextFieldDelegate {
         NSLayoutConstraint.activate([
             helpLabel.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
             helpLabel.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),
-            helpLabel.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
+            helpLabel.trailingAnchor.constraint(equalTo: helpButton.leadingAnchor, constant: -6),
+
+            helpButton.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
+            helpButton.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
 
             cardSection.topAnchor.constraint(equalTo: helpLabel.bottomAnchor, constant: 8),
             cardSection.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),

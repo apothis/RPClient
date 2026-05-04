@@ -9,6 +9,7 @@ final class SuggestionsPane: NSViewController {
     private let scrollView = NSScrollView()
     private let rowsStack = NSStackView()
     private let helpLabel = NSTextField(labelWithString: "Pending fact suggestions. ✓ promotes to pinned memory, ✗ dismisses.")
+    private let helpButton = HelpButton(pageId: "memory-suggestions")
     private let countLabel = NSTextField(labelWithString: "")
     private let emptyLabel = NSTextField(labelWithString: "No fact suggestions. Run extraction (Debug menu) or wait for auto-extraction.")
 
@@ -26,6 +27,7 @@ final class SuggestionsPane: NSViewController {
         helpLabel.maximumNumberOfLines = 0
         helpLabel.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(helpLabel)
+        v.addSubview(helpButton)
 
         rowsStack.orientation = .vertical
         rowsStack.spacing = 4
@@ -56,7 +58,10 @@ final class SuggestionsPane: NSViewController {
         NSLayoutConstraint.activate([
             helpLabel.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
             helpLabel.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),
-            helpLabel.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
+            helpLabel.trailingAnchor.constraint(equalTo: helpButton.leadingAnchor, constant: -6),
+
+            helpButton.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
+            helpButton.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
 
             scrollView.topAnchor.constraint(equalTo: helpLabel.bottomAnchor, constant: 8),
             scrollView.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),

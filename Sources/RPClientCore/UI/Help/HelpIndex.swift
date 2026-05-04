@@ -32,11 +32,20 @@ enum HelpIndex {
     /// library/settings/troubleshooting, and the technical book follow in
     /// later slices — see [V2_PLAN-style] notes in conversation history.
     static let pages: [HelpPage] = [
+        // Slice 1 — onboarding.
         HelpPage(id: "quick-start",   title: "Quick Start",            book: .userGuide),
         HelpPage(id: "chats-sidebar", title: "Chats & sidebar",        book: .userGuide),
         HelpPage(id: "chat-view",     title: "The chat view",          book: .userGuide),
         HelpPage(id: "input-bar",     title: "Input bar & token cap",  book: .userGuide),
         HelpPage(id: "status-bar",    title: "Status bar",             book: .userGuide),
+        // Slice 2 — memory subsystem (one page per inspector pane).
+        HelpPage(id: "memory-pinned-facts", title: "Memory: pinned facts",     book: .userGuide),
+        HelpPage(id: "memory-summary",      title: "Memory: rolling summary",  book: .userGuide),
+        HelpPage(id: "memory-authors-note", title: "Memory: author's note",    book: .userGuide),
+        HelpPage(id: "memory-world-info",   title: "Memory: world info",       book: .userGuide),
+        HelpPage(id: "memory-suggestions",  title: "Memory: suggestions",      book: .userGuide),
+        HelpPage(id: "memory-entities",     title: "Memory: entities",         book: .userGuide),
+        HelpPage(id: "memory-retrieval",    title: "Memory: retrieval",        book: .userGuide),
     ]
 
     static func page(id: String) -> HelpPage? {

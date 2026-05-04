@@ -38,5 +38,24 @@ func helpIndexTests() -> TestSuite {
         try expectEqual(HelpRenderer.slugify("  weird  spacing!! "), "weird-spacing")
     }
 
+    // Inspector pane "?" buttons reference page ids by string. A typo here
+    // wouldn't fail to compile; this assertion catches it at test time
+    // before the user sees a "Page not found" page.
+    s.test("inspector pane help refs all resolve") {
+        let paneRefs: [String] = [
+            "memory-pinned-facts",  // MemoryPane
+            "memory-summary",       // SummaryPane
+            "memory-authors-note",  // AuthorsNotePane
+            "memory-world-info",    // WorldInfoPane
+            "memory-suggestions",   // SuggestionsPane + ExtractionPane
+            "memory-entities",      // EntitiesPane
+            "memory-retrieval",     // RetrievalPane
+        ]
+        for ref in paneRefs {
+            try expectTrue(HelpIndex.page(id: ref) != nil,
+                "pane help id '\(ref)' not registered in HelpIndex")
+        }
+    }
+
     return s
 }

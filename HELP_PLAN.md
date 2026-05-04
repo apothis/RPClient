@@ -2,7 +2,7 @@
 
 In-app help system with two books: a **User Guide** (task-first, "how do I…") and a **Technical Reference** (system-first, "how does it work"). Same window, same renderer, different TOC. Frozen markdown shipped as bundle resources — content edits happen in source, not at runtime.
 
-**Status as of 2026-05-04.** Slice 1 (skeleton + first five User Guide pages) shipped on branch `v2-plan`. Slice 2 (Memory user guide + Inspector pane "?" buttons) is next; Slice 3 (Technical Reference, prioritised) follows.
+**Status as of 2026-05-04.** Slices 1 and 2 shipped on branch `v2-plan`. Slice 3 (Technical Reference, prioritised) is next; Slice 4 (long tail) follows.
 
 ---
 
@@ -61,7 +61,7 @@ External `https:` links pass through to `NSWorkspace.shared.open(url)`.
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │  Slice 1  Skeleton + Quick Start         ✅ shipped 2026-05-04   │
-│  Slice 2  Memory user guide + ? buttons                          │
+│  Slice 2  Memory user guide + ? buttons  ✅ shipped 2026-05-04   │
 │  Slice 3  Technical reference (prioritised)                      │
 │  Slice 4  Long tail (presets, templates, library, settings,      │
 │           troubleshooting, remaining tech pages)                 │
@@ -107,11 +107,11 @@ Landed in a single change on branch `v2-plan`. Section preserved as historical r
 
 ---
 
-## 4. Slice 2 — Memory user guide + Inspector "?" buttons (next)
+## 4. Slice 2 — Memory user guide + Inspector "?" buttons ✅ shipped 2026-05-04
 
-Memory is the differentiator and where users will most plausibly look up "what does this do." Help is most useful when surfaced from the panel itself, so the **?** buttons land in the same slice.
+Memory is the differentiator and where users will most plausibly look up "what does this do." Help is most useful when surfaced from the panel itself, so the **?** buttons landed in the same slice.
 
-### Pages to author
+### Pages shipped
 
 | Slug | Title | Covers |
 |---|---|---|
@@ -123,21 +123,22 @@ Memory is the differentiator and where users will most plausibly look up "what d
 | `memory-entities` | Memory: entities | Entity store, on-stage selection, manual edits. |
 | `memory-retrieval` | Memory: retrieval | Vector search settings, what shows up in the pane, when to enable. |
 
-### Implementation steps
+### Implementation that landed
 
-1. Author the seven `.md` files; register in `HelpIndex.pages`.
-2. Add a small `HelpButton` helper view (one square `(?)` glyph that calls `AppDelegate.openHelp(pageId:)`) to keep the call sites uniform.
-3. Wire one `HelpButton` into the header of each Inspector pane:
-   - [MemoryPane.swift](Sources/RPClientCore/UI/Inspector/MemoryPane.swift) → `memory-pinned-facts`
-   - [SummaryPane.swift](Sources/RPClientCore/UI/Inspector/SummaryPane.swift) → `memory-summary`
-   - [AuthorsNotePane.swift](Sources/RPClientCore/UI/Inspector/AuthorsNotePane.swift) → `memory-authors-note`
-   - [WorldInfoPane.swift](Sources/RPClientCore/UI/Inspector/WorldInfoPane.swift) → `memory-world-info`
-   - [SuggestionsPane.swift](Sources/RPClientCore/UI/Inspector/SuggestionsPane.swift) → `memory-suggestions`
-   - [EntitiesPane.swift](Sources/RPClientCore/UI/Inspector/EntitiesPane.swift) → `memory-entities`
-   - [RetrievalPane.swift](Sources/RPClientCore/UI/Inspector/RetrievalPane.swift) → `memory-retrieval`
-4. Extend the TestKit suite with one assertion per pane that the page id used by the pane resolves in `HelpIndex` — guards against typos.
+- Authored the seven `.md` files; registered in `HelpIndex.pages`.
+- Added [HelpButton.swift](Sources/RPClientCore/UI/Help/HelpButton.swift) — one square `(?)` glyph that calls `AppDelegate.openHelp(pageId:anchor:)`. Centralises visual treatment and keeps call sites one line.
+- Wired one `HelpButton` into the header of each Inspector pane:
+  - [MemoryPane.swift](Sources/RPClientCore/UI/Inspector/MemoryPane.swift) → `memory-pinned-facts`
+  - [SummaryPane.swift](Sources/RPClientCore/UI/Inspector/SummaryPane.swift) → `memory-summary`
+  - [AuthorsNotePane.swift](Sources/RPClientCore/UI/Inspector/AuthorsNotePane.swift) → `memory-authors-note`
+  - [WorldInfoPane.swift](Sources/RPClientCore/UI/Inspector/WorldInfoPane.swift) → `memory-world-info`
+  - [SuggestionsPane.swift](Sources/RPClientCore/UI/Inspector/SuggestionsPane.swift) → `memory-suggestions`
+  - [EntitiesPane.swift](Sources/RPClientCore/UI/Inspector/EntitiesPane.swift) → `memory-entities`
+  - [RetrievalPane.swift](Sources/RPClientCore/UI/Inspector/RetrievalPane.swift) → `memory-retrieval`
+  - [ExtractionPane.swift](Sources/RPClientCore/UI/Inspector/ExtractionPane.swift) → `memory-suggestions` (shares the page; extraction is the configure twin to suggestions' review surface).
+- Extended the TestKit suite with an assertion that every page id used by an inspector pane resolves in `HelpIndex` — catches typos.
 
-### Authoring guidance
+### Authoring guidance (still applicable to Slice 3)
 
 Lean on the repo markdowns when describing rationale: `MEMORY_AUDIT.md`, `MEMORY_V2_PLAN.md`, `MEMORY_HANDOFF.md`, `MEMORY_RESEARCH.md`. They are the source of truth for the *why* of the memory system; the help pages should be the *how*.
 
