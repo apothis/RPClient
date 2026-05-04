@@ -2,7 +2,7 @@
 
 In-app help system with two books: a **User Guide** (task-first, "how do I…") and a **Technical Reference** (system-first, "how does it work"). Same window, same renderer, different TOC. Frozen markdown shipped as bundle resources — content edits happen in source, not at runtime.
 
-**Status as of 2026-05-04.** Slices 1 and 2 shipped on branch `v2-plan`. Slice 3 (Technical Reference, prioritised) is next; Slice 4 (long tail) follows.
+**Status as of 2026-05-05.** Slices 1, 2, and 3a (priority tier of the Technical Reference) shipped on branch `v2-plan`. Slice 3b (remaining tech pages, opportunistic) and Slice 4 (long tail) follow.
 
 ---
 
@@ -60,11 +60,12 @@ External `https:` links pass through to `NSWorkspace.shared.open(url)`.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  Slice 1  Skeleton + Quick Start         ✅ shipped 2026-05-04   │
-│  Slice 2  Memory user guide + ? buttons  ✅ shipped 2026-05-04   │
-│  Slice 3  Technical reference (prioritised)                      │
-│  Slice 4  Long tail (presets, templates, library, settings,      │
-│           troubleshooting, remaining tech pages)                 │
+│  Slice 1   Skeleton + Quick Start             ✅ 2026-05-04      │
+│  Slice 2   Memory user guide + ? buttons      ✅ 2026-05-04      │
+│  Slice 3a  Tech reference (priority tier)     ✅ 2026-05-05      │
+│  Slice 3b  Tech reference (tier 2, opportunistic)                │
+│  Slice 4   Long tail (presets, templates, library, settings,     │
+│            troubleshooting)                                      │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -148,13 +149,13 @@ Lean on the repo markdowns when describing rationale: `MEMORY_AUDIT.md`, `MEMORY
 
 Prioritised because the load-bearing pages return value to future-me as much as to users. Each page ends with a `file:line` pointer (one or two — not a full code dump).
 
-### Priority tier (Slice 3a)
+### Priority tier (Slice 3a) ✅ shipped 2026-05-05
 
 | Slug | Title | Pointers |
 |---|---|---|
-| `tech-architecture` | Architecture overview | Process layout, `RPClient` vs `RPClientCore`, `AppState` central state, change-notification model. |
-| `tech-prompt-assembly` | Prompt assembly | Cache-aware layout: stable above the boundary, changing below. Why SmartCache reuse depends on this. |
-| `tech-memory-pipeline` | Memory pipeline | Token-budget allocation, layer ordering, eviction, summarizer/extractor side-calls. |
+| `tech-architecture` | Architecture overview | Targets, dataflow, `AppState` singleton, notification model, on-disk layout, file map. |
+| `tech-prompt-assembly` | Prompt assembly | Cache-aware layout, per-template assembly, last-user-turn extras, continuation mode, budget overflow handling. |
+| `tech-memory-pipeline` | Memory pipeline | The six-layer contract, side-calls (summarizer / extractor / blurber), rolling vs scene summaries, entity supersession, retrieval eligibility, world-info matching. |
 
 ### Tier 2 (Slice 3b, opportunistic)
 

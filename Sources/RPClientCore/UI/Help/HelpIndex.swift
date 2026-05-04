@@ -46,6 +46,10 @@ enum HelpIndex {
         HelpPage(id: "memory-suggestions",  title: "Memory: suggestions",      book: .userGuide),
         HelpPage(id: "memory-entities",     title: "Memory: entities",         book: .userGuide),
         HelpPage(id: "memory-retrieval",    title: "Memory: retrieval",        book: .userGuide),
+        // Slice 3a — Technical Reference (priority tier).
+        HelpPage(id: "tech-architecture",     title: "Architecture overview", book: .technical),
+        HelpPage(id: "tech-prompt-assembly",  title: "Prompt assembly",       book: .technical),
+        HelpPage(id: "tech-memory-pipeline",  title: "Memory pipeline",       book: .technical),
     ]
 
     static func page(id: String) -> HelpPage? {
