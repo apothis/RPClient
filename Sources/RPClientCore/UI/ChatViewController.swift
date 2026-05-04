@@ -1,0 +1,390 @@
+import AppKit
+
+final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDelegate, EmptyStateViewDelegate {
+    private let scrollView = NSScrollView()
+    private let stackView = NSStackView()
+    private let inputBar = InputBar()
+    private let statusBar = StatusBar()
+    private let scrollLatestButton = NSButton()
+    private let emptyStateView = EmptyStateView()
+    private var turnViews: [TurnView] = []
+    private var dividerView: ContextDivider?
+    private var dividerWidthConstraint: NSLayoutConstraint?
+    /// True when the user has scrolled away from the bottom; suppresses
+    /// auto-scroll on streamed tokens so we don't fight them.
+    private var userScrolledUp: Bool = false
+    private let scrollFollowThreshold: CGFloat = 80
+
+    override func loadView() {
+        let v = NSView()
+        v.wantsLayer = true
+        self.view = v
+
+        stackView.orientation = .vertical
+        stackView.alignment = .leading
+        stackView.spacing = 28
+        stackView.edgeInsets = NSEdgeInsets(top: 24, left: 0, bottom: 24, right: 0)
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+
+        let clip = FlippedClipView()
+        clip.drawsBackground = false
+        clip.postsBoundsChangedNotifications = true
+        scrollView.contentView = clip
+        scrollView.documentView = stackView
+        scrollView.hasVerticalScroller = true
+        scrollView.drawsBackground = false
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        v.addSubview(scrollView)
+
+        // Stack tracks the panel width with a small symmetric gutter; turns
+        // expand fully as the panel widens.
+        stackView.widthAnchor.constraint(
+            equalTo: scrollView.contentView.widthAnchor, constant: -24
+        ).isActive = true
+        stackView.centerXAnchor.constraint(
+            equalTo: scrollView.contentView.centerXAnchor
+        ).isActive = true
+
+        inputBar.delegate = self
+        inputBar.translatesAutoresizingMaskIntoConstraints = false
+        v.addSubview(inputBar)
+
+        statusBar.translatesAutoresizingMaskIntoConstraints = false
+        v.addSubview(statusBar)
+
+        configureScrollLatestButton()
+        v.addSubview(scrollLatestButton)
+
+        emptyStateView.delegate = self
+        emptyStateView.translatesAutoresizingMaskIntoConstraints = false
+
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: v.topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: v.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: v.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: inputBar.topAnchor),
+
+            inputBar.leadingAnchor.constraint(equalTo: v.leadingAnchor),
+            inputBar.trailingAnchor.constraint(equalTo: v.trailingAnchor),
+            inputBar.bottomAnchor.constraint(equalTo: statusBar.topAnchor),
+
+            statusBar.leadingAnchor.constraint(equalTo: v.leadingAnchor),
+            statusBar.trailingAnchor.constraint(equalTo: v.trailingAnchor),
+            statusBar.bottomAnchor.constraint(equalTo: v.bottomAnchor),
+
+            scrollLatestButton.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -16),
+            scrollLatestButton.bottomAnchor.constraint(equalTo: inputBar.topAnchor, constant: -12),
+            scrollLatestButton.widthAnchor.constraint(equalToConstant: 30),
+            scrollLatestButton.heightAnchor.constraint(equalToConstant: 30)
+        ])
+
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(rebuild),
+            name: AppNotification.currentChatChanged, object: nil)
+        nc.addObserver(self, selector: #selector(handleStreamToken),
+            name: AppNotification.streamTokenAppended, object: nil)
+        nc.addObserver(self, selector: #selector(handleStreamFinished),
+            name: AppNotification.streamFinished, object: nil)
+        nc.addObserver(self, selector: #selector(handleThinkingStateChanged),
+            name: AppNotification.thinkingStateChanged, object: nil)
+        nc.addObserver(self, selector: #selector(handleChatUpdated),
+            name: AppNotification.chatUpdated, object: nil)
+        nc.addObserver(self, selector: #selector(updateTruncationVisuals),
+            name: AppNotification.statusChanged, object: nil)
+        nc.addObserver(self, selector: #selector(rebuild),
+            name: AppNotification.fontChanged, object: nil)
+        nc.addObserver(self, selector: #selector(handleScroll),
+            name: NSView.boundsDidChangeNotification, object: clip)
+
+        rebuild()
+    }
+
+    private func configureScrollLatestButton() {
+        scrollLatestButton.image = NSImage(
+            systemSymbolName: "chevron.down",
+            accessibilityDescription: "Scroll to latest"
+        )
+        scrollLatestButton.bezelStyle = .circular
+        scrollLatestButton.isBordered = true
+        scrollLatestButton.imagePosition = .imageOnly
+        scrollLatestButton.imageScaling = .scaleProportionallyDown
+        scrollLatestButton.target = self
+        scrollLatestButton.action = #selector(scrollLatestTapped)
+        scrollLatestButton.translatesAutoresizingMaskIntoConstraints = false
+        scrollLatestButton.alphaValue = 0
+        scrollLatestButton.isHidden = true
+        scrollLatestButton.toolTip = "Scroll to latest"
+    }
+
+    private func installEmptyState() {
+        guard emptyStateView.superview == nil else { return }
+        view.addSubview(emptyStateView)
+        NSLayoutConstraint.activate([
+            emptyStateView.topAnchor.constraint(equalTo: scrollView.topAnchor),
+            emptyStateView.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor),
+            emptyStateView.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
+            emptyStateView.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor)
+        ])
+    }
+
+    private func removeEmptyState() {
+        if emptyStateView.superview != nil {
+            emptyStateView.removeFromSuperview()
+        }
+    }
+
+    @objc private func scrollLatestTapped() {
+        userScrolledUp = false
+        scrollToBottom(animated: true)
+    }
+
+    @objc private func handleScroll() {
+        let docH = scrollView.documentView?.frame.height ?? 0
+        let visibleBottom = scrollView.contentView.bounds.maxY
+        let dist = max(0, docH - visibleBottom)
+        userScrolledUp = dist > scrollFollowThreshold
+        updateScrollLatestVisibility()
+    }
+
+    private func updateScrollLatestVisibility() {
+        let shouldShow = userScrolledUp
+        if shouldShow == !scrollLatestButton.isHidden { return }
+        if shouldShow {
+            scrollLatestButton.isHidden = false
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.15
+                scrollLatestButton.animator().alphaValue = 1
+            }
+        } else {
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.15
+                scrollLatestButton.animator().alphaValue = 0
+            }, completionHandler: { [weak self] in
+                guard let self = self, !self.userScrolledUp else { return }
+                self.scrollLatestButton.isHidden = true
+            })
+        }
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    @objc private func rebuild() {
+        for v in turnViews { v.removeFromSuperview() }
+        turnViews.removeAll()
+        dividerView?.removeFromSuperview()
+        dividerView = nil
+        dividerWidthConstraint = nil
+        guard let chat = AppState.shared.currentChat else {
+            removeEmptyState()
+            return
+        }
+        if chat.turns.isEmpty {
+            installEmptyState()
+        } else {
+            removeEmptyState()
+        }
+        let lastAssistantIdx = chat.turns.lastIndex(where: { $0.role == .assistant })
+        for (i, t) in chat.turns.enumerated() {
+            let tv = TurnView(turn: t)
+            tv.delegate = self
+            tv.isLastAssistant = (i == lastAssistantIdx)
+            tv.translatesAutoresizingMaskIntoConstraints = false
+            stackView.addArrangedSubview(tv)
+            tv.widthAnchor.constraint(
+                equalTo: stackView.widthAnchor
+            ).isActive = true
+            turnViews.append(tv)
+        }
+        updateTruncationVisuals()
+        inputBar.updateButtons()
+        userScrolledUp = false
+        scrollToBottom()
+    }
+
+    @objc private func updateTruncationVisuals() {
+        guard let chat = AppState.shared.currentChat else { return }
+        let summarized = max(0, min(chat.summarizedThrough, turnViews.count))
+        let truncated = AppState.shared.lastTruncatedCount
+        let totalDimmed = min(summarized + truncated, turnViews.count)
+
+        for (i, tv) in turnViews.enumerated() {
+            if i < summarized {
+                tv.alphaValue = 0.55  // folded into summary, still in context as summary
+            } else if i < totalDimmed {
+                tv.alphaValue = 0.30  // truncated, not in context at all
+            } else {
+                tv.alphaValue = 1.0
+            }
+        }
+
+        if totalDimmed > 0 && totalDimmed < turnViews.count {
+            let d: ContextDivider
+            if let existing = dividerView {
+                d = existing
+                stackView.removeArrangedSubview(d)
+                d.removeFromSuperview()
+            } else {
+                d = ContextDivider()
+                d.translatesAutoresizingMaskIntoConstraints = false
+                dividerView = d
+            }
+            stackView.insertArrangedSubview(d, at: totalDimmed)
+            // Activate the width constraint AFTER insertion so it shares an
+            // ancestor with stackView. Reuse the same constraint across moves.
+            if dividerWidthConstraint == nil {
+                let c = d.widthAnchor.constraint(
+                    equalTo: stackView.widthAnchor
+                )
+                c.isActive = true
+                dividerWidthConstraint = c
+            }
+        } else {
+            dividerView?.removeFromSuperview()
+            dividerView = nil
+            dividerWidthConstraint = nil
+        }
+    }
+
+    @objc private func handleChatUpdated() {
+        // If the turns count changed (e.g. user message + empty assistant added),
+        // rebuild structurally. If only text changed, leave token stream handling alone.
+        guard let chat = AppState.shared.currentChat else { return }
+        if chat.turns.count != turnViews.count {
+            rebuild()
+            return
+        }
+        // Update titles potentially in status bar handled elsewhere.
+        statusBar.refresh()
+    }
+
+    @objc private func handleStreamToken() {
+        guard let chat = AppState.shared.currentChat,
+              let lastTurn = chat.turns.last,
+              let lastView = turnViews.last,
+              lastView.turnId == lastTurn.id else {
+            return
+        }
+        lastView.setText(lastTurn.text)
+        if lastTurn.role == .assistant && !lastView.isStreaming {
+            lastView.isStreaming = true
+        }
+        if !userScrolledUp {
+            scrollToBottom()
+        }
+    }
+
+    @objc private func handleStreamFinished() {
+        AppState.shared.persistCurrent()
+        inputBar.updateButtons()
+        for tv in turnViews where tv.isStreaming {
+            tv.isStreaming = false
+        }
+        // Stream finish unconditionally clears any lingering Thinking…
+        // placeholder, even if the close tag never arrived.
+        for tv in turnViews where tv.isThinking {
+            tv.isThinking = false
+        }
+        if !userScrolledUp {
+            scrollToBottom(animated: true)
+        }
+    }
+
+    @objc private func handleThinkingStateChanged() {
+        let thinking = AppState.shared.isThinking
+        // Only the trailing assistant turn — the one currently streaming —
+        // ever shows the placeholder. Earlier turns are settled history.
+        guard let lastView = turnViews.last,
+              lastView.turnId == AppState.shared.currentChat?.turns.last?.id else {
+            return
+        }
+        lastView.isThinking = thinking
+        // The streaming glyph pulse is normally engaged on the first token
+        // append, but during a <think> block no displayable text reaches
+        // setText(). Engage it here so the user sees a live signal next to
+        // the "Thinking…" placeholder, matching the rest of the stream.
+        if thinking, !lastView.isStreaming {
+            lastView.isStreaming = true
+        }
+    }
+
+    private func scrollToBottom(animated: Bool = false) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            // Force pending height-constraint changes (from recent setText/recomputeHeight)
+            // through layout before reading the document height.
+            self.view.layoutSubtreeIfNeeded()
+            guard let doc = self.scrollView.documentView else { return }
+            let bottom = NSPoint(
+                x: 0,
+                y: max(0, doc.frame.height - self.scrollView.contentView.bounds.height)
+            )
+            if animated {
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.28
+                    ctx.allowsImplicitAnimation = true
+                    self.scrollView.contentView.animator().setBoundsOrigin(bottom)
+                }
+            } else {
+                self.scrollView.contentView.scroll(to: bottom)
+            }
+            self.scrollView.reflectScrolledClipView(self.scrollView.contentView)
+        }
+    }
+
+    // MARK: - InputBarDelegate
+
+    func inputBarSend(_ bar: InputBar, text: String) {
+        AppState.shared.sendUserMessage(text)
+        rebuild()
+    }
+
+    func inputBarStop(_ bar: InputBar) {
+        AppState.shared.stop()
+    }
+
+    // MARK: - TurnViewDelegate
+
+    func turnViewDidEditText(_ view: TurnView, newText: String) {
+        let id = view.turnId
+        AppState.shared.updateCurrent { c in
+            if let idx = c.turns.firstIndex(where: { $0.id == id }) {
+                c.turns[idx].text = newText
+                c.turns[idx].edited = true
+            }
+        }
+    }
+
+    func turnViewDidRequestDelete(_ view: TurnView) {
+        let id = view.turnId
+        AppState.shared.updateCurrent { c in
+            c.turns.removeAll(where: { $0.id == id })
+        }
+        rebuild()
+    }
+
+    func turnViewDidRequestCopy(_ view: TurnView) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(view.currentText, forType: .string)
+    }
+
+    func turnViewDidRequestRegen(_ view: TurnView) {
+        AppState.shared.regenerate()
+        rebuild()
+    }
+
+    func turnViewDidRequestContinue(_ view: TurnView) {
+        AppState.shared.continueGeneration()
+    }
+
+    // MARK: - EmptyStateViewDelegate
+
+    func emptyStateDidPickStarter(_ view: EmptyStateView, text: String) {
+        inputBar.textView.string = text
+        view.window?.makeFirstResponder(inputBar.textView)
+    }
+}
+
+private final class FlippedClipView: NSClipView {
+    override var isFlipped: Bool { true }
+}

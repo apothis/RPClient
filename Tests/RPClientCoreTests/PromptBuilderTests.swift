@@ -1,0 +1,204 @@
+import Foundation
+@testable import RPClientCore
+
+func promptBuilderTests() -> TestSuite {
+    let s = TestSuite("PromptBuilder")
+
+    func makeChat(turns: [Turn] = [], summary: String = "", summarizedThrough: Int = 0) -> Chat {
+        var c = Chat()
+        c.turns = turns
+        c.summary = summary
+        c.summarizedThrough = summarizedThrough
+        return c
+    }
+
+    s.test("verbatim returns all turns when summary is empty") {
+        let chat = makeChat(
+            turns: [Turn(role: .user, text: "a"), Turn(role: .assistant, text: "b")],
+            summary: "",
+            summarizedThrough: 5
+        )
+        try expectEqual(PromptBuilder.verbatimTurns(chat).map(\.text), ["a", "b"])
+    }
+
+    s.test("verbatim slices after summarizedThrough when summary present") {
+        let chat = makeChat(
+            turns: (0..<6).map { Turn(role: .user, text: "t\($0)") },
+            summary: "rolled-up",
+            summarizedThrough: 4
+        )
+        try expectEqual(PromptBuilder.verbatimTurns(chat).map(\.text), ["t4", "t5"])
+    }
+
+    s.test("verbatim clamps out-of-range summarizedThrough") {
+        let chat = makeChat(
+            turns: [Turn(role: .user, text: "a")],
+            summary: "x",
+            summarizedThrough: 99
+        )
+        try expectTrue(PromptBuilder.verbatimTurns(chat).isEmpty)
+    }
+
+    s.test("tail digest is nil when flag disabled") {
+        var chat = makeChat()
+        chat.memory = "facts"
+        chat.tailReinforceMemory = false
+        try expectNil(PromptBuilder.tailMemoryDigest(chat: chat))
+    }
+
+    s.test("tail digest is nil during continuation") {
+        var chat = makeChat()
+        chat.memory = "facts"
+        chat.tailReinforceMemory = true
+        try expectNil(PromptBuilder.tailMemoryDigest(chat: chat, continuation: true))
+    }
+
+    s.test("tail digest returns body for short memory") {
+        var chat = makeChat()
+        chat.memory = "alpha"
+        chat.tailReinforceMemory = true
+        let d = try expectNotNil(PromptBuilder.tailMemoryDigest(chat: chat))
+        try expectTrue(d.contains("alpha"))
+    }
+
+    s.test("tail digest truncates long memory") {
+        var chat = makeChat()
+        chat.memory = String(repeating: "x", count: 5000)
+        chat.tailReinforceMemory = true
+        let d = try expectNotNil(PromptBuilder.tailMemoryDigest(chat: chat))
+        try expectTrue(d.hasPrefix("[Reminder"))
+        try expectLessThan(d.count, 1500)
+    }
+
+    s.test("formatRelevantMemories returns nil for empty hits") {
+        try expectNil(PromptBuilder.formatRelevantMemories([]))
+    }
+
+    s.test("formatRelevantMemories emits blurb-only when contextual blurb is present") {
+        // The contextual-retrieval payoff: with a blurb available, the
+        // prompt receives the SUMMARY of the snippet, not the dialog
+        // itself. The dialog is only used for embedding-time matching.
+        // This kills the "wall of past dialog right before the gen marker
+        // makes the model continue from inside it" failure mode.
+        var chunk = Chunk(chatId: UUID(), firstTurnIdx: 4, lastTurnIdx: 7,
+                          text: "User: hi there pal\n\nAssistant: hello yourself")
+        chunk.contextBlurb = "Sarah and the user are at the stadium gate before the show."
+        let formatted = try expectNotNil(PromptBuilder.formatRelevantMemories([
+            VectorStore.Hit(chunk: chunk, score: 0.9)
+        ]))
+        try expectTrue(formatted.contains("Sarah and the user are at the stadium"),
+                       "blurb must be present")
+        try expectTrue(formatted.contains("turns 4–7"),
+                       "turn range must be in the bullet")
+        // The dialog must NOT reach the prompt when a blurb summarises it.
+        try expectFalse(formatted.contains("hi there pal"),
+                        "dialog must not be injected when a blurb covers the chunk")
+        try expectFalse(formatted.contains("hello yourself"))
+    }
+
+    s.test("formatRelevantMemories falls back to capped dialog when blurb is missing") {
+        // Legacy chunks (indexed before contextual retrieval shipped) still
+        // have to render *something* — but capped so they can't dominate
+        // the prompt the way the un-fixed flow did.
+        let cap = PromptBuilder.legacyChunkInjectionCap
+        let chunkText = "User: hello there\n\nAssistant: " + String(repeating: "lots of words ", count: 200)
+        let chunk = Chunk(chatId: UUID(), firstTurnIdx: 0, lastTurnIdx: 3, text: chunkText)
+        let formatted = try expectNotNil(PromptBuilder.formatRelevantMemories([
+            VectorStore.Hit(chunk: chunk, score: 0.9)
+        ]))
+        // Line-start role prefixes are stripped (the chunker emits one role
+        // per line), but the test only asserts on the strip — not on the
+        // absence of every "User: " substring (which a long dialog can
+        // contain via line continuation).
+        try expectFalse(formatted.contains("User: hello"),
+                        "User: line-start prefix must be stripped from legacy retrieved chunks")
+        try expectFalse(formatted.contains("Assistant: lots"),
+                        "Assistant: line-start prefix must be stripped from legacy retrieved chunks")
+        try expectTrue(formatted.contains("turns 0–3"))
+        try expectTrue(formatted.contains("…"),
+                       "long legacy chunks must be truncated with an ellipsis")
+        try expectLessThan(formatted.count, cap + 200)
+    }
+
+    s.test("formatRelevantMemories uses the new 'Recall' header") {
+        let chunk = Chunk(chatId: UUID(), firstTurnIdx: 0, lastTurnIdx: 3, text: "x")
+        let formatted = try expectNotNil(PromptBuilder.formatRelevantMemories([
+            VectorStore.Hit(chunk: chunk, score: 0.9)
+        ]))
+        try expectTrue(formatted.contains("Recall —"),
+                       "header must signal 'past, for continuity, not for continuation'")
+    }
+
+    // MARK: - Topic supersession (MEMORY_AUDIT §4.3-E)
+
+    s.test("supersedeStaleFactsByTopic keeps newest clothing fact and drops older topless/wearing/etc") {
+        let facts = [
+            Fact(text: "Sarah is 25", addedTurn: 1, lastReinforcedTurn: 1),
+            Fact(text: "Sarah is topless", addedTurn: 20, lastReinforcedTurn: 22),
+            Fact(text: "Sarah is wearing only panties", addedTurn: 25, lastReinforcedTurn: 25),
+            Fact(text: "Sarah is naked", addedTurn: 30, lastReinforcedTurn: 30),
+        ]
+        let kept = PromptBuilder.supersedeStaleFactsByTopic(facts)
+        let texts = kept.map(\.text)
+        try expectTrue(texts.contains("Sarah is 25"), "timeless attribute must survive")
+        try expectTrue(texts.contains("Sarah is naked"), "newest clothing fact must survive")
+        try expectFalse(texts.contains("Sarah is topless"), "older clothing fact must be superseded")
+        try expectFalse(texts.contains("Sarah is wearing only panties"), "older clothing fact must be superseded")
+    }
+
+    s.test("supersedeStaleFactsByTopic keeps pinned older facts even when newer ones exist") {
+        let facts = [
+            Fact(text: "Sarah is topless", addedTurn: 20, lastReinforcedTurn: 20, pinnedByUser: true),
+            Fact(text: "Sarah is naked", addedTurn: 30, lastReinforcedTurn: 30),
+        ]
+        let kept = PromptBuilder.supersedeStaleFactsByTopic(facts)
+        let texts = kept.map(\.text)
+        try expectTrue(texts.contains("Sarah is topless"), "user pinned the older fact — must survive")
+        try expectTrue(texts.contains("Sarah is naked"))
+    }
+
+    s.test("supersedeStaleFactsByTopic preserves input order for kept facts") {
+        let facts = [
+            Fact(text: "Sarah is 25", addedTurn: 1, lastReinforcedTurn: 1),
+            Fact(text: "Sarah likes Metallica", addedTurn: 2, lastReinforcedTurn: 2),
+            Fact(text: "Sarah is naked", addedTurn: 30, lastReinforcedTurn: 30),
+        ]
+        let kept = PromptBuilder.supersedeStaleFactsByTopic(facts)
+        try expectEqual(kept.map(\.text), facts.map(\.text))
+    }
+
+    s.test("factTopic detects clothing keywords and ignores timeless attributes") {
+        try expectEqual(PromptBuilder.factTopic(of: "Sarah is naked"), "clothing")
+        try expectEqual(PromptBuilder.factTopic(of: "Sarah is topless"), "clothing")
+        try expectEqual(PromptBuilder.factTopic(of: "Sarah is wearing only panties"), "clothing")
+        try expectEqual(PromptBuilder.factTopic(of: "Emily took off her shirt"), "clothing")
+        try expectNil(PromptBuilder.factTopic(of: "Sarah is 25 years old"))
+        try expectNil(PromptBuilder.factTopic(of: "Sarah works as a barista"))
+        try expectNil(PromptBuilder.factTopic(of: "Sarah likes Metallica"))
+    }
+
+    s.test("entitiesBlock applies topic supersession end-to-end") {
+        var chat = Chat()
+        chat.entities = [
+            Entity(name: "Sarah", type: .character, facts: [
+                Fact(text: "Sarah is 25", addedTurn: 1, lastReinforcedTurn: 1),
+                Fact(text: "Sarah is topless", addedTurn: 20, lastReinforcedTurn: 20),
+                Fact(text: "Sarah is naked", addedTurn: 30, lastReinforcedTurn: 30),
+            ])
+        ]
+        chat.turns = [Turn(role: .user, text: "I run my hands over Sarah")]
+        let block = try expectNotNil(PromptBuilder.entitiesBlock(chat: chat))
+        try expectTrue(block.contains("naked"))
+        try expectFalse(block.contains("topless"))
+        try expectTrue(block.contains("25"))
+    }
+
+    s.test("build returns the template's stop sequences") {
+        var chat = makeChat(turns: [Turn(role: .user, text: "hi")])
+        chat.templateId = "gemma"
+        let (_, stops) = PromptBuilder.build(chat: chat)
+        try expectEqual(stops, GemmaTemplate().stopSequences)
+    }
+
+    return s
+}

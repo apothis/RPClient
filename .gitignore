@@ -1,0 +1,28 @@
+# Swift build artifacts
+.build/
+*.o
+*.d
+
+# Compiled app bundle
+RPClient.app/
+
+# Xcode / macOS
+.DS_Store
+*.xcuserstate
+xcuserdata/
+DerivedData/
+*.swp
+*.swo
+
+# Swift Package Manager resolved state (keep Package.resolved if you want reproducible builds)
+# Package.resolved
+
+# Machine-specific Claude Code settings (contains absolute local paths)
+.claude/settings.local.json
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+*.p12

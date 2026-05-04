@@ -1,0 +1,205 @@
+import Foundation
+
+/// Token-count cache keyed on text hash. Avoids re-tokenizing unchanged content.
+final class TokenCounter {
+    static let shared = TokenCounter()
+    private var cache: [Int: Int] = [:]
+    private let lock = NSLock()
+
+    func count(_ text: String, kobold: KoboldClient, completion: @escaping (Int) -> Void) {
+        if text.isEmpty { completion(0); return }
+        let key = text.hashValue
+        lock.lock()
+        if let cached = cache[key] {
+            lock.unlock()
+            completion(cached)
+            return
+        }
+        lock.unlock()
+        kobold.tokenCount(text: text) { [weak self] result in
+            let n = (try? result.get()) ?? 0
+            self?.lock.lock()
+            self?.cache[key] = n
+            self?.lock.unlock()
+            completion(n)
+        }
+    }
+}
+
+struct BudgetUsage: Equatable {
+    var memory: Int
+    var summary: Int
+    var authorsNote: Int
+    var worldInfo: Int
+    var retrieval: Int
+    var turnsTotal: Int
+    var templateOverhead: Int
+    var replyReserve: Int
+    var ctx: Int
+
+    var prompt: Int { memory + summary + authorsNote + worldInfo + retrieval + turnsTotal + templateOverhead }
+    var used: Int { prompt + replyReserve }
+    var fillRatio: Double { ctx > 0 ? min(1.0, Double(used) / Double(ctx)) : 0 }
+    var promptRatio: Double { ctx > 0 ? min(1.0, Double(prompt) / Double(ctx)) : 0 }
+
+    static let zero = BudgetUsage(
+        memory: 0, summary: 0, authorsNote: 0, worldInfo: 0, retrieval: 0,
+        turnsTotal: 0, templateOverhead: 0, replyReserve: 0, ctx: 0
+    )
+}
+
+struct PromptAssembly {
+    let prompt: String
+    let stops: [String]
+    let usage: BudgetUsage
+    /// Number of leading turns dropped to fit the budget.
+    let truncatedTurns: Int
+}
+
+enum TokenBudget {
+    /// Per-turn template overhead estimate (start/end markers).
+    private static let perTurnOverhead = 6
+    /// Fixed template overhead (system prefix etc.).
+    private static let fixedOverhead = 8
+
+    static func assemble(
+        chat: Chat,
+        effectiveCtx: Int,
+        replyReserve: Int,
+        relevantMemories: String? = nil,
+        continuation: Bool = false,
+        userName: String = "",
+        qwenThinking: Bool = false,
+        kobold: KoboldClient,
+        completion: @escaping (PromptAssembly) -> Void
+    ) {
+        // Prepend "[The user's name is X.]" to the memory block so the model
+        // addresses the user by name. Lives inside memoryBlock to stay above
+        // the prompt-cache boundary — userName changes are rare so the prefix
+        // keeps reusable. Empty userName falls back to the chat's raw memory.
+        let trimmedName = userName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveMemory: String = {
+            let mem = chat.memory
+            guard !trimmedName.isEmpty else { return mem }
+            let line = "The user's name is \(trimmedName)."
+            if mem.isEmpty { return line }
+            return line + "\n\n" + mem
+        }()
+        let group = DispatchGroup()
+        let counter = TokenCounter.shared
+
+        var memTok = 0, sumTok = 0, sceneTok = 0, anTok = 0, wiTok = 0, retrTok = 0, digestTok = 0
+        var entitiesTok = 0, anchorTok = 0
+        var turnTok: [UUID: Int] = [:]
+        let lock = NSLock()
+
+        let tailDigest = PromptBuilder.tailMemoryDigest(chat: chat, continuation: continuation)
+        let entitiesBlock = PromptBuilder.entitiesBlock(chat: chat)
+        let anchor = PromptBuilder.currentSceneAnchor(chat: chat, continuation: continuation)
+
+        if !effectiveMemory.isEmpty {
+            group.enter()
+            counter.count(effectiveMemory, kobold: kobold) { n in memTok = n; group.leave() }
+        }
+        if let eb = entitiesBlock, !eb.isEmpty {
+            group.enter()
+            counter.count(eb, kobold: kobold) { n in entitiesTok = n; group.leave() }
+        }
+        if let d = tailDigest, !d.isEmpty {
+            group.enter()
+            counter.count(d, kobold: kobold) { n in digestTok = n; group.leave() }
+        }
+        if let a = anchor, !a.isEmpty {
+            group.enter()
+            counter.count(a, kobold: kobold) { n in anchorTok = n; group.leave() }
+        }
+        if !chat.summary.isEmpty {
+            group.enter()
+            counter.count(chat.summary, kobold: kobold) { n in sumTok = n; group.leave() }
+        }
+        // Count the rendered scene block as a single chunk — this matches what
+        // actually gets injected and accounts for new framing + staleness
+        // compression so token math doesn't double-count what the model sees.
+        let renderedScenes = PromptBuilder.renderableScenes(chat: chat)
+        let sceneText: String = renderedScenes.isEmpty
+            ? ""
+            : PromptBuilder.SceneSummaryFormatter.renderBlock(renderedScenes)
+        if !sceneText.isEmpty {
+            group.enter()
+            counter.count(sceneText, kobold: kobold) { n in sceneTok = n; group.leave() }
+        }
+        if !chat.authorsNote.text.isEmpty {
+            group.enter()
+            counter.count(chat.authorsNote.text, kobold: kobold) { n in anTok = n; group.leave() }
+        }
+        let wiText = chat.worldInfo.map(\.content).joined(separator: "\n\n")
+        if !wiText.isEmpty {
+            group.enter()
+            counter.count(wiText, kobold: kobold) { n in wiTok = n; group.leave() }
+        }
+        if let rm = relevantMemories, !rm.isEmpty {
+            group.enter()
+            counter.count(rm, kobold: kobold) { n in retrTok = n; group.leave() }
+        }
+        let verbatim = PromptBuilder.verbatimTurns(chat)
+        for turn in verbatim where !turn.text.isEmpty {
+            group.enter()
+            counter.count(turn.text, kobold: kobold) { n in
+                lock.lock(); turnTok[turn.id] = n; lock.unlock()
+                group.leave()
+            }
+        }
+
+        group.notify(queue: .main) {
+            var turns = verbatim
+            func tokens(of turn: Turn) -> Int {
+                (turnTok[turn.id] ?? 0) + perTurnOverhead
+            }
+            var turnsTotal = turns.reduce(0) { $0 + tokens(of: $1) }
+
+            let nonTurns = memTok + entitiesTok + sumTok + sceneTok + anTok + wiTok + retrTok + digestTok + anchorTok + fixedOverhead
+            // Drop oldest pair (user + assistant) while exceeding budget. Always keep
+            // the trailing pending pair so the user's just-sent message survives.
+            while nonTurns + turnsTotal + replyReserve > effectiveCtx, turns.count > 2 {
+                let dropped = turns.removeFirst()
+                turnsTotal -= tokens(of: dropped)
+            }
+
+            let truncatedCount = verbatim.count - turns.count
+
+            let template = Templates.byId(chat.templateId, qwenThinking: qwenThinking)
+            let prompt = template.assemble(
+                memoryBlock: effectiveMemory.isEmpty ? nil : effectiveMemory,
+                entitiesBlock: entitiesBlock,
+                sceneSummaries: renderedScenes,
+                summary: chat.summary.isEmpty ? nil : chat.summary,
+                worldInfoHits: [],
+                authorsNote: chat.authorsNote.text.isEmpty ? nil : chat.authorsNote,
+                relevantMemories: relevantMemories,
+                tailMemoryDigest: tailDigest,
+                currentSceneAnchor: anchor,
+                turns: turns,
+                continuation: continuation
+            )
+
+            let usage = BudgetUsage(
+                memory: memTok + digestTok + entitiesTok,
+                summary: sumTok + sceneTok,
+                authorsNote: anTok,
+                worldInfo: wiTok,
+                retrieval: retrTok,
+                turnsTotal: turnsTotal,
+                templateOverhead: fixedOverhead,
+                replyReserve: replyReserve,
+                ctx: effectiveCtx
+            )
+
+            completion(PromptAssembly(
+                prompt: prompt,
+                stops: template.stopSequences,
+                usage: usage,
+                truncatedTurns: truncatedCount
+            ))
+        }
+    }
+}
