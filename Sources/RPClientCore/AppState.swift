@@ -232,6 +232,31 @@ final class AppState {
         return characters.first(where: { $0.id == id })
     }
 
+    /// Run the full card-import pipeline for `url`: parse, normalize the
+    /// avatar (if any) through `Storage.normalizeAvatarData`, persist both
+    /// the JSON and the PNG, register the result in the in-memory list. Any
+    /// `CharacterCardImporter.ImportError` propagates up to the caller so
+    /// the UI can surface a useful message.
+    @discardableResult
+    func importCharacter(from url: URL) throws -> Character {
+        let result = try CharacterCardImporter.importFile(at: url)
+        let character = result.character
+        Storage.shared.saveCharacter(character)
+        if let pngData = result.avatarPNG,
+           let normalized = Storage.normalizeAvatarData(pngData) {
+            Storage.shared.writeCharacterAvatar(normalized, for: character.id)
+        }
+        if let idx = characters.firstIndex(where: { $0.id == character.id }) {
+            characters[idx] = character
+        } else {
+            characters.append(character)
+        }
+        characters.sort { $0.created > $1.created }
+        DebugLog.shared.write("import: character \"\(character.name)\" id=\(character.id) avatar=\(result.avatarPNG != nil ? "yes" : "no") source=\(url.lastPathComponent)")
+        NotificationCenter.default.post(name: AppNotification.charactersChanged, object: nil)
+        return character
+    }
+
     // MARK: - Personas
 
     func savePersona(_ persona: Persona) {
