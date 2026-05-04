@@ -46,6 +46,13 @@ enum HelpIndex {
         HelpPage(id: "memory-suggestions",  title: "Memory: suggestions",      book: .userGuide),
         HelpPage(id: "memory-entities",     title: "Memory: entities",         book: .userGuide),
         HelpPage(id: "memory-retrieval",    title: "Memory: retrieval",        book: .userGuide),
+        // Slice 4 — long-tail user guide.
+        HelpPage(id: "presets",              title: "Sampler presets",         book: .userGuide),
+        HelpPage(id: "templates",            title: "Templates: Gemma vs Qwen3", book: .userGuide),
+        HelpPage(id: "characters-personas",  title: "Characters & personas",   book: .userGuide),
+        HelpPage(id: "library",              title: "Library window",          book: .userGuide),
+        HelpPage(id: "settings",             title: "Settings",                book: .userGuide),
+        HelpPage(id: "troubleshooting",      title: "Troubleshooting",         book: .userGuide),
         // Slice 3a — Technical Reference (priority tier).
         HelpPage(id: "tech-architecture",     title: "Architecture overview", book: .technical),
         HelpPage(id: "tech-prompt-assembly",  title: "Prompt assembly",       book: .technical),

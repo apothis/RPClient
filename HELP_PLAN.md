@@ -2,7 +2,7 @@
 
 In-app help system with two books: a **User Guide** (task-first, "how do I…") and a **Technical Reference** (system-first, "how does it work"). Same window, same renderer, different TOC. Frozen markdown shipped as bundle resources — content edits happen in source, not at runtime.
 
-**Status as of 2026-05-05.** Slices 1, 2, and 3a (priority tier of the Technical Reference) shipped on branch `v2-plan`. Slice 3b (remaining tech pages, opportunistic) and Slice 4 (long tail) follow.
+**Status as of 2026-05-05.** Slices 1, 2, 3a (priority Technical Reference), and 4 (long-tail user guide) shipped on branch `v2-plan`. The remaining work is Slice 3b — tier-2 technical pages, opportunistic.
 
 ---
 
@@ -63,9 +63,8 @@ External `https:` links pass through to `NSWorkspace.shared.open(url)`.
 │  Slice 1   Skeleton + Quick Start             ✅ 2026-05-04      │
 │  Slice 2   Memory user guide + ? buttons      ✅ 2026-05-04      │
 │  Slice 3a  Tech reference (priority tier)     ✅ 2026-05-05      │
+│  Slice 4   Long-tail user guide               ✅ 2026-05-05      │
 │  Slice 3b  Tech reference (tier 2, opportunistic)                │
-│  Slice 4   Long tail (presets, templates, library, settings,     │
-│            troubleshooting)                                      │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -163,9 +162,20 @@ Prioritised because the load-bearing pages return value to future-me as much as 
 
 ---
 
-## 6. Slice 4 — Long tail
+## 6. Slice 4 — Long-tail user guide ✅ shipped 2026-05-05
 
-Remaining User Guide pages (`presets`, `templates`, `library`, `settings`, `troubleshooting`) plus any Tier 2 tech pages not landed in Slice 3b. Sequenced by what the user actually hits when reading the existing pages and finding a forward link unfilled.
+Six pages closing the forward-link gaps from Slices 1–2 and rounding out the User Guide:
+
+| Slug | Title | Hook |
+|---|---|---|
+| `presets` | Sampler presets | Per-knob explanation, the three shipped presets, tuning advice. |
+| `templates` | Templates: Gemma vs Qwen3 | When to pick which, mismatch symptoms, Qwen3 thinking-mode toggle. |
+| `characters-personas` | Characters & personas | Field anatomy, importing SillyTavern v2 cards, persona priority order, library workflow. |
+| `library` | Library window | Characters tab, Personas tab, what the library does *not* manage. |
+| `settings` | Settings | Every settings field, with cross-links into the relevant memory and template pages. |
+| `troubleshooting` | Troubleshooting | Field guide for the most common symptoms (server unreachable, empty replies, looping, out of context, retrieval shows zero, etc.). |
+
+These pages also added inbound links to the existing memory pages — `[author's note](memory-authors-note)`, `[retrieval](memory-retrieval)` — so the user guide reads as a connected document rather than a stack of isolated pages.
 
 ---
 
