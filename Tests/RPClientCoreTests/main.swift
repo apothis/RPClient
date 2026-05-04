@@ -14,6 +14,7 @@ let suites: [TestSuite] = [
     memoryAuditRegressionTests(),
     helpIndexTests(),
     settingsServersCodableTests(),
+    koboldClientRegistryTests(),
 ]
 
 exit(TestRunner.run(suites))

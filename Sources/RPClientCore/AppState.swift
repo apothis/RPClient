@@ -103,7 +103,17 @@ final class AppState {
         return maxContext
     }
 
-    let kobold: KoboldClient
+    let registry: KoboldClientRegistry
+
+    /// Façade pointed at the current chat's effective generation client. Exists
+    /// so the many existing call sites that take `kobold:` keep working without
+    /// rewriting them all at once. 4c will plumb `chat.serverId` into the
+    /// chatOverride so a chat can pin a specific server. 4d migrates side-call
+    /// callers (Summarizer, FactExtractor, etc.) off the façade onto
+    /// role-specific registry lookups.
+    var kobold: KoboldClient {
+        registry.client(for: .general, chatOverride: nil)
+    }
 
     private init() {
         let s = Storage.shared.loadSettings()
@@ -112,8 +122,7 @@ final class AppState {
         self.currentChatId = chats.first?.id
         self.characters = Storage.shared.listCharacters()
         self.personas = Storage.shared.listPersonas()
-        let url = URL(string: s.serverURL) ?? URL(string: "http://localhost:5001")!
-        self.kobold = KoboldClient(baseURL: url)
+        self.registry = KoboldClientRegistry(settings: s)
         if chats.isEmpty {
             let c = Chat(templateId: s.defaultTemplateId, samplerPresetId: s.defaultSamplerPresetId)
             Storage.shared.saveChat(c)
@@ -391,9 +400,7 @@ final class AppState {
     func saveSettings(_ s: Settings) {
         self.settings = s
         Storage.shared.saveSettings(s)
-        if let url = URL(string: s.serverURL) {
-            kobold.setBaseURL(url)
-        }
+        registry.updateSettings(s)
         refreshServerInfo()
         scheduleUsageRecompute()
     }
@@ -770,6 +777,11 @@ final class AppState {
         let composed = PromptBuilder.composeMemoryBlock(chat: chat, character: resolvedCharacter, userName: settings.userName) ?? ""
         let personaBlock = PromptBuilder.renderPersonaBlock(resolvedPersona) ?? ""
         DebugLog.shared.write("card-compose: chat.characterId=\(chat.characterId?.uuidString ?? "nil") resolved=\(resolvedCharacter?.name ?? "nil") composedChars=\(composed.count) systemPromptMode=\(chat.systemPromptMode.rawValue) persona=\(resolvedPersona?.name ?? "nil") personaChars=\(personaBlock.count)")
+        // 4b diagnostic — confirms the registry resolved to the expected
+        // server. chatOverride is nil today (4c plumbs chat.serverId through).
+        let resolvedClient = registry.client(for: .general, chatOverride: nil)
+        let resolvedProfile = settings.servers.first(where: { $0.baseURL == resolvedClient.baseURL })
+        DebugLog.shared.write("server-resolve: chat.serverId=nil resolved=\(resolvedProfile?.name ?? "?") baseURL=\(resolvedClient.baseURL.absoluteString)")
         TokenBudget.assemble(
             chat: chat,
             effectiveCtx: ctx,
