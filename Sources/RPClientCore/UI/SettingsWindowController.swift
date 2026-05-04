@@ -1,7 +1,23 @@
 import AppKit
 
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
-    private let urlField = NSTextField()
+    // Servers (Phase 4 §5.3) — list of koboldcpp profiles + role assignment.
+    private var serversDraft: [ServerProfile] = []
+    private var defaultServerIdDraft: UUID = UUID()
+    private var summarizerServerIdDraft: UUID?
+    private var extractorServerIdDraft: UUID?
+    private var embeddingsServerIdDraft: UUID?
+    private let serversScroll = NSScrollView()
+    private let serversStack = NSStackView()
+    private let addServerButton = NSButton(title: "+ Add server", target: nil, action: nil)
+    private let defaultServerPopup = NSPopUpButton()
+    private let summarizerServerPopup = NSPopUpButton()
+    private let extractorServerPopup = NSPopUpButton()
+    private let embeddingsServerPopup = NSPopUpButton()
+    /// Probe status per profile id, refreshed by Test buttons. Persisted on
+    /// save so the dot reflects the last-probed state across opens.
+    private var probeStatusDraft: [UUID: String] = [:]
+
     private let userNameField = NSTextField()
     private let templatePopup = NSPopUpButton()
     private let presetPopup = NSPopUpButton()
@@ -68,7 +84,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private func buildUI() {
         guard let cv = window?.contentView else { return }
 
-        let urlLabel = NSTextField(labelWithString: "Server URL:")
+        let serversHeader = NSTextField(labelWithString: "Servers")
+        serversHeader.font = Theme.bold(12)
+        let serversHelp = NSTextField(wrappingLabelWithString: "Each server is a koboldcpp endpoint. Use Default for chat generation; route side-calls (summary, extraction, embeddings) to a different server to keep the chat path snappy while a beefier model handles memory upkeep.")
+        serversHelp.font = Theme.font(10)
+        serversHelp.textColor = .secondaryLabelColor
+        serversHelp.translatesAutoresizingMaskIntoConstraints = false
+
         let userNameLabel = NSTextField(labelWithString: "Your name:")
         let templateLabel = NSTextField(labelWithString: "Default template:")
         let presetLabel = NSTextField(labelWithString: "Default sampler preset:")
@@ -93,7 +115,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let thresholdLabel = NSTextField(labelWithString: "Cosine threshold (0–1):")
         let recencyLabel = NSTextField(labelWithString: "Exclude last N turns:")
 
-        urlField.placeholderString = "http://localhost:5001"
         userNameField.placeholderString = "(blank — model won't address you by name)"
         ctxField.placeholderString = "0"
         let intF = NumberFormatter()
@@ -221,8 +242,55 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         libraryAddButton.action = #selector(addLibraryEntry)
         libraryAddButton.bezelStyle = .rounded
 
+        // Servers list (vertical stack of profile rows, scrollable).
+        serversStack.orientation = .vertical
+        serversStack.spacing = 6
+        serversStack.alignment = .leading
+        serversStack.edgeInsets = NSEdgeInsets(top: 4, left: 4, bottom: 4, right: 4)
+        serversStack.translatesAutoresizingMaskIntoConstraints = false
+        serversScroll.documentView = serversStack
+        serversScroll.hasVerticalScroller = true
+        serversScroll.borderType = .lineBorder
+        serversScroll.translatesAutoresizingMaskIntoConstraints = false
+        serversStack.widthAnchor.constraint(equalTo: serversScroll.contentView.widthAnchor).isActive = true
+        serversScroll.heightAnchor.constraint(equalToConstant: 160).isActive = true
+
+        addServerButton.target = self
+        addServerButton.action = #selector(addServer)
+        addServerButton.bezelStyle = .rounded
+
+        defaultServerPopup.target = self
+        defaultServerPopup.action = #selector(roleAssignmentChanged(_:))
+        defaultServerPopup.tag = 0
+        summarizerServerPopup.target = self
+        summarizerServerPopup.action = #selector(roleAssignmentChanged(_:))
+        summarizerServerPopup.tag = 1
+        extractorServerPopup.target = self
+        extractorServerPopup.action = #selector(roleAssignmentChanged(_:))
+        extractorServerPopup.tag = 2
+        embeddingsServerPopup.target = self
+        embeddingsServerPopup.action = #selector(roleAssignmentChanged(_:))
+        embeddingsServerPopup.tag = 3
+
+        let defaultRoleLabel = NSTextField(labelWithString: "Default (chat):")
+        let summarizerRoleLabel = NSTextField(labelWithString: "Summarizer:")
+        let extractorRoleLabel = NSTextField(labelWithString: "Extractor:")
+        let embeddingsRoleLabel = NSTextField(labelWithString: "Embeddings:")
+
+        let separator0 = NSBox()
+        separator0.boxType = .separator
+        separator0.translatesAutoresizingMaskIntoConstraints = false
+
         let grid = NSGridView(views: [
-            [urlLabel, urlField],
+            [NSView(), serversHeader],
+            [NSView(), serversHelp],
+            [NSView(), serversScroll],
+            [NSView(), addServerButton],
+            [defaultRoleLabel, defaultServerPopup],
+            [summarizerRoleLabel, summarizerServerPopup],
+            [extractorRoleLabel, extractorServerPopup],
+            [embeddingsRoleLabel, embeddingsServerPopup],
+            [NSView(), separator0],
             [userNameLabel, userNameField],
             [templateLabel, templatePopup],
             [presetLabel, presetPopup],
@@ -295,7 +363,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             buttons.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
             buttons.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -16),
 
-            urlField.widthAnchor.constraint(greaterThanOrEqualToConstant: 280),
+            serversScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 380),
             topKField.widthAnchor.constraint(equalToConstant: 80),
             thresholdField.widthAnchor.constraint(equalToConstant: 80),
             recencyField.widthAnchor.constraint(equalToConstant: 80),
@@ -415,7 +483,19 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     private func loadValues() {
         let s = AppState.shared.settings
-        urlField.stringValue = s.serverURL
+        serversDraft = s.servers
+        defaultServerIdDraft = s.defaultServerId
+        summarizerServerIdDraft = s.summarizerServerId
+        extractorServerIdDraft = s.extractorServerId
+        embeddingsServerIdDraft = s.embeddingsServerId
+        probeStatusDraft.removeAll()
+        for p in s.servers {
+            // Last-probed dot derived from cached capabilities. No
+            // capabilities = never probed; presence = "ok" until next probe.
+            probeStatusDraft[p.id] = (p.capabilities?.modelName != nil) ? "ok" : ""
+        }
+        rebuildServersUI()
+        rebuildRolePopups()
         userNameField.stringValue = s.userName
         if let i = Templates.all.firstIndex(where: { $0.id == s.defaultTemplateId }) {
             templatePopup.selectItem(at: i)
@@ -485,7 +565,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let templateId = (templatePopup.selectedItem?.representedObject as? String) ?? "gemma"
         let presetId = (presetPopup.selectedItem?.representedObject as? String) ?? "balanced"
         var s = AppState.shared.settings
-        s.serverURL = urlField.stringValue.isEmpty ? "http://localhost:5001" : urlField.stringValue
+        commitServersDraftFromUI()
+        s.servers = serversDraft
+        s.defaultServerId = defaultServerIdDraft
+        s.summarizerServerId = summarizerServerIdDraft
+        s.extractorServerId = extractorServerIdDraft
+        s.embeddingsServerId = embeddingsServerIdDraft
         s.userName = userNameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         s.defaultTemplateId = templateId
         s.defaultSamplerPresetId = presetId
@@ -525,6 +610,250 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func cancel() {
         window?.close()
+    }
+
+    // MARK: - Servers editor
+
+    private func rebuildServersUI() {
+        for v in serversStack.arrangedSubviews {
+            serversStack.removeArrangedSubview(v)
+            v.removeFromSuperview()
+        }
+        for (idx, profile) in serversDraft.enumerated() {
+            let row = makeServerRow(profile: profile, index: idx)
+            serversStack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: serversStack.widthAnchor, constant: -8).isActive = true
+        }
+    }
+
+    private func makeServerRow(profile: ServerProfile, index: Int) -> NSView {
+        let row = NSView()
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let nameField = NSTextField(string: profile.name)
+        nameField.placeholderString = "name"
+        nameField.tag = index
+        nameField.identifier = NSUserInterfaceItemIdentifier("server-name")
+        nameField.font = Theme.font(12)
+        nameField.target = self
+        nameField.action = #selector(serverFieldCommitted(_:))
+        nameField.translatesAutoresizingMaskIntoConstraints = false
+
+        let urlF = NSTextField(string: profile.baseURL.absoluteString)
+        urlF.placeholderString = "http://host:port"
+        urlF.tag = index
+        urlF.identifier = NSUserInterfaceItemIdentifier("server-url")
+        urlF.font = Theme.font(12)
+        urlF.target = self
+        urlF.action = #selector(serverFieldCommitted(_:))
+        urlF.translatesAutoresizingMaskIntoConstraints = false
+
+        let statusDot = NSTextField(labelWithString: probeDotLabel(for: profile.id))
+        statusDot.identifier = NSUserInterfaceItemIdentifier("server-status")
+        statusDot.font = Theme.font(11)
+        statusDot.translatesAutoresizingMaskIntoConstraints = false
+        statusDot.toolTip = profile.capabilities?.modelName ?? "Not yet probed"
+
+        let testBtn = NSButton(title: "Test", target: self, action: #selector(testServer(_:)))
+        testBtn.tag = index
+        testBtn.bezelStyle = .rounded
+        testBtn.translatesAutoresizingMaskIntoConstraints = false
+
+        let deleteBtn = NSButton(title: "×", target: self, action: #selector(removeServer(_:)))
+        deleteBtn.tag = index
+        deleteBtn.bezelStyle = .circular
+        deleteBtn.toolTip = profile.id == defaultServerIdDraft
+            ? "Default server cannot be deleted (re-point Default first)"
+            : "Delete this server"
+        deleteBtn.isEnabled = profile.id != defaultServerIdDraft
+        deleteBtn.translatesAutoresizingMaskIntoConstraints = false
+
+        row.addSubview(nameField)
+        row.addSubview(urlF)
+        row.addSubview(statusDot)
+        row.addSubview(testBtn)
+        row.addSubview(deleteBtn)
+
+        NSLayoutConstraint.activate([
+            row.heightAnchor.constraint(equalToConstant: 28),
+
+            nameField.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            nameField.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            nameField.widthAnchor.constraint(equalToConstant: 100),
+
+            urlF.leadingAnchor.constraint(equalTo: nameField.trailingAnchor, constant: 6),
+            urlF.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            urlF.trailingAnchor.constraint(equalTo: statusDot.leadingAnchor, constant: -6),
+
+            statusDot.widthAnchor.constraint(equalToConstant: 18),
+            statusDot.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            statusDot.trailingAnchor.constraint(equalTo: testBtn.leadingAnchor, constant: -4),
+
+            testBtn.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            testBtn.trailingAnchor.constraint(equalTo: deleteBtn.leadingAnchor, constant: -4),
+
+            deleteBtn.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            deleteBtn.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            deleteBtn.widthAnchor.constraint(equalToConstant: 24),
+            deleteBtn.heightAnchor.constraint(equalToConstant: 22)
+        ])
+        return row
+    }
+
+    private func probeDotLabel(for id: UUID) -> String {
+        switch probeStatusDraft[id] ?? "" {
+        case "ok": return "●"      // green-ish via system; tinted by tooltip
+        case "fail": return "●"
+        default: return "○"        // never probed
+        }
+    }
+
+    /// Pull edits out of the row text fields back into `serversDraft`. Called
+    /// before any structural change (add/remove) and at save time, mirroring
+    /// the library editor's `commitLibraryFromUI`.
+    private func commitServersDraftFromUI() {
+        for (idx, view) in serversStack.arrangedSubviews.enumerated() where idx < serversDraft.count {
+            for sub in view.subviews {
+                guard let f = sub as? NSTextField, let id = f.identifier?.rawValue else { continue }
+                switch id {
+                case "server-name":
+                    serversDraft[idx].name = f.stringValue.trimmingCharacters(in: .whitespaces)
+                case "server-url":
+                    if let url = ServerEditing.validateBaseURL(f.stringValue) {
+                        serversDraft[idx].baseURL = url
+                    }
+                default: break
+                }
+            }
+        }
+    }
+
+    @objc private func serverFieldCommitted(_ sender: NSTextField) {
+        let idx = sender.tag
+        guard serversDraft.indices.contains(idx),
+              let id = sender.identifier?.rawValue else { return }
+        switch id {
+        case "server-name":
+            serversDraft[idx].name = sender.stringValue.trimmingCharacters(in: .whitespaces)
+        case "server-url":
+            if let url = ServerEditing.validateBaseURL(sender.stringValue) {
+                serversDraft[idx].baseURL = url
+            }
+        default: break
+        }
+        rebuildRolePopups()
+    }
+
+    @objc private func addServer() {
+        commitServersDraftFromUI()
+        let new = ServerProfile(name: "New", baseURL: URL(string: "http://localhost:5001")!)
+        serversDraft.append(new)
+        rebuildServersUI()
+        rebuildRolePopups()
+    }
+
+    @objc private func removeServer(_ sender: NSButton) {
+        commitServersDraftFromUI()
+        let idx = sender.tag
+        guard serversDraft.indices.contains(idx) else { return }
+        let target = serversDraft[idx]
+        // Tunnel through ServerEditing so the role-pointer cleanup rule is
+        // applied in lockstep with the deletion (and the no-default guard
+        // refuses if the user somehow clicks on a default row).
+        var snapshot = AppState.shared.settings
+        snapshot.servers = serversDraft
+        snapshot.defaultServerId = defaultServerIdDraft
+        snapshot.summarizerServerId = summarizerServerIdDraft
+        snapshot.extractorServerId = extractorServerIdDraft
+        snapshot.embeddingsServerId = embeddingsServerIdDraft
+        ServerEditing.removeProfile(target.id, from: &snapshot)
+        serversDraft = snapshot.servers
+        defaultServerIdDraft = snapshot.defaultServerId
+        summarizerServerIdDraft = snapshot.summarizerServerId
+        extractorServerIdDraft = snapshot.extractorServerId
+        embeddingsServerIdDraft = snapshot.embeddingsServerId
+        probeStatusDraft.removeValue(forKey: target.id)
+        rebuildServersUI()
+        rebuildRolePopups()
+    }
+
+    @objc private func testServer(_ sender: NSButton) {
+        commitServersDraftFromUI()
+        let idx = sender.tag
+        guard serversDraft.indices.contains(idx) else { return }
+        let profile = serversDraft[idx]
+        sender.isEnabled = false
+        let pid = profile.id
+        ServerProbe.probe(baseURL: profile.baseURL) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if let row = sender.superview {
+                    sender.isEnabled = true
+                    if let dot = row.subviews.first(where: {
+                        ($0 as? NSTextField)?.identifier?.rawValue == "server-status"
+                    }) as? NSTextField {
+                        switch result {
+                        case .success(let caps):
+                            self.probeStatusDraft[pid] = "ok"
+                            if let i = self.serversDraft.firstIndex(where: { $0.id == pid }) {
+                                self.serversDraft[i].capabilities = caps
+                                self.serversDraft[i].lastProbed = Date()
+                            }
+                            dot.stringValue = "●"
+                            dot.textColor = .systemGreen
+                            dot.toolTip = caps.modelName ?? "Reachable"
+                        case .failure(let err):
+                            self.probeStatusDraft[pid] = "fail"
+                            dot.stringValue = "●"
+                            dot.textColor = .systemRed
+                            dot.toolTip = err.description
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @objc private func roleAssignmentChanged(_ sender: NSPopUpButton) {
+        let pickedId = sender.selectedItem?.representedObject as? UUID
+        switch sender.tag {
+        case 0:
+            // Default — re-point to the picked id; never clear.
+            if let pickedId = pickedId { defaultServerIdDraft = pickedId }
+        case 1: summarizerServerIdDraft = pickedId
+        case 2: extractorServerIdDraft = pickedId
+        case 3: embeddingsServerIdDraft = pickedId
+        default: break
+        }
+        rebuildRolePopups()
+        rebuildServersUI()  // refresh delete-button enabled state
+    }
+
+    /// Refill the four role-assignment popups from `serversDraft`. Default's
+    /// list excludes "(use default)" since there's no nullable fallback for
+    /// that role; the side-call popups offer it.
+    private func rebuildRolePopups() {
+        func fill(_ popup: NSPopUpButton, includeNone: Bool, currentId: UUID?) {
+            popup.removeAllItems()
+            if includeNone {
+                popup.addItem(withTitle: "(use default)")
+                popup.lastItem?.representedObject = nil as UUID?
+            }
+            for p in serversDraft {
+                popup.addItem(withTitle: p.name.isEmpty ? "(unnamed)" : p.name)
+                popup.lastItem?.representedObject = p.id
+            }
+            if let id = currentId,
+               let i = popup.itemArray.firstIndex(where: { ($0.representedObject as? UUID) == id }) {
+                popup.selectItem(at: i)
+            } else {
+                popup.selectItem(at: 0)
+            }
+        }
+        fill(defaultServerPopup, includeNone: false, currentId: defaultServerIdDraft)
+        fill(summarizerServerPopup, includeNone: true, currentId: summarizerServerIdDraft)
+        fill(extractorServerPopup, includeNone: true, currentId: extractorServerIdDraft)
+        fill(embeddingsServerPopup, includeNone: true, currentId: embeddingsServerIdDraft)
     }
 }
 
