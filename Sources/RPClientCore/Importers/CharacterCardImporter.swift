@@ -78,16 +78,61 @@ enum CharacterCardImporter {
 
     // MARK: - Decoding
 
-    /// ST v2 card envelope. The `data` field carries every field we map onto
-    /// `Character` — top-level fields (name, description, etc.) are present
-    /// only on v1 cards, where the envelope itself is missing.
+    /// Card envelope covering every JSON shape we accept:
+    ///   • ST v2: `{spec: "chara_card_v2", data: {...}}` — `data` carries
+    ///     every mapped field.
+    ///   • ST/TavernAI v1: flat top-level `{name, description, personality,
+    ///     scenario, first_mes, ...}`. No `data` block, no `spec`.
+    ///   • Pygmalion v1: same as TavernAI v1 but uses aliased keys
+    ///     (`char_name` for `name`, `char_persona` for `personality`,
+    ///     `char_greeting` for `first_mes`, `world_scenario` for `scenario`).
+    ///     KoboldAI Lite tolerates these aliases on import; we do too so
+    ///     cards exported from kobold round-trip cleanly.
     private struct CardEnvelope: Decodable {
         let spec: String?
         let spec_version: String?
         let data: CardData?
-        // V1 fallback: top-level fields. We only check `name` to recognise
-        // the shape; we don't actually map v1 onto `Character`.
+        // V1 / Pygmalion top-level fields. CodingKeys aliases the Pygmalion
+        // names onto the modern field names so a single field on the
+        // envelope covers either spelling.
         let name: String?
+        let description: String?
+        let personality: String?
+        let scenario: String?
+        let first_mes: String?
+        let mes_example: String?
+        let creator: String?
+        let character_version: String?
+        let tags: [String]?
+
+        private enum CodingKeys: String, CodingKey {
+            case spec, spec_version, data
+            case name, description, personality, scenario, first_mes, mes_example
+            case creator, character_version, tags
+            // Pygmalion aliases — decoded as fallbacks below.
+            case char_name, char_persona, char_greeting, world_scenario, example_dialogue
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            spec = try c.decodeIfPresent(String.self, forKey: .spec)
+            spec_version = try c.decodeIfPresent(String.self, forKey: .spec_version)
+            data = try c.decodeIfPresent(CardData.self, forKey: .data)
+            name = try c.decodeIfPresent(String.self, forKey: .name)
+                ?? c.decodeIfPresent(String.self, forKey: .char_name)
+            description = try c.decodeIfPresent(String.self, forKey: .description)
+            personality = try c.decodeIfPresent(String.self, forKey: .personality)
+                ?? c.decodeIfPresent(String.self, forKey: .char_persona)
+            scenario = try c.decodeIfPresent(String.self, forKey: .scenario)
+                ?? c.decodeIfPresent(String.self, forKey: .world_scenario)
+            first_mes = try c.decodeIfPresent(String.self, forKey: .first_mes)
+                ?? c.decodeIfPresent(String.self, forKey: .char_greeting)
+            mes_example = try c.decodeIfPresent(String.self, forKey: .mes_example)
+                ?? c.decodeIfPresent(String.self, forKey: .example_dialogue)
+            creator = try c.decodeIfPresent(String.self, forKey: .creator)
+            character_version = try c.decodeIfPresent(String.self, forKey: .character_version)
+            tags = try c.decodeIfPresent([String].self, forKey: .tags)
+        }
     }
 
     private struct CardData: Decodable {
@@ -133,34 +178,78 @@ enum CharacterCardImporter {
         } catch {
             throw ImportError.invalidJSON(String(describing: error))
         }
-        // V2 cards have spec="chara_card_v2". V1 cards have no spec field
-        // (or spec="chara_card_v1"). Accept v2 only.
-        let spec = envelope.spec ?? (envelope.name != nil ? "chara_card_v1" : "")
-        guard spec == "chara_card_v2" else {
-            throw ImportError.unsupportedSpec(spec.isEmpty ? "<missing spec>" : spec)
+        // v2 cards have a spec="chara_card_v2" + data block. v1 / Pygmalion
+        // cards skip the envelope entirely and put fields at the top level.
+        // Anything else (future spec, malformed) gets rejected — but we lean
+        // toward acceptance: a missing spec with v1 fields populated is
+        // assumed to be v1 even if the file doesn't say so explicitly,
+        // matching kobold's loose import policy.
+        if envelope.spec == "chara_card_v2", let cardData = envelope.data {
+            return try mapV2(cardData)
         }
-        guard let cardData = envelope.data else {
-            // spec=v2 without a data block is malformed. Treat as v1-shape.
-            throw ImportError.unsupportedSpec("chara_card_v2 (missing data)")
+        if let spec = envelope.spec, spec != "chara_card_v1", !spec.isEmpty {
+            throw ImportError.unsupportedSpec(spec)
         }
-        guard let name = cardData.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+        return try mapV1(envelope)
+    }
+
+    /// Build a `Character` from a v2 `data` block.
+    private static func mapV2(_ d: CardData) throws -> Character {
+        guard let name = d.name?.trimmingCharacters(in: .whitespacesAndNewlines),
               !name.isEmpty else {
             throw ImportError.missingName
         }
         return Character(
             id: UUID(),
             name: name,
-            description: cardData.description ?? "",
-            personality: cardData.personality ?? "",
-            scenario: cardData.scenario ?? "",
-            firstMessage: cardData.first_mes ?? "",
-            alternateGreetings: cardData.alternate_greetings ?? [],
-            systemPrompt: nonEmpty(cardData.system_prompt),
-            postHistoryInstructions: nonEmpty(cardData.post_history_instructions),
-            tags: cardData.tags ?? [],
-            creator: nonEmpty(cardData.creator),
-            characterVersion: nonEmpty(cardData.character_version),
-            charBook: mapCharBook(cardData.character_book),
+            description: d.description ?? "",
+            personality: d.personality ?? "",
+            scenario: d.scenario ?? "",
+            firstMessage: d.first_mes ?? "",
+            alternateGreetings: d.alternate_greetings ?? [],
+            systemPrompt: nonEmpty(d.system_prompt),
+            postHistoryInstructions: nonEmpty(d.post_history_instructions),
+            tags: d.tags ?? [],
+            creator: nonEmpty(d.creator),
+            characterVersion: nonEmpty(d.character_version),
+            charBook: mapCharBook(d.character_book),
+            created: Date()
+        )
+    }
+
+    /// Build a `Character` from a flat v1 / Pygmalion envelope. v1 cards
+    /// don't carry `system_prompt`, `post_history_instructions`,
+    /// `alternate_greetings`, or a `character_book`, so those land empty —
+    /// the user can fill them in later via the (future) editor. `mes_example`
+    /// from v1 is folded into the description with a separator since
+    /// `Character` has no dedicated example-dialogue field; this matches
+    /// what ST does when it converts a v1 card to v2 internally.
+    private static func mapV1(_ env: CardEnvelope) throws -> Character {
+        guard let rawName = env.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawName.isEmpty else {
+            throw ImportError.missingName
+        }
+        let baseDescription = env.description ?? ""
+        let example = env.mes_example?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let description: String = {
+            guard !example.isEmpty else { return baseDescription }
+            let separator = baseDescription.isEmpty ? "" : "\n\n"
+            return baseDescription + separator + "Example dialogue:\n" + example
+        }()
+        return Character(
+            id: UUID(),
+            name: rawName,
+            description: description,
+            personality: env.personality ?? "",
+            scenario: env.scenario ?? "",
+            firstMessage: env.first_mes ?? "",
+            alternateGreetings: [],
+            systemPrompt: nil,
+            postHistoryInstructions: nil,
+            tags: env.tags ?? [],
+            creator: nonEmpty(env.creator),
+            characterVersion: nonEmpty(env.character_version),
+            charBook: [],
             created: Date()
         )
     }

@@ -75,18 +75,85 @@ func characterCardImporterTests() -> TestSuite {
         try expectEqual(prophecy.priority, 3)
     }
 
-    s.test("v1 cards are rejected with unsupportedSpec") {
+    s.test("v1 flat-shape cards import (TavernAI / kobold)") {
+        // No `spec`, no `data` — fields live at the top level. KoboldAI
+        // Lite exports look like this. We accept and map.
         let v1 = #"""
         {
             "name": "Old Card",
-            "description": "v1 shape, no spec, no data block"
+            "description": "An aging archivist.",
+            "personality": "Quiet, watchful.",
+            "scenario": "A library after closing.",
+            "first_mes": "*She looks up.* \"Did you need something?\"",
+            "mes_example": "<START>\nUser: hi\nOld Card: hello",
+            "tags": ["fantasy"]
+        }
+        """#
+        let result = try CharacterCardImporter.importJSONData(Data(v1.utf8))
+        let c = result.character
+        try expectEqual(c.name, "Old Card")
+        try expectEqual(c.personality, "Quiet, watchful.")
+        try expectEqual(c.scenario, "A library after closing.")
+        try expectEqual(c.firstMessage, "*She looks up.* \"Did you need something?\"")
+        try expectEqual(c.tags, ["fantasy"])
+        // mes_example is folded into description so the example dialogue
+        // isn't lost on a card that has no v2 equivalent field.
+        try expectTrue(c.description.contains("An aging archivist."))
+        try expectTrue(c.description.contains("Example dialogue:"))
+        try expectTrue(c.description.contains("Old Card: hello"))
+        // v1 has no v2-only fields; they default to empty/nil.
+        try expectTrue(c.alternateGreetings.isEmpty)
+        try expectNil(c.systemPrompt)
+        try expectNil(c.postHistoryInstructions)
+        try expectTrue(c.charBook.isEmpty)
+    }
+
+    s.test("Pygmalion-aliased v1 cards import via char_name / char_persona / char_greeting / world_scenario") {
+        let pyg = #"""
+        {
+            "char_name": "Pyg",
+            "char_persona": "Lab assistant.",
+            "world_scenario": "A bustling research station.",
+            "char_greeting": "Welcome aboard.",
+            "example_dialogue": "<START>\nUser: hi\nPyg: hi"
+        }
+        """#
+        let c = try CharacterCardImporter.importJSONData(Data(pyg.utf8)).character
+        try expectEqual(c.name, "Pyg")
+        try expectEqual(c.personality, "Lab assistant.")
+        try expectEqual(c.scenario, "A bustling research station.")
+        try expectEqual(c.firstMessage, "Welcome aboard.")
+        try expectTrue(c.description.contains("Pyg: hi"))
+    }
+
+    s.test("explicit chara_card_v1 spec is also accepted") {
+        // Some kobold exports include `spec: "chara_card_v1"` even though
+        // it's effectively the same flat shape. We treat v1 as v1 either
+        // way — only unknown spec values reject.
+        let v1 = #"""
+        {
+            "spec": "chara_card_v1",
+            "name": "Tagged",
+            "description": "explicit v1"
+        }
+        """#
+        let c = try CharacterCardImporter.importJSONData(Data(v1.utf8)).character
+        try expectEqual(c.name, "Tagged")
+        try expectEqual(c.description, "explicit v1")
+    }
+
+    s.test("unknown spec values still reject with unsupportedSpec") {
+        let future = #"""
+        {
+            "spec": "chara_card_v3",
+            "data": {"name": "Time Traveller"}
         }
         """#
         do {
-            _ = try CharacterCardImporter.importJSONData(Data(v1.utf8))
+            _ = try CharacterCardImporter.importJSONData(Data(future.utf8))
             try expectTrue(false, "expected throw")
         } catch CharacterCardImporter.ImportError.unsupportedSpec(let s) {
-            try expectEqual(s, "chara_card_v1")
+            try expectEqual(s, "chara_card_v3")
         }
     }
 
