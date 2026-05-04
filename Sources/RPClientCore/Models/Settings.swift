@@ -50,6 +50,11 @@ struct Settings: Codable, Equatable {
     /// and the chunker never see it). When false, an empty `<think></think>`
     /// pre-fill suppresses thinking — that's the Qwen3 non-thinking pattern.
     var qwenThinkingEnabled: Bool
+    /// Default persona id picked up by `newChat` when a chat is created
+    /// without an explicit persona. Nil = anonymous (the prompt builder will
+    /// fall back to `userName` as before). The library window owns assignment
+    /// of this — Settings just remembers the pointer.
+    var defaultPersonaId: UUID?
 
     static let `default` = Settings(
         serverURL: "http://localhost:5001",
@@ -64,7 +69,8 @@ struct Settings: Codable, Equatable {
         factExtractionEnabled: true,
         factExtractionEveryNTurns: 4,
         priorityTopicLibrary: [],
-        qwenThinkingEnabled: false
+        qwenThinkingEnabled: false,
+        defaultPersonaId: nil
     )
 
     init(serverURL: String, userName: String = "",
@@ -73,7 +79,8 @@ struct Settings: Codable, Equatable {
          uiFontOffset: Int, replyTokensOverride: Int,
          factExtractionEnabled: Bool, factExtractionEveryNTurns: Int,
          priorityTopicLibrary: [LibraryTopic],
-         qwenThinkingEnabled: Bool = false) {
+         qwenThinkingEnabled: Bool = false,
+         defaultPersonaId: UUID? = nil) {
         self.serverURL = serverURL
         self.userName = userName
         self.defaultTemplateId = defaultTemplateId
@@ -87,6 +94,7 @@ struct Settings: Codable, Equatable {
         self.factExtractionEveryNTurns = factExtractionEveryNTurns
         self.priorityTopicLibrary = priorityTopicLibrary
         self.qwenThinkingEnabled = qwenThinkingEnabled
+        self.defaultPersonaId = defaultPersonaId
     }
 
     init(from decoder: Decoder) throws {
@@ -105,5 +113,6 @@ struct Settings: Codable, Equatable {
         factExtractionEveryNTurns = try c.decodeIfPresent(Int.self, forKey: .factExtractionEveryNTurns) ?? d.factExtractionEveryNTurns
         priorityTopicLibrary = try c.decodeIfPresent([LibraryTopic].self, forKey: .priorityTopicLibrary) ?? d.priorityTopicLibrary
         qwenThinkingEnabled = try c.decodeIfPresent(Bool.self, forKey: .qwenThinkingEnabled) ?? d.qwenThinkingEnabled
+        defaultPersonaId = try c.decodeIfPresent(UUID.self, forKey: .defaultPersonaId)
     }
 }

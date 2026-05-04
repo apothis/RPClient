@@ -1,10 +1,12 @@
 import AppKit
+import UniformTypeIdentifiers
 
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
     private var splitVC: NSSplitViewController!
     private var settingsWC: SettingsWindowController?
     private var factEvalWC: FactExtractorEvalWindow?
+    private var libraryWC: LibraryWindowController?
 
     public override init() {
         super.init()
@@ -93,6 +95,21 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             title: "New Chat",
             action: #selector(newChat),
             keyEquivalent: "n"))
+        fileMenu.addItem(NSMenuItem(
+            title: "New Chat with Character…",
+            action: #selector(newChatWithCharacter),
+            keyEquivalent: "N"))
+        fileMenu.addItem(NSMenuItem.separator())
+        fileMenu.addItem(NSMenuItem(
+            title: "Import Character…",
+            action: #selector(importCharacter),
+            keyEquivalent: "o"))
+        let libraryItem = NSMenuItem(
+            title: "Show Library",
+            action: #selector(showLibrary),
+            keyEquivalent: "L")
+        libraryItem.keyEquivalentModifierMask = [.command, .shift]
+        fileMenu.addItem(libraryItem)
         fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(NSMenuItem(
             title: "Reload Server Info",
@@ -185,6 +202,68 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func newChat() {
         AppState.shared.newChat()
+    }
+
+    @objc private func newChatWithCharacter() {
+        let characters = AppState.shared.characters
+        guard !characters.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "No characters yet"
+            alert.informativeText = "Import a character card first (File → Import Character…)."
+            alert.addButton(withTitle: "Open Library")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn { showLibrary() }
+            return
+        }
+        let menu = NSMenu()
+        for c in characters {
+            let item = NSMenuItem(
+                title: c.name,
+                action: #selector(startChatFromMenu(_:)),
+                keyEquivalent: "")
+            item.target = self
+            item.representedObject = c.id.uuidString
+            menu.addItem(item)
+        }
+        // Surface anchored under the title bar of the main window so the user
+        // sees it pop where the cursor isn't required.
+        let location = NSPoint(x: 20, y: 20)
+        let anchor = window.contentView ?? NSView()
+        menu.popUp(positioning: nil, at: location, in: anchor)
+    }
+
+    @objc private func startChatFromMenu(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let id = UUID(uuidString: raw),
+              let character = AppState.shared.character(id: id) else { return }
+        AppState.shared.newChat(withCharacter: character)
+    }
+
+    @objc private func importCharacter() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.png, .json]
+        panel.message = "Choose a SillyTavern v2 character card (.png or .json)."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            _ = try AppState.shared.importCharacter(from: url)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Couldn't import \(url.lastPathComponent)"
+            alert.informativeText = String(describing: error)
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+    }
+
+    @objc private func showLibrary() {
+        if libraryWC == nil {
+            libraryWC = LibraryWindowController()
+        }
+        libraryWC?.showWindow(nil)
+        libraryWC?.window?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func reloadServer() {

@@ -5,6 +5,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let userNameField = NSTextField()
     private let templatePopup = NSPopUpButton()
     private let presetPopup = NSPopUpButton()
+    private let personaPopup = NSPopUpButton()
     private let voiceCheck = NSButton(checkboxWithTitle: "Speak replies", target: nil, action: nil)
     private let qwenThinkingCheck = NSButton(
         checkboxWithTitle: "Qwen 3: enable thinking mode (strips <think>…</think> from replies)",
@@ -71,6 +72,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let userNameLabel = NSTextField(labelWithString: "Your name:")
         let templateLabel = NSTextField(labelWithString: "Default template:")
         let presetLabel = NSTextField(labelWithString: "Default sampler preset:")
+        let personaLabel = NSTextField(labelWithString: "Default persona:")
         let ctxLabel = NSTextField(labelWithString: "Max context (0 = server max):")
         let appearanceHeader = NSTextField(labelWithString: "Appearance")
         appearanceHeader.font = Theme.bold(12)
@@ -127,6 +129,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             presetPopup.addItem(withTitle: p.name)
             presetPopup.lastItem?.representedObject = p.id
         }
+        rebuildPersonaPopup()
 
         saveButton.target = self
         saveButton.action = #selector(save)
@@ -223,6 +226,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             [userNameLabel, userNameField],
             [templateLabel, templatePopup],
             [presetLabel, presetPopup],
+            [personaLabel, personaPopup],
             [ctxLabel, ctxField],
             [NSView(), qwenThinkingCheck],
             [NSView(), voiceCheck],
@@ -419,6 +423,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         if let i = SamplerPreset.presets.firstIndex(where: { $0.id == s.defaultSamplerPresetId }) {
             presetPopup.selectItem(at: i)
         }
+        rebuildPersonaPopup()
+        selectPersonaInPopup(s.defaultPersonaId)
         voiceCheck.state = s.voiceEnabled ? .on : .off
         qwenThinkingCheck.state = s.qwenThinkingEnabled ? .on : .off
         ctxField.integerValue = s.maxContextOverride
@@ -442,6 +448,39 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         rebuildLibraryUI()
     }
 
+    /// Rebuild the persona popup from the live `AppState.personas` list.
+    /// Item 0 is always "(none — anonymous)" so the user can clear the
+    /// default; subsequent items carry the persona id in `representedObject`
+    /// for save() to read back.
+    private func rebuildPersonaPopup() {
+        personaPopup.removeAllItems()
+        personaPopup.addItem(withTitle: "(none — anonymous)")
+        personaPopup.lastItem?.representedObject = nil
+        for p in AppState.shared.personas {
+            let title = p.name.isEmpty ? "(unnamed)" : p.name
+            personaPopup.addItem(withTitle: title)
+            personaPopup.lastItem?.representedObject = p.id.uuidString
+        }
+    }
+
+    private func selectPersonaInPopup(_ id: UUID?) {
+        guard let id = id else {
+            personaPopup.selectItem(at: 0)
+            return
+        }
+        // Items 1+ carry the persona id; item 0 is the "none" sentinel.
+        for i in 1..<personaPopup.numberOfItems {
+            let raw = personaPopup.item(at: i)?.representedObject as? String
+            if raw == id.uuidString {
+                personaPopup.selectItem(at: i)
+                return
+            }
+        }
+        // Persona referenced but not found (deleted while settings closed).
+        // Fall back to "none" so save doesn't write a dangling pointer back.
+        personaPopup.selectItem(at: 0)
+    }
+
     @objc private func save() {
         let templateId = (templatePopup.selectedItem?.representedObject as? String) ?? "gemma"
         let presetId = (presetPopup.selectedItem?.representedObject as? String) ?? "balanced"
@@ -450,6 +489,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         s.userName = userNameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         s.defaultTemplateId = templateId
         s.defaultSamplerPresetId = presetId
+        if let raw = personaPopup.selectedItem?.representedObject as? String,
+           let id = UUID(uuidString: raw) {
+            s.defaultPersonaId = id
+        } else {
+            s.defaultPersonaId = nil
+        }
         s.voiceEnabled = voiceCheck.state == .on
         s.qwenThinkingEnabled = qwenThinkingCheck.state == .on
         s.maxContextOverride = max(0, ctxField.integerValue)

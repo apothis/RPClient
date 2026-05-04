@@ -169,15 +169,41 @@ final class AppState {
     }
 
     func newChat() {
-        let c = Chat(
+        var c = Chat(
             templateId: detectedTemplateId ?? settings.defaultTemplateId,
             samplerPresetId: settings.defaultSamplerPresetId
         )
+        // Phase 3 §4 — new chats inherit the global default persona, if any.
+        // The character link only gets set by `newChat(withCharacter:)`.
+        c.personaId = settings.defaultPersonaId
         Storage.shared.saveChat(c)
         chats.insert(c, at: 0)
         currentChatId = c.id
         // Same reason as selectChat — fresh chat must not inherit the
         // previous chat's cache baseline.
+        lastSentPrompt = nil
+        lastCacheRatio = nil
+        NotificationCenter.default.post(name: AppNotification.chatListChanged, object: nil)
+        NotificationCenter.default.post(name: AppNotification.currentChatChanged, object: nil)
+    }
+
+    /// Create a new chat already bound to `character`. Used by the Library
+    /// window's "Start Chat" action and by the sidebar "+ New chat with
+    /// character…" flow. Title is seeded from the character name so the chat
+    /// is recognisable in the sidebar before the user has typed a single
+    /// turn. Step 3 doesn't yet seed `firstMessage` as turn 1 — that's
+    /// step 4's prompt-builder integration.
+    func newChat(withCharacter character: Character) {
+        var c = Chat(
+            templateId: detectedTemplateId ?? settings.defaultTemplateId,
+            samplerPresetId: settings.defaultSamplerPresetId
+        )
+        c.title = character.name
+        c.characterId = character.id
+        c.personaId = settings.defaultPersonaId
+        Storage.shared.saveChat(c)
+        chats.insert(c, at: 0)
+        currentChatId = c.id
         lastSentPrompt = nil
         lastCacheRatio = nil
         NotificationCenter.default.post(name: AppNotification.chatListChanged, object: nil)

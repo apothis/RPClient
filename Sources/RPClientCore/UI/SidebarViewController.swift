@@ -1,19 +1,19 @@
 import AppKit
+import UniformTypeIdentifiers
 
 final class SidebarViewController: NSViewController {
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
-    private let newButton = NSButton(title: "+ New Chat", target: nil, action: nil)
+    private let newButton = NSPopUpButton(frame: .zero, pullsDown: true)
 
     override func loadView() {
-        let v = NSView()
+        let v = SidebarRootView()
         v.wantsLayer = true
+        v.dropHandler = { [weak self] urls in self?.handleDroppedFiles(urls) ?? false }
+        v.registerForDraggedTypes([.fileURL])
         self.view = v
 
-        newButton.target = self
-        newButton.action = #selector(newChat)
-        newButton.bezelStyle = .rounded
-        newButton.translatesAutoresizingMaskIntoConstraints = false
+        configureNewButton()
         v.addSubview(newButton)
 
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("title"))
@@ -71,8 +71,65 @@ final class SidebarViewController: NSViewController {
         }
     }
 
-    @objc private func newChat() {
+    /// Configure the sidebar's new-chat button as a pull-down menu so the
+    /// V2 §4.3 split (New Chat vs. New Chat with Character…) fits the same
+    /// real estate without adding a second button. The first menu item's
+    /// title is what shows on the closed button.
+    private func configureNewButton() {
+        newButton.translatesAutoresizingMaskIntoConstraints = false
+        newButton.bezelStyle = .rounded
+        newButton.removeAllItems()
+        // Pull-down treats item 0 as the visible title; we add a hidden
+        // sentinel so item 1+ are the real actions.
+        newButton.addItem(withTitle: "+ New")
+        let plain = NSMenuItem(
+            title: "New Chat",
+            action: #selector(newChatPlain),
+            keyEquivalent: "")
+        plain.target = self
+        newButton.menu?.addItem(plain)
+        let withChar = NSMenuItem(
+            title: "New Chat with Character…",
+            action: #selector(newChatWithCharacter),
+            keyEquivalent: "")
+        withChar.target = self
+        newButton.menu?.addItem(withChar)
+    }
+
+    @objc private func newChatPlain() {
         AppState.shared.newChat()
+    }
+
+    @objc private func newChatWithCharacter() {
+        let characters = AppState.shared.characters
+        guard !characters.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "No characters yet"
+            alert.informativeText = "Drag a SillyTavern card PNG onto the sidebar, or use File → Import Character… to add one."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+        let menu = NSMenu()
+        for c in characters {
+            let item = NSMenuItem(
+                title: c.name,
+                action: #selector(startChatFromMenu(_:)),
+                keyEquivalent: "")
+            item.target = self
+            item.representedObject = c.id.uuidString
+            menu.addItem(item)
+        }
+        // Anchor near the new-chat button so the picker drops in-place.
+        let origin = NSPoint(x: 0, y: newButton.bounds.height)
+        menu.popUp(positioning: nil, at: origin, in: newButton)
+    }
+
+    @objc private func startChatFromMenu(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let id = UUID(uuidString: raw),
+              let character = AppState.shared.character(id: id) else { return }
+        AppState.shared.newChat(withCharacter: character)
     }
 
     @objc private func rowClicked() {
@@ -87,6 +144,42 @@ final class SidebarViewController: NSViewController {
         del.target = self
         m.addItem(del)
         return m
+    }
+
+    /// Try to import every dropped file as a character card. Errors are
+    /// surfaced individually so a partial drop (one good PNG, one corrupt)
+    /// still imports the good one. Returns true if at least one file was
+    /// successfully imported — that's what the dragging machinery uses to
+    /// decide whether to flash "accept" feedback to the user.
+    private func handleDroppedFiles(_ urls: [URL]) -> Bool {
+        guard !urls.isEmpty else { return false }
+        var importedCount = 0
+        var errors: [(String, Error)] = []
+        for url in urls {
+            let ext = url.pathExtension.lowercased()
+            guard ext == "png" || ext == "json" else { continue }
+            do {
+                _ = try AppState.shared.importCharacter(from: url)
+                importedCount += 1
+            } catch {
+                errors.append((url.lastPathComponent, error))
+            }
+        }
+        if !errors.isEmpty {
+            let alert = NSAlert()
+            if errors.count == 1, let first = errors.first {
+                alert.messageText = "Couldn't import \(first.0)"
+                alert.informativeText = String(describing: first.1)
+            } else {
+                alert.messageText = "Some imports failed"
+                alert.informativeText = errors
+                    .map { "• \($0.0): \($0.1)" }
+                    .joined(separator: "\n")
+            }
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+        return importedCount > 0
     }
 
     @objc private func deleteSelected() {
@@ -163,5 +256,41 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
             badge.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 1)
         ])
         return cell
+    }
+}
+
+/// Root NSView for the sidebar that accepts character-card drops anywhere on
+/// its surface. Hands off to a closure (set by `SidebarViewController`) so
+/// the dragging logic stays out of the controller.
+final class SidebarRootView: NSView {
+    /// Returns true if at least one of the dropped URLs was imported.
+    var dropHandler: (([URL]) -> Bool)?
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        urls(from: sender).contains(where: isCardURL) ? .copy : []
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        urls(from: sender).contains(where: isCardURL) ? .copy : []
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let candidates = urls(from: sender).filter(isCardURL)
+        guard !candidates.isEmpty else { return false }
+        return dropHandler?(candidates) ?? false
+    }
+
+    private func urls(from info: NSDraggingInfo) -> [URL] {
+        guard let items = info.draggingPasteboard.pasteboardItems else { return [] }
+        return items.compactMap { item in
+            guard let str = item.string(forType: .fileURL),
+                  let url = URL(string: str) else { return nil }
+            return url
+        }
+    }
+
+    private func isCardURL(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        return ext == "png" || ext == "json"
     }
 }
