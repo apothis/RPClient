@@ -13,6 +13,11 @@ let package = Package(
         .target(
             name: "RPClientCore",
             path: "Sources/RPClientCore",
+            resources: [
+                // In-app help system — markdown pages shipped as bundle
+                // resources, loaded via `Bundle.module`. See HelpIndex.swift.
+                .process("Help"),
+            ],
             swiftSettings: [
                 // Enables `@testable import RPClientCore` from the test runner in debug builds.
                 // Scoped to debug so release builds (the .app) are unaffected.

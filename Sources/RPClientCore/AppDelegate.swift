@@ -7,6 +7,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWC: SettingsWindowController?
     private var factEvalWC: FactExtractorEvalWindow?
     private var libraryWC: LibraryWindowController?
+    private var helpWC: HelpWindowController?
 
     public override init() {
         super.init()
@@ -181,6 +182,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: ""))
         debugMenuItem.submenu = debugMenu
 
+        let helpMenuItem = NSMenuItem()
+        main.addItem(helpMenuItem)
+        let helpMenu = NSMenu(title: "Help")
+        helpMenu.addItem(NSMenuItem(
+            title: "RPClient Help",
+            action: #selector(showHelp),
+            keyEquivalent: "?"))
+        helpMenuItem.submenu = helpMenu
+        // AppKit auto-routes ⌘? and the "Search" Help menu integration when
+        // the menu has the helpMenu role.
+        NSApp.helpMenu = helpMenu
+
         NSApp.mainMenu = main
     }
 
@@ -277,5 +290,23 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleInspector() {
         guard let item = splitVC.splitViewItems.last else { return }
         item.animator().isCollapsed.toggle()
+    }
+
+    @objc private func showHelp() {
+        if helpWC == nil {
+            helpWC = HelpWindowController()
+        }
+        helpWC?.showWindow(nil)
+        helpWC?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Entry point for inspector pane "?" buttons (later slices). Opens the
+    /// help window scrolled to a specific page and optional anchor. Renamed
+    /// from the menu's `showHelp` to keep `#selector(showHelp)` unambiguous.
+    public func openHelp(pageId: String, anchor: String? = nil) {
+        if helpWC == nil {
+            helpWC = HelpWindowController()
+        }
+        helpWC?.show(pageId: pageId, anchor: anchor)
     }
 }

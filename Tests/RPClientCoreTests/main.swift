@@ -12,6 +12,7 @@ let suites: [TestSuite] = [
     worldInfoEntryCodableTests(),
     worldInfoInjectorTests(),
     memoryAuditRegressionTests(),
+    helpIndexTests(),
 ]
 
 exit(TestRunner.run(suites))

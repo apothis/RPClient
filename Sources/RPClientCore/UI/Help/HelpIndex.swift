@@ -1,0 +1,66 @@
+import Foundation
+
+/// Two top-level books in the help system. The window's TOC shows pages
+/// grouped by book; both render through the same pipeline.
+enum HelpBook: String, CaseIterable {
+    case userGuide
+    case technical
+
+    var title: String {
+        switch self {
+        case .userGuide: return "User Guide"
+        case .technical: return "Technical Reference"
+        }
+    }
+}
+
+/// One help page. The id matches a `.md` filename in `Sources/RPClientCore/Help/`
+/// (without extension). Anchors inside a page are derived from heading text at
+/// render time — they are not enumerated here.
+struct HelpPage: Equatable {
+    let id: String
+    let title: String
+    let book: HelpBook
+}
+
+/// Single source of truth for the help system. Adding a page = appending an
+/// entry here and creating the matching `.md` file. The TestKit suite
+/// `helpIndexTests` asserts every entry resolves to a real, non-empty file.
+enum HelpIndex {
+    /// Slice 1 ships the skeleton plus the five pages a brand-new user needs
+    /// to get from "I just installed this" to "I'm in a chat". Memory pages,
+    /// library/settings/troubleshooting, and the technical book follow in
+    /// later slices — see [V2_PLAN-style] notes in conversation history.
+    static let pages: [HelpPage] = [
+        HelpPage(id: "quick-start",   title: "Quick Start",            book: .userGuide),
+        HelpPage(id: "chats-sidebar", title: "Chats & sidebar",        book: .userGuide),
+        HelpPage(id: "chat-view",     title: "The chat view",          book: .userGuide),
+        HelpPage(id: "input-bar",     title: "Input bar & token cap",  book: .userGuide),
+        HelpPage(id: "status-bar",    title: "Status bar",             book: .userGuide),
+    ]
+
+    static func page(id: String) -> HelpPage? {
+        pages.first { $0.id == id }
+    }
+
+    static func pages(in book: HelpBook) -> [HelpPage] {
+        pages.filter { $0.book == book }
+    }
+
+    /// Returns the markdown source for a page, or nil if the resource is
+    /// missing. Callers are expected to surface a "page not found" UI rather
+    /// than crashing — keeps a missing-resource bug discoverable.
+    static func markdown(for page: HelpPage) -> String? {
+        guard let url = Bundle.module.url(
+            forResource: page.id, withExtension: "md", subdirectory: "Help"
+        ) else {
+            // Fallback: SwiftPM flattens some processed resources depending on
+            // platform. Try without the subdirectory before giving up.
+            if let url = Bundle.module.url(forResource: page.id, withExtension: "md") {
+                return try? String(contentsOf: url, encoding: .utf8)
+            }
+            return nil
+        }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }
+}
