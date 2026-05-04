@@ -2,6 +2,8 @@
 
 Forward plan for the V2 surface area listed in [`PLAN.md`](PLAN.md) §10. The MVP and the Memory V2 subsystem (Steps A–D, see [`MEMORY_V2_PLAN.md`](MEMORY_V2_PLAN.md)) shipped 2026-05-03. This doc plans everything outside the memory subsystem; memory polish is deferred per the user's directive and tracked in [`NEXT_STAGES.md`](NEXT_STAGES.md) §A.
 
+**Status as of 2026-05-04.** Phase 1 (V5 Lorebook UI) shipped 2026-05-04. Phase 2 (V1 Swipes) shipped 2026-05-04, including the stale-variant detection follow-up not in the original spec. Phase 3 is next.
+
 ---
 
 ## 0. V2 inventory
@@ -10,11 +12,11 @@ From [`PLAN.md`](PLAN.md) §10 (with cross-links to the existing fragmented note
 
 | # | V2 item | Where mentioned | Status today |
 |---|---|---|---|
-| V1 | Swipes (alternative continuations) | NEXT_STAGES B1 | Not started |
+| V1 | Swipes (alternative continuations) | NEXT_STAGES B1 | **Shipped 2026-05-04** (Phase 2, including stale-variant badge + per-variant discard) |
 | V2 | Branching (turn tree) | NEXT_STAGES B4 | Not started; superset of V1 |
 | V3 | SillyTavern v2 character cards | NEXT_STAGES C2 | Not started |
 | V4 | Personas (user side) | PLAN.md §10 only | Not started |
-| V5 | Lorebook editor UI | NEXT_STAGES C1 | Data model exists ([`WorldInfoEntry.swift`](Sources/RPClientCore/Models/WorldInfoEntry.swift)); no UI, no injector |
+| V5 | Lorebook editor UI | NEXT_STAGES C1 | **Shipped 2026-05-04** (Phase 1) |
 | V6 | Per-character voices | NEXT_STAGES F2 | Not started |
 | V8 | Multi-server / multi-server switching | NEXT_STAGES F1 | Not started |
 | V9 | Group chats | PLAN.md §10 only | Not started |
@@ -30,9 +32,9 @@ The order below is the recommended path. Each phase ends with a shippable, runna
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Phase 1   V5 Lorebook UI            (closes data-model gap)    │
-│  Phase 2   V1 Swipes                 (high-value, no deps)      │
-│  Phase 3   V3 Character cards + V4 Personas  (paired)           │
+│  Phase 1   V5 Lorebook UI            ✅ shipped 2026-05-04      │
+│  Phase 2   V1 Swipes                 ✅ shipped 2026-05-04      │
+│  Phase 3   V3 Character cards + V4 Personas  ← next             │
 │  Phase 4   V8 Multi-server                                      │
 │  Phase 5   V10 Avatars                (small; unlocks V3 polish)│
 │  Phase 6   V6 Per-character voices    (depends on Entity store) │
@@ -54,7 +56,9 @@ If the user only wants to do one or two of these, the recommended pair is **V5 +
 
 ---
 
-## 2. Phase 1 — V5 Lorebook editor UI
+## 2. Phase 1 — V5 Lorebook editor UI ✅ shipped 2026-05-04
+
+Landed across four commits (`076f548` → `dacb4fc`). Section preserved as historical record of the shape that shipped.
 
 **Why first.** [`Models/WorldInfoEntry.swift`](Sources/RPClientCore/Models/WorldInfoEntry.swift) exists, [`Chat.worldInfo`](Sources/RPClientCore/Models/Chat.swift) is persisted, but nothing reads it and nothing writes it through UI. Two-day job to close the loop.
 
@@ -125,7 +129,11 @@ Status-bar [`StatusBar.swift`](Sources/RPClientCore/UI/StatusBar.swift) already 
 
 ---
 
-## 3. Phase 2 — V1 Swipes (alternative continuations)
+## 3. Phase 2 — V1 Swipes (alternative continuations) ✅ shipped 2026-05-04
+
+Landed across four commits (`764b41f` model → `89ac4a6` core logic → `c750139` UI → `54fca62` stale-variant follow-up). Section preserved as historical record of the shape that shipped.
+
+**Stale-variant detection** (extension to the original spec, §3.6 last bullet): each `TurnVariant` records a `contextFingerprint` (FNV-1a hash of the prefix turns' id/role/text) at generation time; `Chat.isVariantStale(turnIndex:variantIndex:)` recomputes and compares. UI badges the active variant with `⚠` when stale, and a per-turn discard button (`minus.circle`) lets the user prune. Memory/summary blocks are deliberately excluded from the fingerprint — only turn text edits / reorders / page-swaps mark variants stale.
 
 **The pitch.** Generate N alternative replies for the same prompt; user pages through them with arrow controls; pinned variant becomes "the" reply for the next turn's context.
 
@@ -517,8 +525,8 @@ Phases 1, 2, 3, 4 all change the Chat or Settings schema. Add a `Tests/Migration
 
 | Phase | Items | Effort | Cumulative |
 |---|---|---|---|
-| 1 | V5 Lorebook UI | 2 days | 2 |
-| 2 | V1 Swipes | 2-3 days | 5 |
+| 1 | V5 Lorebook UI | 2 days | 2 | ✅ |
+| 2 | V1 Swipes | 2-3 days | 5 | ✅ |
 | 3 | V3 Character cards + V4 Personas | 3-4 days | 9 |
 | 4 | V8 Multi-server | 3 days | 12 |
 | 5 | V10 Avatars (sidebar + turn) | 1 day | 13 |
@@ -530,6 +538,8 @@ Phases 1–6 together (~15 days of focused work) ship every V2 item except branc
 
 ---
 
-## 12. Recommended first move
+## 12. Recommended next move
 
-If picking up this plan from a fresh context: start with **Phase 1 (V5 Lorebook)**. It's the smallest, closes a known gap, exercises the prompt-builder injection path you'll touch again in Phase 3, and ships in two days. Then ask the user before moving on — Phase 2 (swipes) and Phase 3 (cards + personas) are both strong follow-ups but address different needs.
+Phases 1 and 2 are done. From a fresh context: start with **Phase 3 (V3 character cards + V4 personas)** — it's the next-biggest user-visible win and pairs cleanly because cards typically include both an AI-character payload and a recommended user persona. Spec is in §4.
+
+The original recommendation was "start with Phase 1" — preserved for historical context but no longer applicable.
