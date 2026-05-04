@@ -372,5 +372,76 @@ func promptBuilderTests() -> TestSuite {
         try expectTrue(prompt.contains("Description: Witch of the moor."))
     }
 
+    // MARK: - effectiveAuthorsNote (Phase 3 §4.4 step 4d)
+
+    s.test("effectiveAuthorsNote returns nil when neither user note nor card phi exist") {
+        let chat = Chat()
+        try expectNil(PromptBuilder.effectiveAuthorsNote(chat: chat, character: nil))
+    }
+
+    s.test("effectiveAuthorsNote returns user-set note even when card has phi") {
+        var chat = Chat()
+        chat.authorsNote = AuthorsNote(text: "User wins.", depth: 2)
+        var card = Character(name: "Nyx")
+        card.postHistoryInstructions = "Card loses."
+        let an = try expectNotNil(PromptBuilder.effectiveAuthorsNote(chat: chat, character: card))
+        try expectEqual(an.text, "User wins.")
+        try expectEqual(an.depth, 2)
+    }
+
+    s.test("effectiveAuthorsNote falls back to card postHistoryInstructions when user note empty") {
+        var chat = Chat()
+        chat.authorsNote = AuthorsNote(text: "", depth: 4)
+        var card = Character(name: "Nyx")
+        card.postHistoryInstructions = "Stay in scene."
+        let an = try expectNotNil(PromptBuilder.effectiveAuthorsNote(chat: chat, character: card))
+        try expectEqual(an.text, "Stay in scene.")
+        try expectEqual(an.depth, 4, "synthesised note inherits chat's existing AN depth")
+    }
+
+    s.test("effectiveAuthorsNote treats whitespace-only user note as empty for fallback purposes") {
+        var chat = Chat()
+        chat.authorsNote = AuthorsNote(text: "   \n  ", depth: 4)
+        var card = Character(name: "Nyx")
+        card.postHistoryInstructions = "Stay in scene."
+        let an = try expectNotNil(PromptBuilder.effectiveAuthorsNote(chat: chat, character: card))
+        try expectEqual(an.text, "Stay in scene.")
+    }
+
+    s.test("effectiveAuthorsNote returns nil when card phi is nil/empty") {
+        var chat = Chat()
+        var card = Character(name: "Nyx")
+        card.postHistoryInstructions = nil
+        try expectNil(PromptBuilder.effectiveAuthorsNote(chat: chat, character: card))
+        card.postHistoryInstructions = "  "
+        try expectNil(PromptBuilder.effectiveAuthorsNote(chat: chat, character: card))
+    }
+
+    s.test("build injects card postHistoryInstructions when user note empty") {
+        var chat = Chat()
+        chat.templateId = "gemma"
+        chat.turns = [Turn(role: .user, text: "hello")]
+        // Default AN depth is 4 — unreachable with 1 turn. Use depth 0
+        // (attach to the latest turn) so the synthesized note actually
+        // lands in the prompt for assertion.
+        chat.authorsNote = AuthorsNote(text: "", depth: 0)
+        var card = Character(name: "Nyx")
+        card.postHistoryInstructions = "Stay in third person."
+        let (prompt, _) = PromptBuilder.build(chat: chat, character: card)
+        try expectTrue(prompt.contains("Stay in third person."))
+    }
+
+    s.test("build does NOT inject card postHistoryInstructions when user note is set") {
+        var chat = Chat()
+        chat.templateId = "gemma"
+        chat.turns = [Turn(role: .user, text: "hello")]
+        chat.authorsNote = AuthorsNote(text: "User-defined nudge.", depth: 0)
+        var card = Character(name: "Nyx")
+        card.postHistoryInstructions = "Card-defined nudge."
+        let (prompt, _) = PromptBuilder.build(chat: chat, character: card)
+        try expectTrue(prompt.contains("User-defined nudge."))
+        try expectFalse(prompt.contains("Card-defined nudge."))
+    }
+
     return s
 }

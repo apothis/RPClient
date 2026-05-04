@@ -129,9 +129,12 @@ enum TokenBudget {
             group.enter()
             counter.count(sceneText, kobold: kobold) { n in sceneTok = n; group.leave() }
         }
-        if !chat.authorsNote.text.isEmpty {
+        // Falls back to character.postHistoryInstructions when the user
+        // hasn't typed an author's note. See PromptBuilder.effectiveAuthorsNote.
+        let effectiveAN = PromptBuilder.effectiveAuthorsNote(chat: chat, character: character)
+        if let an = effectiveAN, !an.text.isEmpty {
             group.enter()
-            counter.count(chat.authorsNote.text, kobold: kobold) { n in anTok = n; group.leave() }
+            counter.count(an.text, kobold: kobold) { n in anTok = n; group.leave() }
         }
         // Count only what the prompt-builder actually injects (selective hits,
         // each truncated to the entry's tokenCap). Counting the full union
@@ -180,7 +183,7 @@ enum TokenBudget {
                 sceneSummaries: renderedScenes,
                 summary: chat.summary.isEmpty ? nil : chat.summary,
                 worldInfoHits: wiHits,
-                authorsNote: chat.authorsNote.text.isEmpty ? nil : chat.authorsNote,
+                authorsNote: effectiveAN,
                 relevantMemories: relevantMemories,
                 tailMemoryDigest: tailDigest,
                 currentSceneAnchor: anchor,

@@ -160,7 +160,7 @@ struct PromptBuilder {
             sceneSummaries: renderableScenes(chat: chat),
             summary: chat.summary.isEmpty ? nil : chat.summary,
             worldInfoHits: worldInfoHits(chat: chat),
-            authorsNote: chat.authorsNote.text.isEmpty ? nil : chat.authorsNote,
+            authorsNote: effectiveAuthorsNote(chat: chat, character: character),
             relevantMemories: relevantMemories,
             tailMemoryDigest: tailMemoryDigest(chat: chat, continuation: continuation),
             currentSceneAnchor: currentSceneAnchor(chat: chat, continuation: continuation),
@@ -236,6 +236,25 @@ struct PromptBuilder {
 
         if sections.isEmpty { return nil }
         return sections.joined(separator: "\n\n")
+    }
+
+    /// Pick the effective author's note for the prompt. User-set notes always
+    /// win — only when `chat.authorsNote.text` is empty do we fall back to
+    /// the card's `postHistoryInstructions`. The synthesized note inherits
+    /// the chat's existing depth so a user can still tune position without
+    /// having to type a note. Returns `nil` when there's nothing to inject,
+    /// matching what the templates expect.
+    static func effectiveAuthorsNote(chat: Chat, character: Character?) -> AuthorsNote? {
+        let userText = chat.authorsNote.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !userText.isEmpty {
+            return chat.authorsNote
+        }
+        guard let phi = character?.postHistoryInstructions?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !phi.isEmpty
+        else {
+            return nil
+        }
+        return AuthorsNote(text: phi, depth: chat.authorsNote.depth)
     }
 
     /// Render the read-only `[from card]` biographical prefix
