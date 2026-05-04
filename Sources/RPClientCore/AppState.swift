@@ -265,7 +265,17 @@ final class AppState {
     /// the UI can surface a useful message.
     @discardableResult
     func importCharacter(from url: URL) throws -> Character {
-        let result = try CharacterCardImporter.importFile(at: url)
+        // Log the attempt up front so a thrown error still leaves a trace —
+        // the alert path doesn't reach DebugLog and that hid early failures.
+        let fileSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? -1
+        DebugLog.shared.write("import: attempt source=\(url.lastPathComponent) ext=\(url.pathExtension.lowercased()) size=\(fileSize)B")
+        let result: CharacterCardImporter.Result
+        do {
+            result = try CharacterCardImporter.importFile(at: url)
+        } catch {
+            DebugLog.shared.write("import: FAILED source=\(url.lastPathComponent) error=\(String(describing: error))")
+            throw error
+        }
         let character = result.character
         Storage.shared.saveCharacter(character)
         if let pngData = result.avatarPNG,
@@ -278,7 +288,7 @@ final class AppState {
             characters.append(character)
         }
         characters.sort { $0.created > $1.created }
-        DebugLog.shared.write("import: character \"\(character.name)\" id=\(character.id) avatar=\(result.avatarPNG != nil ? "yes" : "no") source=\(url.lastPathComponent)")
+        DebugLog.shared.write("import: ok name=\"\(character.name)\" id=\(character.id) avatar=\(result.avatarPNG != nil ? "yes" : "no") charBookEntries=\(character.charBook.count)")
         NotificationCenter.default.post(name: AppNotification.charactersChanged, object: nil)
         return character
     }

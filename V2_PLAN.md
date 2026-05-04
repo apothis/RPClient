@@ -215,7 +215,9 @@ Hover-only when count == 1 (don't visually clutter).
 
 These two ship together: character cards include both an AI-character payload and (often) a recommended user-side persona.
 
-### 4.1 Data-model additions
+**Status (2026-05-04):** steps 1–3 shipped on `v2-plan` (commits `dd102db` → `50da4ab`). Step 4 (prompt-builder integration) is the remaining work and is what makes imported cards actually drive the model. Importer also gained loose v1 / Pygmalion JSON acceptance as a follow-up (commit `c941baf`).
+
+### 4.1 Data-model additions ✅ shipped (step 1 — `dd102db`)
 
 ```swift
 struct Persona: Codable, Identifiable, Equatable {
@@ -261,7 +263,7 @@ Storage:
   personas/avatars/<uuid>.png
 ```
 
-### 4.2 Card import
+### 4.2 Card import ✅ shipped (step 2 — `3149dda`; v1/Pygmalion follow-up `c941baf`)
 
 New `Sources/RPClientCore/Importers/CharacterCardImporter.swift`:
 
@@ -271,18 +273,22 @@ New `Sources/RPClientCore/Importers/CharacterCardImporter.swift`:
 - Avatar = the PNG image itself (extract and write to `characters/avatars/<uuid>.png`).
 - Validate spec_version (`chara_card_v2`); reject v1 with a clear message (or convert with degraded fields).
 
+  Landed accepting v2 + v1 + Pygmalion-aliased v1 + explicit `chara_card_v1`. v1 has no `system_prompt`/`post_history_instructions`/`alternate_greetings`/`character_book`, so those default empty; `mes_example` folds into `description` as "Example dialogue:\n…" so it isn't dropped. Unknown future specs (e.g. `chara_card_v3`) still reject.
+
 Importer UI:
 
 - File menu: "Import Character…"
 - Drag-drop a PNG anywhere on the sidebar or character picker.
 - Toast on success; reveal in character library.
 
-### 4.3 Character library + persona library
+### 4.3 Character library + persona library ✅ shipped (step 3 — `50da4ab`)
 
 - New "Library" sheet (Cmd-Shift-L): tab for Characters, tab for Personas. Grid of avatars + names. Click → details + "Start chat" / "Edit" / "Delete".
 - New chat flow: sidebar "+" splits into "+ New chat" and "+ New chat with character…".
 
-### 4.4 Prompt-builder integration
+  Landed as `LibraryWindowController` with `NSCollectionView` flow-layout grids; characters tab is import-only for now (no edit sheet — too many fields, can come later), personas tab has full create/edit/delete via a name+description sheet. Sidebar's "+" became an `NSPopUpButton` pull-down. Character chat-creation flow: `AppState.newChat(withCharacter:)` seeds `Chat.characterId` and the chat title; new chats inherit `Settings.defaultPersonaId`. Drag-drop lands PNG/JSON onto the sidebar root view (`SidebarRootView`).
+
+### 4.4 Prompt-builder integration ⏳ next (step 4 — not yet shipped)
 
 When `Chat.characterId != nil`, on first turn:
 
