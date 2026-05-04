@@ -257,6 +257,48 @@ struct Chat: Codable, Equatable, Identifiable {
         return out
     }
 
+    /// Stable, deterministic hash of the turns that make up a variant's
+    /// upstream context. We store the result on `TurnVariant` at generation
+    /// time and recompute on demand to detect when an upstream edit, reorder,
+    /// delete, or page-swap has invalidated the context the variant was
+    /// generated against. FNV-1a over (id, role, text) per turn keeps the
+    /// implementation dep-free and the value stable across launches.
+    static func makeContextFingerprint<S: Sequence>(_ turns: S) -> String
+        where S.Element == Turn
+    {
+        var hash: UInt64 = 0xcbf29ce484222325
+        let prime: UInt64 = 0x100000001b3
+        func mix(_ s: String) {
+            for byte in s.utf8 {
+                hash ^= UInt64(byte)
+                hash = hash &* prime
+            }
+            // Field separator so "ab" + "c" doesn't collide with "a" + "bc".
+            hash ^= 0x1f
+            hash = hash &* prime
+        }
+        for t in turns {
+            mix(t.id.uuidString)
+            mix(t.role.rawValue)
+            mix(t.text)
+        }
+        return String(hash, radix: 16)
+    }
+
+    /// Returns true when the variant at `(turnIndex, variantIndex)` has a
+    /// recorded fingerprint that no longer matches the chat's live prefix.
+    /// Variants without a fingerprint (legacy seeds, hand-edited rows) are
+    /// reported as not-stale — we have no provenance to compare against.
+    func isVariantStale(turnIndex: Int, variantIndex: Int) -> Bool {
+        guard turns.indices.contains(turnIndex) else { return false }
+        guard turns[turnIndex].variants.indices.contains(variantIndex) else { return false }
+        guard let recorded = turns[turnIndex].variants[variantIndex].contextFingerprint else {
+            return false
+        }
+        let live = Chat.makeContextFingerprint(turns[..<turnIndex])
+        return recorded != live
+    }
+
     /// Collapse legacy bracket-prefixed entity rows into their typed twins.
     /// Pre-v3 chats can carry rows like `name="[character] Sarah", type=.event`
     /// alongside `name="Sarah", type=.character` because two separate code

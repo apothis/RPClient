@@ -185,6 +185,71 @@ func turnVariantTests() -> TestSuite {
         try expectFalse(t.variants[0].edited, "edits on the active variant must not touch the inactive one")
     }
 
+    s.test("contextFingerprint is stable for identical prefixes and changes when text edits") {
+        let stamp = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+        let id1 = UUID(), id2 = UUID()
+        let prefix = [
+            Turn(id: id1, role: .user, text: "hi", ts: stamp),
+            Turn(id: id2, role: .assistant, text: "yo", ts: stamp),
+        ]
+        let fpA = Chat.makeContextFingerprint(prefix)
+        let fpB = Chat.makeContextFingerprint(prefix)
+        try expectEqual(fpA, fpB, "fingerprint must be deterministic")
+
+        var edited = prefix
+        edited[0].text = "hello"
+        let fpC = Chat.makeContextFingerprint(edited)
+        try expectTrue(fpA != fpC, "edit on a prefix turn must change the fingerprint")
+    }
+
+    s.test("isVariantStale returns false when fingerprint matches the live prefix") {
+        var c = Chat(title: "t")
+        c.turns = [
+            Turn(role: .user, text: "ping"),
+            Turn(role: .assistant, text: ""),
+        ]
+        let fp = Chat.makeContextFingerprint(c.turns[..<1])
+        // Variant lives on the assistant turn (index 1), generated against
+        // the live prefix at indices [..<1].
+        c.turns[1].variants = [TurnVariant(text: "pong", contextFingerprint: fp)]
+        c.turns[1].activeVariant = 0
+        c.turns[1].text = "pong"
+        try expectFalse(c.isVariantStale(turnIndex: 1, variantIndex: 0))
+    }
+
+    s.test("isVariantStale flips true after the upstream turn is edited") {
+        var c = Chat(title: "t")
+        c.turns = [
+            Turn(role: .user, text: "ping"),
+            Turn(role: .assistant, text: ""),
+        ]
+        let fp = Chat.makeContextFingerprint(c.turns[..<1])
+        c.turns[1].variants = [TurnVariant(text: "pong", contextFingerprint: fp)]
+        c.turns[1].activeVariant = 0
+        c.turns[1].text = "pong"
+        // Mutate the user turn — variant's recorded fingerprint now differs.
+        c.turns[0].text = "PING (edited)"
+        try expectTrue(c.isVariantStale(turnIndex: 1, variantIndex: 0))
+    }
+
+    s.test("isVariantStale stays false for legacy variants without a fingerprint") {
+        var c = Chat(title: "t")
+        c.turns = [
+            Turn(role: .user, text: "ping"),
+            Turn(role: .assistant, text: ""),
+        ]
+        // Synthesised seed variant — no fingerprint (matches Turn decoder
+        // behaviour for pre-V2 chats).
+        c.turns[1].variants = [TurnVariant(text: "pong")]
+        c.turns[1].activeVariant = 0
+        c.turns[1].text = "pong"
+        c.turns[0].text = "edited"
+        try expectFalse(
+            c.isVariantStale(turnIndex: 1, variantIndex: 0),
+            "no provenance recorded → cannot prove staleness, must report fresh"
+        )
+    }
+
     s.test("legacy assistant placeholder (empty text, no variants) stays empty") {
         let now = ISO8601DateFormatter().string(from: Date())
         let id = UUID().uuidString

@@ -188,7 +188,11 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             let tv = TurnView(turn: t)
             tv.delegate = self
             tv.isLastAssistant = (i == lastAssistantIdx)
-            tv.setVariantState(active: t.activeVariant, count: t.variants.count)
+            tv.setVariantState(
+                active: t.activeVariant,
+                count: t.variants.count,
+                activeIsStale: chat.isVariantStale(turnIndex: i, variantIndex: t.activeVariant)
+            )
             tv.translatesAutoresizingMaskIntoConstraints = false
             stackView.addArrangedSubview(tv)
             tv.widthAnchor.constraint(
@@ -256,10 +260,16 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         }
         // Variant state can change without the turn count moving — regen now
         // adds a variant in place, paging changes the active index, etc.
-        // Push the latest pair to each view so the pager redraws.
+        // Push the latest tuple to each view so the pager redraws (including
+        // the ⚠ stale badge, since paging an earlier turn can change the
+        // staleness of every later turn's active variant).
         for (i, t) in chat.turns.enumerated() where i < turnViews.count {
             let tv = turnViews[i]
-            tv.setVariantState(active: t.activeVariant, count: t.variants.count)
+            tv.setVariantState(
+                active: t.activeVariant,
+                count: t.variants.count,
+                activeIsStale: chat.isVariantStale(turnIndex: i, variantIndex: t.activeVariant)
+            )
             // Paging changes which variant's text is mirrored on `text`; the
             // bubble needs to reflect that immediately.
             if tv.currentText != t.text {
@@ -398,6 +408,10 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
 
     func turnViewDidRequestPreviousVariant(_ view: TurnView) {
         AppState.shared.selectPreviousVariant(turnId: view.turnId)
+    }
+
+    func turnViewDidRequestDiscardVariant(_ view: TurnView) {
+        AppState.shared.deleteActiveVariant(turnId: view.turnId)
     }
 
     func turnViewDidRequestNextVariant(_ view: TurnView) {

@@ -18,19 +18,29 @@ struct TurnVariant: Codable, Identifiable, Equatable {
     /// variants synthesised from `Turn.text` during decode have no record of
     /// it.
     var samplerPresetId: String?
+    /// Stable hash of the turns above this one at generation time — see
+    /// `Chat.makeContextFingerprint`. Compared against the live fingerprint
+    /// to detect when an upstream edit / reorder / variant-swap on an
+    /// earlier turn has invalidated the context this variant was generated
+    /// against. `nil` on legacy variants (synthesised from `Turn.text` at
+    /// decode time) and on hand-edited entries with no recorded provenance —
+    /// treated as not-stale because we genuinely can't tell.
+    var contextFingerprint: String?
 
     init(
         id: UUID = UUID(),
         text: String,
         edited: Bool = false,
         ts: Date = Date(),
-        samplerPresetId: String? = nil
+        samplerPresetId: String? = nil,
+        contextFingerprint: String? = nil
     ) {
         self.id = id
         self.text = text
         self.edited = edited
         self.ts = ts
         self.samplerPresetId = samplerPresetId
+        self.contextFingerprint = contextFingerprint
     }
 }
 
@@ -149,8 +159,19 @@ struct Turn: Codable, Identifiable, Equatable {
 
     /// Append an empty variant and make it active. Used when starting a swipe
     /// regen so the previous variant is preserved alongside the new one.
-    mutating func addEmptyVariant(samplerPresetId: String? = nil) {
-        variants.append(TurnVariant(text: "", samplerPresetId: samplerPresetId))
+    /// `contextFingerprint`, if set, is the hash of the turns above this one
+    /// at generation time — see `Chat.makeContextFingerprint`. Stamped now
+    /// (rather than at first stream token) because the model hasn't been
+    /// asked anything yet but the prefix it'll see is already settled.
+    mutating func addEmptyVariant(
+        samplerPresetId: String? = nil,
+        contextFingerprint: String? = nil
+    ) {
+        variants.append(TurnVariant(
+            text: "",
+            samplerPresetId: samplerPresetId,
+            contextFingerprint: contextFingerprint
+        ))
         activeVariant = variants.count - 1
         text = ""
     }

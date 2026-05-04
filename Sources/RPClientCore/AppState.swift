@@ -350,6 +350,16 @@ final class AppState {
         updateCurrent { c in
             c.turns.append(Turn(role: .user, text: text))
             c.turns.append(Turn(role: .assistant, text: ""))
+            // Pre-seed the assistant turn with one empty variant carrying
+            // the upstream-context fingerprint. Done here (rather than on
+            // first stream token) so a future user edit on any prior turn
+            // can be detected as having invalidated this variant.
+            let asstIdx = c.turns.count - 1
+            let fp = Chat.makeContextFingerprint(c.turns[..<asstIdx])
+            c.turns[asstIdx].addEmptyVariant(
+                samplerPresetId: c.samplerPresetId,
+                contextFingerprint: fp
+            )
             if c.title == "New Chat" {
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 c.title = String(trimmed.prefix(40))
@@ -377,9 +387,22 @@ final class AppState {
                 )
                 return
             }
-            c.turns[lastIdx].addEmptyVariant(samplerPresetId: c.samplerPresetId)
+            let fp = Chat.makeContextFingerprint(c.turns[..<lastIdx])
+            c.turns[lastIdx].addEmptyVariant(
+                samplerPresetId: c.samplerPresetId,
+                contextFingerprint: fp
+            )
         } else {
+            // Append a fresh assistant turn and seed it with one empty,
+            // fingerprint-stamped variant so the same staleness machinery
+            // applies as in `sendUserMessage`.
             c.turns.append(Turn(role: .assistant, text: ""))
+            let asstIdx = c.turns.count - 1
+            let fp = Chat.makeContextFingerprint(c.turns[..<asstIdx])
+            c.turns[asstIdx].addEmptyVariant(
+                samplerPresetId: c.samplerPresetId,
+                contextFingerprint: fp
+            )
         }
         updateCurrent { ch in
             ch.turns = c.turns
@@ -403,8 +426,10 @@ final class AppState {
         }
         DebugLog.shared.write("trigger: replace-variant")
         let active = c.turns[lastIdx].activeVariant
+        let fp = Chat.makeContextFingerprint(c.turns[..<lastIdx])
         c.turns[lastIdx].variants[active].text = ""
         c.turns[lastIdx].variants[active].edited = false
+        c.turns[lastIdx].variants[active].contextFingerprint = fp
         c.turns[lastIdx].text = ""
         updateCurrent { ch in
             ch.turns = c.turns
@@ -421,6 +446,24 @@ final class AppState {
             let cur = c.turns[idx].activeVariant
             guard cur > 0 else { return }
             c.turns[idx].setActiveIndex(cur - 1)
+        }
+    }
+
+    /// Drop the currently-active variant on `turnId`, falling back to the
+    /// previous one (or the first one if the active was the head). No-op
+    /// when streaming or when the turn has 1 or fewer variants — we never
+    /// orphan a turn into a `variants = []` shape post-V2.
+    func deleteActiveVariant(turnId: UUID) {
+        guard !isStreaming, let id = currentChatId else { return }
+        updateChat(id: id) { c in
+            guard let idx = c.turns.firstIndex(where: { $0.id == turnId }) else { return }
+            guard c.turns[idx].variants.count > 1 else { return }
+            let active = c.turns[idx].activeVariant
+            c.turns[idx].variants.remove(at: active)
+            // Keep the same numeric index when possible (so deleting variant
+            // 3/5 lands on the new 3/4), else clamp to the new last index.
+            let newActive = max(0, min(active, c.turns[idx].variants.count - 1))
+            c.turns[idx].setActiveIndex(newActive)
         }
     }
 
