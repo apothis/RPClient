@@ -242,6 +242,77 @@ func speakerTests() -> TestSuite {
 
     // MARK: - SpeakOptions construction
 
+    // MARK: - speakSegments queue (Phase 6 §7.4b)
+
+    s.test("speakSegments plays the first segment immediately, waits for completion before the next") {
+        let avkit = RecordingSynthesizer()
+        let kokoro = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: true, avkit: avkit, kokoro: kokoro)
+        let kokoroVoice = SpeakOptions(
+            voice: VoiceIdentifier(engine: .kokoro, voiceId: "af_alloy"),
+            rate: 1.0, pitch: 1.0
+        )
+        let avkitVoice = SpeakOptions(
+            voice: VoiceIdentifier(engine: .avkit, voiceId: "com.apple.voice.compact.en-US.Samantha"),
+            rate: 1.0, pitch: 1.0
+        )
+        speaker.speakSegments([
+            (text: "First.", options: kokoroVoice),
+            (text: "Second.", options: avkitVoice),
+        ])
+        // Only the first segment has been forwarded so far.
+        try expectEqual(kokoro.spoken.map(\.text), ["First."])
+        try expectEqual(avkit.spoken, [])
+        // Fire the kokoro completion → second segment dispatches to AVKit.
+        let cont = try expectNotNil(kokoro.lastCompletion)
+        cont()
+        // Completion dispatches the next segment via DispatchQueue.main.async,
+        // so we run the run loop briefly to let it settle.
+        let deadline = Date().addingTimeInterval(0.5)
+        while avkit.spoken.isEmpty && Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        try expectEqual(avkit.spoken.map(\.text), ["Second."])
+    }
+
+    s.test("speakSegments is a no-op when both gates are off") {
+        let avkit = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: false, avkit: avkit)
+        speaker.speakSegments([(text: "Hi.", options: .default)])
+        try expectEqual(avkit.spoken, [])
+    }
+
+    s.test("speakSegments skips empty-text segments") {
+        let avkit = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: true, avkit: avkit)
+        speaker.speakSegments([
+            (text: "", options: .default),
+            (text: "Hi.", options: .default),
+        ])
+        try expectEqual(avkit.spoken.map(\.text), ["Hi."])
+    }
+
+    s.test("stop() between segments prevents the next segment from playing") {
+        let avkit = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: true, avkit: avkit)
+        speaker.speakSegments([
+            (text: "First.", options: .default),
+            (text: "Second.", options: .default),
+        ])
+        try expectEqual(avkit.spoken.map(\.text), ["First."])
+        speaker.stop()
+        // The first segment's completion fires AFTER stop(); the queue
+        // generation has already been bumped, so segment 2 should not
+        // dispatch.
+        let cont = try expectNotNil(avkit.lastCompletion)
+        cont()
+        let deadline = Date().addingTimeInterval(0.2)
+        while Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        try expectEqual(avkit.spoken.map(\.text), ["First."])
+    }
+
     s.test("SpeakOptions(preference: nil) is the default") {
         try expectEqual(SpeakOptions(preference: nil), SpeakOptions.default)
     }
@@ -268,8 +339,13 @@ private final class RecordingSynthesizer: SpeechSynthesizing {
     }
     var spoken: [Spoken] = []
     var stopCount = 0
-    func speak(_ text: String, options: SpeakOptions) {
+    /// Captured completion from the most recent speak() — tests fire it
+    /// manually to simulate "this segment finished playing" so the queue
+    /// advancer in Speaker can advance.
+    var lastCompletion: (() -> Void)?
+    func speak(_ text: String, options: SpeakOptions, completion: (() -> Void)?) {
         spoken.append(Spoken(text: text, options: options))
+        lastCompletion = completion
     }
     func stopSpeaking() { stopCount += 1 }
 }

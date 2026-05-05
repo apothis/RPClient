@@ -5,17 +5,23 @@ import Foundation
 /// one engine; multi-engine routing (Kokoro vs AVKit) lives in `Speaker`.
 /// Phase 6 §7.4 expanded the seam from text-only to options-aware so the
 /// per-character fallback chain can flow through to the actual synthesizer
-/// without the speaker layer caring which engine is on the other end.
+/// without the speaker layer caring which engine is on the other end. §7.4b
+/// added the optional `completion` so the queue can serialize segments
+/// across utterances.
 public protocol SpeechSynthesizing: AnyObject {
-    func speak(_ text: String, options: SpeakOptions)
+    /// Speak `text` with `options`. If `completion` is non-nil, fires
+    /// (on the main queue) when the utterance finishes playing — used by
+    /// `Speaker.speakSegments(_:)` to advance the queue. nil completion
+    /// = fire-and-forget (the legacy single-segment path).
+    func speak(_ text: String, options: SpeakOptions, completion: (() -> Void)?)
     func stopSpeaking()
 }
 
 extension SpeechSynthesizing {
-    /// Convenience for tests + the `handleStreamFinished` path that doesn't
-    /// have a `SpeakOptions` to hand. Routes through `.default`.
-    public func speak(_ text: String) {
-        speak(text, options: .default)
+    /// Convenience for tests + back-compat call sites that don't carry
+    /// completion handlers.
+    public func speak(_ text: String, options: SpeakOptions = .default) {
+        speak(text, options: options, completion: nil)
     }
 }
 
@@ -24,10 +30,22 @@ extension SpeechSynthesizing {
 /// unrecognised voice falls back to the system default — AVKit's catalogue
 /// is closed-set, so a user-stored identifier that's been removed by an OS
 /// update should still produce *some* audio rather than silence.
-final class AVSpeechSynthesizerAdapter: SpeechSynthesizing {
+///
+/// Implements `AVSpeechSynthesizerDelegate` so per-utterance completion
+/// handlers fire on `didFinish` / `didCancel`. Handlers are kept in a dict
+/// keyed by `ObjectIdentifier(utterance)` because AVSpeechSynthesizer can
+/// queue several utterances ahead.
+final class AVSpeechSynthesizerAdapter: NSObject, SpeechSynthesizing, AVSpeechSynthesizerDelegate {
     private let synth = AVSpeechSynthesizer()
+    private var completions: [ObjectIdentifier: () -> Void] = [:]
+    private let lock = NSLock()
 
-    func speak(_ text: String, options: SpeakOptions) {
+    override init() {
+        super.init()
+        synth.delegate = self
+    }
+
+    func speak(_ text: String, options: SpeakOptions, completion: (() -> Void)? = nil) {
         let utterance = AVSpeechUtterance(string: text)
         if let id = options.voice?.voiceId,
            options.voice?.engine == .avkit,
@@ -43,11 +61,39 @@ final class AVSpeechSynthesizerAdapter: SpeechSynthesizing {
         utterance.rate = nativeRate
         // pitchMultiplier shares our 0.5..2.0 scale.
         utterance.pitchMultiplier = max(0.5, min(2.0, options.pitch))
+        if let completion = completion {
+            lock.lock()
+            completions[ObjectIdentifier(utterance)] = completion
+            lock.unlock()
+        }
         synth.speak(utterance)
     }
 
     func stopSpeaking() {
         synth.stopSpeaking(at: .immediate)
+        // didCancelSpeechUtterance fires for cancelled utterances; the
+        // completion dict drains there. Defensive: also clear any entries
+        // not associated with a delegate callback so a stuck handler can't
+        // leak across stop boundaries.
+        lock.lock()
+        completions.removeAll()
+        lock.unlock()
+    }
+
+    private func fireCompletion(for utterance: AVSpeechUtterance) {
+        lock.lock()
+        let completion = completions.removeValue(forKey: ObjectIdentifier(utterance))
+        lock.unlock()
+        guard let completion = completion else { return }
+        DispatchQueue.main.async(execute: completion)
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        fireCompletion(for: utterance)
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        fireCompletion(for: utterance)
     }
 }
 
@@ -55,16 +101,19 @@ final class AVSpeechSynthesizerAdapter: SpeechSynthesizing {
 /// `Settings.voiceActive` (runtime). V2_PLAN §7.0/§7.1f/§7.4. Speaks
 /// just-completed assistant turns; per-call voice routing flows from the
 /// fallback chain `Entity.voice ?? Chat.voice ?? Settings.defaultVoice`,
-/// projected through `SpeakOptions(preference:)` at the call site. Per-character
-/// attribution is still pending §7.3 — until then every turn is one segment
-/// using the chat-resolved voice.
+/// projected through `SpeakOptions(preference:)` at the call site.
+///
+/// As of §7.3 + §7.4b, `handleStreamFinished` runs the chat's
+/// `attributionMode` to split the turn into `[AttributedSegment]`, resolves
+/// each segment's voice through the entity → chat → settings fallback, and
+/// hands the list to `speakSegments(_:)` — which plays them in order using
+/// each adapter's completion callback to advance the queue.
 ///
 /// Holds adapters for both engines simultaneously: AVKit is always available
 /// (system default fallback), Kokoro is installed by `KokoroSpeechSelector`
 /// when the model is downloaded and at least one voice is on disk. Routing
 /// is by `options.voice?.engine`; nil voice (no preference set anywhere in
-/// the chain) prefers Kokoro when available, AVKit otherwise — matching the
-/// pre-§7.4 default-engine behaviour.
+/// the chain) prefers Kokoro when available, AVKit otherwise.
 ///
 /// Owned by `AppState`. Subscribes to `streamFinished`, `streamStarted`,
 /// `currentChatChanged`, `settingsChanged`, and `voiceActiveChanged` so
@@ -75,6 +124,13 @@ final class Speaker {
     private var voiceEnabled: Bool
     private var voiceActive: Bool
     private var observers: [NSObjectProtocol] = []
+
+    /// Monotonic id incremented on every `stop()` and at the start of every
+    /// `speakSegments(_:)`. The queue advancer checks this is unchanged
+    /// before scheduling the next segment so a cancellation between two
+    /// segments doesn't leak audio from the cancelled batch.
+    private var queueGeneration: UInt64 = 0
+    private let queueLock = NSLock()
 
     private var shouldSpeak: Bool { voiceEnabled && voiceActive }
 
@@ -95,16 +151,57 @@ final class Speaker {
     /// Speak `raw` with the given `options`, after stripping `<think>` blocks
     /// and markdown formatting. No-op unless both gates are on, or when the
     /// stripped text is empty. Dispatches to the right engine based on
-    /// `options.voice?.engine`.
+    /// `options.voice?.engine`. Single-segment path; multi-segment goes
+    /// through `speakSegments(_:)`.
     func speak(_ raw: String, options: SpeakOptions = .default) {
         guard shouldSpeak else { return }
         let text = Speaker.plainText(raw)
         guard !text.isEmpty else { return }
-        synthesizer(for: options).speak(text, options: options)
+        synthesizer(for: options).speak(text, options: options, completion: nil)
     }
 
-    /// Cancel any in-flight utterance on either engine immediately.
+    /// Speak a list of `(text, options)` segments in order. Each segment
+    /// fires the next via the adapter's completion callback, so segments
+    /// don't overlap even when they route to different engines. Phase 6
+    /// §7.4b. No-op unless both gates are on. Empty list also no-ops.
+    func speakSegments(_ segments: [(text: String, options: SpeakOptions)]) {
+        guard shouldSpeak else { return }
+        let nonEmpty = segments.filter { !$0.text.isEmpty }
+        guard !nonEmpty.isEmpty else { return }
+
+        queueLock.lock()
+        queueGeneration &+= 1
+        let myGen = queueGeneration
+        queueLock.unlock()
+
+        var remaining = nonEmpty
+        playNextSegment(myGen: myGen, remaining: &remaining)
+        // ↑ swift wants the inout passed; we keep a closure-captured copy via
+        //   a helper class so successive completions advance the same queue.
+    }
+
+    private func playNextSegment(myGen: UInt64, remaining: inout [(text: String, options: SpeakOptions)]) {
+        guard !remaining.isEmpty else { return }
+        let next = remaining.removeFirst()
+        let restRef = QueueRef(items: remaining)
+        synthesizer(for: next.options).speak(next.text, options: next.options) { [weak self] in
+            guard let self = self else { return }
+            self.queueLock.lock()
+            let stillCurrent = (self.queueGeneration == myGen)
+            self.queueLock.unlock()
+            guard stillCurrent else { return }
+            var rest = restRef.items
+            self.playNextSegment(myGen: myGen, remaining: &rest)
+        }
+    }
+
+    /// Cancel any in-flight utterance on either engine immediately and bump
+    /// the queue generation so any pending segment-completion callbacks
+    /// from a superseded batch are discarded.
     func stop() {
+        queueLock.lock()
+        queueGeneration &+= 1
+        queueLock.unlock()
         avkit.stopSpeaking()
         kokoro?.stopSpeaking()
     }
@@ -194,12 +291,34 @@ final class Speaker {
         guard let chat = AppState.shared.currentChat,
               let last = chat.turns.last,
               last.role == .assistant else { return }
-        // Chat-level voice; falls through to the global default; falls
-        // through to nil → engine-default routing. Per-character attribution
-        // (§7.3) will replace this single options value with a queue of
-        // segment-tagged options.
-        let resolved = chat.voice ?? AppState.shared.settings.defaultVoice
-        speak(last.text, options: SpeakOptions(preference: resolved))
+        let plain = Speaker.plainText(last.text)
+        guard !plain.isEmpty else { return }
+
+        // Resolve the chat-default voice once — used for narrator segments
+        // (entityId == nil) and for any matched entity that didn't pick
+        // a voice of its own.
+        let chatDefault = chat.voice ?? AppState.shared.settings.defaultVoice
+        let chatDefaultOptions = SpeakOptions(preference: chatDefault)
+
+        let attributedSegments = SpeakerAttribution.split(
+            text: plain,
+            entities: chat.entities,
+            mode: chat.attributionMode
+        )
+
+        let segments: [(text: String, options: SpeakOptions)] = attributedSegments.map { seg in
+            let options: SpeakOptions
+            if let id = seg.entityId,
+               let entity = chat.entities.first(where: { $0.id == id }),
+               let voice = entity.voice {
+                options = SpeakOptions(preference: voice)
+            } else {
+                options = chatDefaultOptions
+            }
+            return (seg.text, options)
+        }
+
+        speakSegments(segments)
     }
 
     // MARK: - Plain-text prep
@@ -244,4 +363,12 @@ final class Speaker {
         let range = NSRange(s.startIndex..., in: s)
         return re.stringByReplacingMatches(in: s, options: [], range: range, withTemplate: template)
     }
+}
+
+/// Reference wrapper so the segment list can be shared across closure
+/// captures in `playNextSegment` without forcing the whole tail through
+/// each completion handler. Internal to Speaker.
+private final class QueueRef {
+    var items: [(text: String, options: SpeakOptions)]
+    init(items: [(text: String, options: SpeakOptions)]) { self.items = items }
 }

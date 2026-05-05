@@ -52,6 +52,30 @@ func chatSettingsVoiceTests() -> TestSuite {
         try expectEqual(decoded.voice, pref)
     }
 
+    s.test("Chat: old-shape JSON without attributionMode decodes as heuristic") {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let oldJson = """
+        {
+            "id": "44444444-4444-4444-4444-444444444444",
+            "title": "Pre-§7.3 chat",
+            "created": "\(now)",
+            "modified": "\(now)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced"
+        }
+        """.data(using: .utf8)!
+        let chat = try chatDecoder.decode(Chat.self, from: oldJson)
+        try expectEqual(chat.attributionMode, .heuristic)
+    }
+
+    s.test("Chat: attributionMode round-trips") {
+        var chat = Chat(title: "Tagged mode")
+        chat.attributionMode = .tagged
+        let data = try chatEncoder.encode(chat)
+        let decoded = try chatDecoder.decode(Chat.self, from: data)
+        try expectEqual(decoded.attributionMode, .tagged)
+    }
+
     s.test("Chat: malformed voice rejects the whole chat") {
         let now = ISO8601DateFormatter().string(from: Date())
         let json = """

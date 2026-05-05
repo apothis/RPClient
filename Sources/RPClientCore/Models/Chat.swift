@@ -124,6 +124,12 @@ struct Chat: Codable, Equatable, Identifiable {
     /// `Settings.defaultVoice`; entities with their own `voice` override
     /// both. The speaker layer (§7.4) is the consumer.
     var voice: VoicePreference?
+    /// How the speaker layer splits a turn's text into per-entity segments.
+    /// Phase 6 §7.3. Default `.heuristic` produces *some* per-character
+    /// routing on day one with no convention; `.tagged` is cleaner when the
+    /// model is producing `Sage: "…"` style output. UI for picking lands in
+    /// §7.5d; pre-§7.3 chats decode as `.heuristic`.
+    var attributionMode: AttributionMode
 
     init(
         id: UUID = UUID(),
@@ -162,6 +168,7 @@ struct Chat: Codable, Equatable, Identifiable {
         self.systemPromptMode = .override
         self.serverId = nil
         self.voice = nil
+        self.attributionMode = .heuristic
     }
 
     init(from decoder: Decoder) throws {
@@ -236,6 +243,7 @@ struct Chat: Codable, Equatable, Identifiable {
         systemPromptMode = try c.decodeIfPresent(CardPromptMode.self, forKey: .systemPromptMode) ?? .override
         serverId = try c.decodeIfPresent(UUID.self, forKey: .serverId)
         voice = try c.decodeIfPresent(VoicePreference.self, forKey: .voice)
+        attributionMode = try c.decodeIfPresent(AttributionMode.self, forKey: .attributionMode) ?? .heuristic
     }
 
     /// Best-effort parse of a `memory` string (one fact per line) into entities.

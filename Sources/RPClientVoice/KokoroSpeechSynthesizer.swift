@@ -104,9 +104,16 @@ public final class KokoroSpeechSynthesizer: SpeechSynthesizing {
         )
     }
 
-    public func speak(_ text: String, options: SpeakOptions) {
+    public func speak(_ text: String, options: SpeakOptions, completion: (() -> Void)? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else {
+            // Empty text shouldn't strand the queue — fire completion so the
+            // caller can advance.
+            if let completion = completion {
+                DispatchQueue.main.async(execute: completion)
+            }
+            return
+        }
 
         let myGen = bumpGeneration()
         // Stop any audio currently coming out of the player. Pipeline work
@@ -117,9 +124,17 @@ public final class KokoroSpeechSynthesizer: SpeechSynthesizing {
         let resolvedVoice = resolveVoice(from: options.voice)
         let speed = options.rate
 
+        // Fire-once wrapper: completion runs at exactly one of these moments
+        // — (a) the last chunk's audio finishes, (b) a failure aborts the
+        // pipeline (espeak / synth / play). Supersession (a newer speak()
+        // call bumped the generation) deliberately does NOT fire — that
+        // utterance will fire its own completion, and advancing the queue
+        // past a cancelled segment would skip-ahead.
+        let fireOnce = FireOnce(handler: completion)
+
         queue.async { [weak self] in
-            guard let self else { return }
-            guard self.isCurrent(myGen) else { return }
+            guard let self else { fireOnce.fire(); return }
+            guard self.isCurrent(myGen) else { return }   // superseded — silent
 
             // Style buffer for this voice, loaded on demand. A missing /
             // unloadable file falls back to the default voice's cached
@@ -137,6 +152,7 @@ public final class KokoroSpeechSynthesizer: SpeechSynthesizing {
                 style = fallback
             } else {
                 NSLog("KokoroSpeechSynthesizer: no style available for '\(resolvedVoice.id)' or default '\(self.defaultVoice.id)'")
+                fireOnce.fire()
                 return
             }
 
@@ -151,29 +167,36 @@ public final class KokoroSpeechSynthesizer: SpeechSynthesizing {
                 )
             } catch {
                 NSLog("KokoroSpeechSynthesizer: espeak failed: \(error)")
+                fireOnce.fire()
                 return
             }
             guard self.isCurrent(myGen) else { return }
 
             let tokens = KokoroTokenizer.tokenize(ipa: ipa)
-            guard tokens.count > 2 else { return }   // empty after tokenization
+            guard tokens.count > 2 else { fireOnce.fire(); return }   // empty after tokenization
             guard self.isCurrent(myGen) else { return }
 
             let chunks = KokoroTokenChunker.chunk(tokens: tokens, maxUnpadded: Self.maxUnpaddedPerChunk)
-            for chunk in chunks {
+            guard !chunks.isEmpty else { fireOnce.fire(); return }
+            for (i, chunk) in chunks.enumerated() {
                 guard self.isCurrent(myGen) else { return }
                 let pcm: [Float]
                 do {
                     pcm = try self.engine.synthesize(tokens: chunk, style: style, speed: speed)
                 } catch {
                     NSLog("KokoroSpeechSynthesizer: synthesize failed: \(error)")
+                    fireOnce.fire()
                     return
                 }
                 guard self.isCurrent(myGen) else { return }
+                let isLast = (i == chunks.count - 1)
                 do {
-                    try self.player.play(samples: pcm)
+                    try self.player.play(samples: pcm) {
+                        if isLast { fireOnce.fire() }
+                    }
                 } catch {
                     NSLog("KokoroSpeechSynthesizer: play failed: \(error)")
+                    fireOnce.fire()
                     return
                 }
             }
@@ -225,5 +248,24 @@ public final class KokoroSpeechSynthesizer: SpeechSynthesizing {
         lock.lock()
         defer { lock.unlock() }
         return generation == gen
+    }
+}
+
+/// Fires a completion handler at most once. Used by `KokoroSpeechSynthesizer`
+/// because the pipeline has multiple terminal paths (last chunk's playback
+/// completion, several mid-pipeline failure bails) and double-firing would
+/// double-advance Speaker's segment queue.
+private final class FireOnce {
+    private let handler: (() -> Void)?
+    private var fired = false
+    private let lock = NSLock()
+    init(handler: (() -> Void)?) { self.handler = handler }
+    func fire() {
+        lock.lock()
+        let shouldFire = !fired
+        fired = true
+        lock.unlock()
+        guard shouldFire, let handler else { return }
+        DispatchQueue.main.async(execute: handler)
     }
 }
