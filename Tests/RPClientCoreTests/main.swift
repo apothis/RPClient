@@ -36,6 +36,7 @@ let suites: [TestSuite] = [
     kokoroTokenChunkerTests(),
     voiceIdentifierTests(),
     voicePreferenceTests(),
+    entityVoiceTests(),
 ]
 
 exit(TestRunner.run(suites))

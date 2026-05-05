@@ -663,7 +663,7 @@ n. **Smoke test — verified 2026-05-05.** `./build.sh && ./run.sh`, toggled "En
 
 **Effort: 2–3 days.** Voice library UI is the long pole now (catalogue table + download manager + storage picker); the adapter itself is contained.
 
-### 7.2 Data model
+### 7.2 Data model — shipped 2026-05-05
 
 ```swift
 struct Entity {
@@ -672,12 +672,17 @@ struct Entity {
 }
 struct VoicePreference: Codable, Equatable {
     var voiceIdentifier: VoiceIdentifier   // §7.1m — `<engine>:<voice-id>`
-    var rate: Float
-    var pitch: Float
+    var rate: Float                        // 1.0-centred multiplier
+    var pitch: Float                       // 1.0-centred multiplier
 }
 ```
 
-`voiceIdentifier` is the §7.1m typed value (`engine:voice-id`, Codable as a single string). Existing chats with no voice preference set leave the field nil; migration is "if Entity.voice is missing, treat as nil and fall back to chat-default." `rate` and `pitch` are engine-specific — Kokoro uses speed (treat `rate` as the speed parameter passed through to `KokoroEngine.synthesize`); AVKit honours both natively.
+`voiceIdentifier` is the §7.1m typed value (`engine:voice-id`, Codable as a single string). Existing chats with no voice preference set leave the field nil; migration is "if Entity.voice is missing, treat as nil and fall back to chat-default." `rate` and `pitch` are 1.0-centred multipliers shared by both engines (Kokoro's `speed` parameter and AVKit's rate/pitch are both multiplicative around 1.0); the plan range is 0.5..2.0 but range validation deliberately lives at the UI/engine boundary, not in the decoder, so an out-of-range value persisted by an older or hand-edited build still loads.
+
+Sub-step shape that landed:
+
+- **§7.2a — `VoicePreference` struct + Codable.** New file `Sources/RPClientCore/Voice/VoicePreference.swift`. Custom decoder: missing nested `rate`/`pitch` → 1.0 (matches the `decodeIfPresent ?? default` pattern used in `Entity` and `Settings`); missing or malformed `voiceIdentifier` throws (the preference is unusable without it). 8 pure tests in `VoicePreferenceTests`.
+- **§7.2b — `Entity.voice: VoicePreference?` + migration.** One-line addition to `Entity` plus a `decodeIfPresent` line in its existing custom `init(from:)`. 4 migration tests in `EntityVoiceTests` cover: old-shape JSON (no `voice` key) decodes nil, new-shape round-trips, explicit `null` decodes nil, malformed nested voice rejects the whole entity (we'd rather throw than silently bind the wrong voice).
 
 ### 7.3 Speaker attribution
 
@@ -701,7 +706,7 @@ The protocol seam may need a queue-aware shape (e.g. `func speak(_ segments: [(v
 - Entity edit sheet gains a Voice section: pick voice, sliders for rate/pitch, "Preview" button. Voice picker is sourced from `KokoroVoiceCatalogue.all` filtered to `KokoroModelStore.installedVoiceIds()`, plus `AVSpeechSynthesisVoice.speechVoices()` for the AVKit fallback.
 - Settings adds default narrator voice (chat-level fallback).
 
-**Effort: ~2 days for §7.2–§7.5 once §7.1 lands.** §7.1 closed 2026-05-05; recommended start order: §7.2 (data model + migration) → §7.5 (UI for picking voices, exercises §7.2 immediately) → §7.3 (speaker attribution) → §7.4 (queue + per-segment voice swap).
+**Effort: ~2 days for §7.2–§7.5 once §7.1 lands.** §7.1 closed 2026-05-05; §7.2 closed 2026-05-05. Remaining order: §7.5 (UI for picking voices, exercises §7.2 immediately) → §7.3 (speaker attribution) → §7.4 (queue + per-segment voice swap).
 
 **Known follow-ups:**
 - Audio trimming between chunks. The model emits ~50–100 ms of trailing silence per synthesized chunk; concatenation accumulates these into noticeable gaps on multi-chunk replies. Upstream `kokoro-onnx` Python uses `trim_audio` on each chunk to remove leading/trailing silence. Add a Swift equivalent (RMS-windowed silence trim) before scheduling each PCM buffer in `KokoroSpeechSynthesizer.speak`. Cosmetic — current §7.1 output is acceptable but not ideal.
@@ -789,7 +794,7 @@ Phases 1–6 together (~15 days of focused work) ship every V2 item except branc
 
 ## 12. Recommended next move
 
-Phases 1, 2, 3 are done. Phase 6 §7.1 (Kokoro engine swap) closed 2026-05-05 — engine, adapter, selector, voice identifier, smoke all verified. From a fresh context: pick up at **Phase 6 §7.2 (per-character voice data model)** — adds `Entity.voice: VoicePreference?`, with `voiceIdentifier: VoiceIdentifier` (the §7.1m typed value). Migration is "missing field → nil → fall back to chat-default voice." Then §7.5 (UI for picking voices) follows naturally because §7.2 gives it something to bind to.
+Phases 1, 2, 3 are done. Phase 6 §7.1 (Kokoro engine swap) closed 2026-05-05; §7.2 (per-character voice data model + migration) closed 2026-05-05 — `VoicePreference` lives in `Sources/RPClientCore/Voice/VoicePreference.swift`, `Entity.voice: VoicePreference?` decodes additively (missing key → nil → falls back to chat-default voice). 393/393 tests pass. From a fresh context: pick up at **Phase 6 §7.5 (Entity edit sheet — Voice section)** because it exercises §7.2 end-to-end. Voice picker should source from `KokoroVoiceCatalogue.all` filtered to `KokoroModelStore.installedVoiceIds()` plus `AVSpeechSynthesisVoice.speechVoices()`; rate/pitch sliders bind to `VoicePreference.rate` / `.pitch` (range 0.5..2.0); add a "Preview" button that pipes a canned line through the configured engine.
 
 After that: §7.3 (speaker attribution — heuristic vs tagged), then §7.4 (queue + per-segment voice swap; refactor `KokoroSpeechSynthesizer` to swap style buffers per call instead of holding one at init). See §7.4's "per-segment voice swap" note for the load-bearing design decision.
 
