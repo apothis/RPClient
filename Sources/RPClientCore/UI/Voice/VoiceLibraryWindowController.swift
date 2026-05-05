@@ -166,9 +166,15 @@ final class VoiceLibraryWindowController: NSWindowController, NSWindowDelegate {
 
         let stateCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("state"))
         stateCol.title = "State"
-        stateCol.minWidth = 80
-        stateCol.width = 100
+        stateCol.minWidth = 110
+        stateCol.width = 160
         tableView.addTableColumn(stateCol)
+
+        let actionCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("action"))
+        actionCol.title = "Action"
+        actionCol.minWidth = 90
+        actionCol.width = 100
+        tableView.addTableColumn(actionCol)
     }
 
     // MARK: - Refresh
@@ -274,12 +280,13 @@ final class VoiceLibraryWindowController: NSWindowController, NSWindowDelegate {
     private func handleDownloadStateChanged(id: String) {
         if id == "model" {
             refreshBaseModelRow()
-            // If the download just completed, also refresh the table since
-            // installable voices need the base model to be ready before
-            // they can be downloaded.
+            // Base-model completion unlocks per-voice Download buttons,
+            // so reload the table to refresh action-cell enabled state.
             if case .completed = KokoroDownloadManager.shared.state(of: id) {
-                applyFilter()
+                tableView.reloadData()
             }
+        } else {
+            voiceDownloadStateChanged(id: id)
         }
     }
 
@@ -299,15 +306,113 @@ final class VoiceLibraryWindowController: NSWindowController, NSWindowDelegate {
         tableView.reloadData()
     }
 
+    private enum VoiceRowAction { case download, cancel, remove, none }
+
     private func voiceStateLabel(_ voice: KokoroVoice) -> String {
-        let s = AppState.shared.settings
-        guard let raw = s.voiceModelPath, !raw.isEmpty else { return "—" }
-        let store = KokoroModelStore(paths: KokoroStoragePaths(root: URL(fileURLWithPath: raw)))
+        if let dl = KokoroDownloadManager.shared.state(of: voice.id) {
+            switch dl {
+            case .running(let bytes, let total):
+                return "⬇︎ \(progressText(bytes: bytes, total: total))"
+            case .queued:
+                return "… queued"
+            case .failed(let msg):
+                return "⚠︎ \(msg)"
+            case .cancelled, .completed:
+                break  // fall through to on-disk truth
+            }
+        }
+        guard let store = currentStore() else { return "—" }
         switch store.voiceState(id: voice.id) {
         case .ready: return "✓ installed"
         case .missing: return "◯ not installed"
         case .volumeUnavailable: return "⚠︎ unavailable"
         }
+    }
+
+    private func voiceRowAction(_ voice: KokoroVoice) -> VoiceRowAction {
+        if case .running = KokoroDownloadManager.shared.state(of: voice.id) { return .cancel }
+        if case .queued = KokoroDownloadManager.shared.state(of: voice.id) { return .cancel }
+        guard let store = currentStore() else { return .none }
+        switch store.voiceState(id: voice.id) {
+        case .ready: return .remove
+        case .missing: return .download
+        case .volumeUnavailable: return .none
+        }
+    }
+
+    private func voiceActionEnabled(_ voice: KokoroVoice) -> Bool {
+        switch voiceRowAction(voice) {
+        case .none: return false
+        case .cancel, .remove: return true
+        case .download:
+            // Download enabled only when base model is ready.
+            guard let store = currentStore() else { return false }
+            if case .ready = store.baseModelState() { return true }
+            return false
+        }
+    }
+
+    private func voiceActionTooltip(_ voice: KokoroVoice) -> String? {
+        if voiceRowAction(voice) == .download,
+           let store = currentStore(),
+           case .ready = store.baseModelState() {
+            return nil
+        }
+        if voiceRowAction(voice) == .download {
+            return "Download the base model first"
+        }
+        return nil
+    }
+
+    @objc fileprivate func voiceActionTapped(_ sender: NSButton) {
+        let row = sender.tag
+        guard row >= 0 && row < rows.count else { return }
+        let voice = rows[row]
+        switch voiceRowAction(voice) {
+        case .cancel:
+            KokoroDownloadManager.shared.cancel(id: voice.id)
+        case .remove:
+            guard let store = currentStore() else { return }
+            do {
+                try store.removeVoice(id: voice.id)
+                reloadRow(for: voice.id)
+            } catch {
+                presentVoiceError(message: "Couldn't remove \(voice.displayName)", error: error)
+            }
+        case .download:
+            guard let store = currentStore() else { return }
+            let task = KokoroDownloadTask(
+                asset: .voice(id: voice.id),
+                sourceURL: voice.downloadURL,
+                destinationURL: store.paths.voiceFileURL(id: voice.id),
+                expectedBytes: Int64(KokoroVoiceCatalogue.voiceByteSizeApprox)
+            )
+            KokoroDownloadManager.shared.enqueue(task, store: store)
+        case .none:
+            break
+        }
+    }
+
+    private func presentVoiceError(message: String, error: Error) {
+        guard let window = window else { return }
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window, completionHandler: nil)
+    }
+
+    private func reloadRow(for voiceId: String) {
+        guard let idx = rows.firstIndex(where: { $0.id == voiceId }) else { return }
+        let columns = IndexSet(integersIn: 0..<tableView.numberOfColumns)
+        tableView.reloadData(forRowIndexes: IndexSet(integer: idx), columnIndexes: columns)
+    }
+
+    /// Override of handleDownloadStateChanged for non-"model" ids — voice
+    /// rows reload themselves rather than the entire table so progress
+    /// updates don't churn 54 cells per chunk.
+    fileprivate func voiceDownloadStateChanged(id: String) {
+        reloadRow(for: id)
     }
 }
 
@@ -318,6 +423,29 @@ extension VoiceLibraryWindowController: NSTableViewDataSource, NSTableViewDelega
         guard let column = tableColumn, row < rows.count else { return nil }
         let voice = rows[row]
         let cell = NSTableCellView()
+
+        if column.identifier.rawValue == "action" {
+            let button = NSButton(title: "", target: self, action: #selector(voiceActionTapped(_:)))
+            button.bezelStyle = .rounded
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.tag = row
+            switch voiceRowAction(voice) {
+            case .download: button.title = "Download"
+            case .cancel:   button.title = "Cancel"
+            case .remove:   button.title = "Remove"
+            case .none:     button.title = "—"
+            }
+            button.isEnabled = voiceActionEnabled(voice)
+            button.toolTip = voiceActionTooltip(voice)
+            cell.addSubview(button)
+            NSLayoutConstraint.activate([
+                button.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
+                button.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
+                button.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
+            ])
+            return cell
+        }
+
         let tf = NSTextField(labelWithString: "")
         tf.font = Theme.font(12)
         tf.lineBreakMode = .byTruncatingTail
