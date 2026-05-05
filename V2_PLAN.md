@@ -613,10 +613,12 @@ k. **Adapter — split into k-prep, k1–k4 (engine), then integration.** Highes
 
    k3. **ONNX session loader + inference (NEXT UP).** Pending. Lives in `RPClientVoice` (only piece of k that needs ORT symbols). New file `Sources/RPClientVoice/KokoroEngine.swift` (or split `KokoroSession.swift` + `KokoroEngine.swift` if it grows).
 
-   Inputs to model.onnx (verified against `kokoro-onnx` Python):
-   - `input_ids: int64[1, N]` — `KokoroTokenizer.tokenize(ipa:)` output as a 2D tensor of shape [1, len].
-   - `style: float32[1, 256]` — speaker style embedding. **Open question:** the loaded `.pt` is `[510, 1, 256]` = 130560 floats. The model wants only one `[1, 256]` slice; kokoro-onnx Python indexes by `style[len(input_ids) - 1]` (i.e. picks the slice matching the input length, since the file is conditioned on length 1..510). Verify this against `kokoro-onnx/src/kokoro_onnx/__init__.py` before coding — if the indexing is wrong audio is garbled but plausible-sounding, hard to debug. Reshape to `[1, 256]` after slicing.
-   - `speed: float32[1]` — playback rate, 1.0 = default.
+   Pre-coding probe shipped alongside this revision (`Sources/KokoroProbe`, run with `swift run KokoroProbe <model>`). Against the bundled `model.onnx` it prints inputs `tokens / style / speed` and output `audio`. So the bundled model is the **legacy export**, not the newer `input_ids` export — matters because [kokoro-onnx Python](https://github.com/thewh1teagle/kokoro-onnx/blob/main/src/kokoro_onnx/__init__.py) `_create_audio` branches on which export it sees and uses different dtypes for `speed` (the newer export passes `int32`, legacy passes `float32`). The Swift/Obj-C ORT bindings don't expose model-schema element types directly — only runtime `ORTValue` types — so this name probe is the only schema introspection these bindings allow without parsing ONNX protobuf.
+
+   Inputs to model.onnx (legacy export — verified against probe + `kokoro-onnx` Python):
+   - `tokens: int64[1, N]` — `KokoroTokenizer.tokenize(ipa:)` output (already pad-wrapped) as a 2D tensor of shape [1, len].
+   - `style: float32[1, 256]` — speaker style embedding. The loaded `.pt` is `[510, 1, 256]` = 130560 floats; the model wants one `[1, 256]` slice. **Verified slice rule:** kokoro-onnx Python does `voice = voice[len(tokens)]` *before* wrapping `tokens` with leading + trailing pad. Our `KokoroTokenizer.tokenize(ipa:)` already wraps with pad, so in our terms the index is `style[paddedTokens.count - 2]` — i.e. unpadded length. (An earlier draft of this plan said `style[len(input_ids) - 1]`; that was off by one. Wrong indexing produces audio that's garbled but plausible-sounding, hard to debug — flagged.)
+   - `speed: float32[1]` — playback rate, 1.0 = default. (Legacy export uses float32; the newer `input_ids` export uses int32, but we're not on that path.)
 
    Output: `audio: float32[N_samples]` — raw PCM at 24 kHz mono. Pass straight to `AVAudioEngine` in k4.
 
@@ -630,7 +632,7 @@ k. **Adapter — split into k-prep, k1–k4 (engine), then integration.** Highes
 
    Smoke test: load model + af_alloy.pt, tokens from `EspeakNgClient + KokoroTokenizer` on "Hello, world.", speed 1.0 → return `[Float]` PCM with non-zero RMS, length plausibly ~24000–48000 samples (1–2 s of audio). Validate at the test level by writing the floats to a `.wav` file and listening — there's no automated "is this speech?" check at this layer.
 
-   ORT Swift API to use: `ORTSession`, `ORTValue.init(tensorData:elementType:shape:)` for inputs, `session.run(withInputs:outputNames:runOptions:)` for inference. Names of input/output tensors will be probed at session-init time (`session.inputNames`, `session.outputNames`) and asserted to match expected ("input_ids", "style", "speed", "audio") so a future model bump fails fast.
+   ORT Swift API to use: `ORTSession`, `ORTValue.init(tensorData:elementType:shape:)` for inputs, `session.run(withInputs:outputNames:runOptions:)` for inference. Input/output names probed at session-init time (`session.inputNames`, `session.outputNames`) and asserted to match expected (`tokens`, `style`, `speed`, `audio`) so a future model bump fails fast — and so we notice if a download ever switches to the newer `input_ids` export, which would force a `speed`-dtype change.
 
    k4. **AVAudioEngine playback.** Pending — `AVAudioEngine` + `AVAudioPlayerNode`, schedule the `[Float]` PCM as an `AVAudioPCMBuffer` at 24 kHz mono. `stopSpeaking()` calls `playerNode.stop()` + `engine.reset()`.
 

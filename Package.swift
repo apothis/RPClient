@@ -54,5 +54,14 @@ let package = Package(
             dependencies: ["RPClientCore"],
             path: "Tests/RPClientCoreTests"
         ),
+        // Phase 6 §7.1k3 prep — one-shot ONNX session introspection so we
+        // can confirm which Kokoro export the bundled model is (newer
+        // `input_ids` vs. legacy `tokens`) before `KokoroEngine` is written.
+        // Throwaway-grade utility; run with `swift run KokoroProbe <path>`.
+        .executableTarget(
+            name: "KokoroProbe",
+            dependencies: ["RPClientVoice"],
+            path: "Sources/KokoroProbe"
+        ),
     ]
 )
