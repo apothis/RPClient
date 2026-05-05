@@ -33,6 +33,7 @@ let suites: [TestSuite] = [
     kokoroVoiceFileTests(),
     espeakNgClientTests(),
     kokoroTokenizerTests(),
+    voiceIdentifierTests(),
 ]
 
 exit(TestRunner.run(suites))
