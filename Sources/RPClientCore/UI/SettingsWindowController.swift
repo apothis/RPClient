@@ -23,6 +23,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let presetPopup = NSPopUpButton()
     private let personaPopup = NSPopUpButton()
     private let voiceCheck = NSButton(checkboxWithTitle: "Enable voice subsystem", target: nil, action: nil)
+    /// Phase 6 §7.1g — read-only display of the chosen voice-models folder.
+    /// Updated live by `voiceModelPathDraft`; persisted via `save()`.
+    private let voiceStorageLabel = NSTextField(labelWithString: "(not set)")
+    private let voiceChangeButton = NSButton(title: "Change location…", target: nil, action: nil)
+    private var voiceModelPathDraft: String?
     private let qwenThinkingCheck = NSButton(
         checkboxWithTitle: "Qwen 3: enable thinking mode (strips <think>…</think> from replies)",
         target: nil, action: nil)
@@ -159,6 +164,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         cancelButton.action = #selector(cancel)
         cancelButton.keyEquivalent = "\u{1b}"
 
+        voiceStorageLabel.font = Theme.font(11)
+        voiceStorageLabel.textColor = .secondaryLabelColor
+        voiceStorageLabel.lineBreakMode = .byTruncatingMiddle
+        voiceStorageLabel.usesSingleLineMode = true
+        voiceStorageLabel.cell?.truncatesLastVisibleLine = true
+        voiceChangeButton.bezelStyle = .rounded
+        voiceChangeButton.target = self
+        voiceChangeButton.action = #selector(changeVoiceStorageLocation)
+
         let separator = NSBox()
         separator.boxType = .separator
         separator.translatesAutoresizingMaskIntoConstraints = false
@@ -281,6 +295,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         separator0.boxType = .separator
         separator0.translatesAutoresizingMaskIntoConstraints = false
 
+        let voiceStorageTitle = NSTextField(labelWithString: "Voice storage:")
+        let voiceStorageStack = NSStackView(views: [voiceStorageLabel, voiceChangeButton])
+        voiceStorageStack.orientation = .horizontal
+        voiceStorageStack.alignment = .centerY
+        voiceStorageStack.spacing = 8
+        voiceStorageLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        voiceStorageLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        voiceChangeButton.setContentHuggingPriority(.required, for: .horizontal)
+
         let grid = NSGridView(views: [
             [NSView(), serversHeader],
             [NSView(), serversHelp],
@@ -298,6 +321,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             [ctxLabel, ctxField],
             [NSView(), qwenThinkingCheck],
             [NSView(), voiceCheck],
+            [voiceStorageTitle, voiceStorageStack],
             [NSView(), separator],
             [NSView(), appearanceHeader],
             [fontOffsetLabel, fontStack],
@@ -506,6 +530,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         rebuildPersonaPopup()
         selectPersonaInPopup(s.defaultPersonaId)
         voiceCheck.state = s.voiceEnabled ? .on : .off
+        voiceModelPathDraft = s.voiceModelPath
+        refreshVoiceStorageRow()
         qwenThinkingCheck.state = s.qwenThinkingEnabled ? .on : .off
         ctxField.integerValue = s.maxContextOverride
 
@@ -581,6 +607,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             s.defaultPersonaId = nil
         }
         s.voiceEnabled = voiceCheck.state == .on
+        s.voiceModelPath = voiceModelPathDraft
         s.qwenThinkingEnabled = qwenThinkingCheck.state == .on
         s.maxContextOverride = max(0, ctxField.integerValue)
 
@@ -601,15 +628,56 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             .map { LibraryTopic(id: $0.id, text: $0.text.trimmingCharacters(in: .whitespaces)) }
             .filter { !$0.text.isEmpty }
 
+        let oldSettings = AppState.shared.settings
         AppState.shared.saveSettings(s)
         if oldOffset != s.uiFontOffset {
             NotificationCenter.default.post(name: AppNotification.fontChanged, object: nil)
+        }
+        if VoiceStoragePrompt.shouldPrompt(old: oldSettings, new: s),
+           let window = window {
+            VoiceStoragePromptSheet.present(over: window) { picked in
+                var s2 = AppState.shared.settings
+                if let url = picked {
+                    s2.voiceModelPath = url.path
+                    AppState.shared.saveSettings(s2)
+                } else {
+                    // Cancel = abort: roll the subsystem back to off so the
+                    // user explicitly re-opts-in next time. Plan §7.1g.
+                    s2.voiceEnabled = false
+                    AppState.shared.saveSettings(s2)
+                }
+                self.window?.close()
+            }
+            return
         }
         window?.close()
     }
 
     @objc private func cancel() {
         window?.close()
+    }
+
+    // MARK: - Voice storage row (Phase 6 §7.1g)
+
+    private func refreshVoiceStorageRow() {
+        if let raw = voiceModelPathDraft, !raw.isEmpty {
+            voiceStorageLabel.stringValue = (raw as NSString).abbreviatingWithTildeInPath
+            voiceStorageLabel.toolTip = raw
+            voiceChangeButton.title = "Change location…"
+        } else {
+            voiceStorageLabel.stringValue = "(not set — pick a folder for downloaded models)"
+            voiceStorageLabel.toolTip = nil
+            voiceChangeButton.title = "Set location…"
+        }
+    }
+
+    @objc private func changeVoiceStorageLocation() {
+        guard let window = window else { return }
+        VoiceStoragePromptSheet.present(over: window) { [weak self] picked in
+            guard let self = self, let url = picked else { return }
+            self.voiceModelPathDraft = url.path
+            self.refreshVoiceStorageRow()
+        }
     }
 
     // MARK: - Servers editor
