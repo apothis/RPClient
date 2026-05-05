@@ -24,6 +24,8 @@ let suites: [TestSuite] = [
     kokoroVoiceCatalogueTests(),
     kokoroStoragePathsTests(),
     voiceStorageScoutTests(),
+    kokoroManifestTests(),
+    kokoroModelStoreTests(),
 ]
 
 exit(TestRunner.run(suites))
