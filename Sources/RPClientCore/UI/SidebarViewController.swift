@@ -57,6 +57,11 @@ final class SidebarViewController: NSViewController {
         // currently-loaded model flip red.
         nc.addObserver(self, selector: #selector(reload),
             name: AppNotification.statusChanged, object: nil)
+        // Pick up new / updated character avatars. AvatarSource clears its
+        // own cache on this same notification — reloading the table forces a
+        // fresh image() lookup in viewFor row.
+        nc.addObserver(self, selector: #selector(reload),
+            name: AppNotification.charactersChanged, object: nil)
     }
 
     deinit {
@@ -206,6 +211,24 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         let chat = AppState.shared.chats[row]
         let cell = NSTableCellView()
 
+        // V2_PLAN §6.1 — leading 32px avatar, circular. Resolves the chat's
+        // character avatar via AvatarSource (which caches), falling back to
+        // an initials placeholder rendered from the chat title when the chat
+        // has no character attached.
+        let avatar = NSImageView()
+        avatar.imageScaling = .scaleProportionallyUpOrDown
+        avatar.wantsLayer = true
+        avatar.layer?.cornerRadius = 16
+        avatar.layer?.masksToBounds = true
+        avatar.translatesAutoresizingMaskIntoConstraints = false
+        if let charId = chat.characterId,
+           let character = AppState.shared.character(id: charId) {
+            avatar.image = AvatarSource.shared.image(forCharacter: charId, name: character.name)
+        } else {
+            avatar.image = placeholderAvatar(initials: chat.title)
+        }
+        cell.addSubview(avatar)
+
         let tf = NSTextField(labelWithString: chat.title)
         tf.lineBreakMode = .byTruncatingTail
         tf.translatesAutoresizingMaskIntoConstraints = false
@@ -243,7 +266,12 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         cell.addSubview(badge)
 
         NSLayoutConstraint.activate([
-            tf.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
+            avatar.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
+            avatar.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            avatar.widthAnchor.constraint(equalToConstant: 32),
+            avatar.heightAnchor.constraint(equalToConstant: 32),
+
+            tf.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: 8),
             tf.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
             tf.topAnchor.constraint(equalTo: cell.topAnchor, constant: 4),
 
