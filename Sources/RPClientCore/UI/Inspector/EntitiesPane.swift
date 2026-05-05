@@ -1,5 +1,4 @@
 import AppKit
-import AVFoundation
 
 /// Inspector pane for the structured entity store (Step C).
 /// Renders a flat list of entity cards, each with its facts as nested rows.
@@ -327,50 +326,12 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
         popup.target = self
         popup.action = #selector(voiceChanged(_:))
 
-        // First item: chat default (nil). representedObject left nil to mark it.
-        popup.addItem(withTitle: "(use chat default)")
-        popup.lastItem?.representedObject = nil as String?
-
-        let opts = currentVoicePickerOptions()
-        var lastGroup: String? = nil
-        for opt in opts {
-            if opt.groupLabel != lastGroup {
-                popup.menu?.addItem(.separator())
-                let header = NSMenuItem(title: opt.groupLabel, action: nil, keyEquivalent: "")
-                header.isEnabled = false
-                popup.menu?.addItem(header)
-                lastGroup = opt.groupLabel
-            }
-            popup.addItem(withTitle: opt.displayName)
-            popup.lastItem?.representedObject = opt.identifier.rawValue
-        }
-
-        // If the entity has a stored voice that isn't in the current option
-        // list (voice was uninstalled, engine swap, etc.), append it under a
-        // separate "Stored" group so the selection is preserved and visible.
-        let storedRaw = ent.voice?.voiceIdentifier.rawValue
-        let availableRaws = Set(opts.map(\.identifier.rawValue))
-        if let stored = storedRaw, !availableRaws.contains(stored) {
-            popup.menu?.addItem(.separator())
-            let header = NSMenuItem(title: "Stored (unavailable)", action: nil, keyEquivalent: "")
-            header.isEnabled = false
-            popup.menu?.addItem(header)
-            popup.addItem(withTitle: "\(stored) (not installed)")
-            popup.lastItem?.representedObject = stored
-        }
-
-        // Select current.
-        if let stored = storedRaw {
-            popup.selectItem(at: 0)  // fallback
-            for (i, item) in (popup.menu?.items ?? []).enumerated() {
-                if let raw = item.representedObject as? String, raw == stored {
-                    popup.selectItem(at: i)
-                    break
-                }
-            }
-        } else {
-            popup.selectItem(at: 0)
-        }
+        VoicePopupBuilder.populate(
+            popup,
+            options: VoicePopupBuilder.currentOptions(),
+            current: ent.voice,
+            sentinelTitle: "(use chat default)"
+        )
 
         row.addSubview(label)
         row.addSubview(popup)
@@ -463,26 +424,6 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
         return row
     }
 
-    /// Live picker option list — `KokoroVoiceCatalogue.all ∩ installedVoiceIds()`
-    /// plus the system AVKit voices. Recomputed per card-build (cheap; no
-    /// ONNX involvement).
-    private func currentVoicePickerOptions() -> [VoicePickerSource.Option] {
-        let installedKokoro: [String]
-        if let raw = AppState.shared.settings.voiceModelPath, !raw.isEmpty {
-            let store = KokoroModelStore(paths: KokoroStoragePaths(root: URL(fileURLWithPath: raw)))
-            installedKokoro = store.installedVoiceIds()
-        } else {
-            installedKokoro = []
-        }
-        let avkit = AVSpeechSynthesisVoice.speechVoices().map { v in
-            VoicePickerSource.AVKitVoice(
-                identifier: v.identifier,
-                displayName: v.name,
-                language: v.language
-            )
-        }
-        return VoicePickerSource.options(installedKokoroIds: installedKokoro, avkitVoices: avkit)
-    }
 
     /// Salience styling thresholds. "Hot" facts were reinforced this turn or
     /// last; "stale" facts haven't been reinforced for ~15+ user turns (or
@@ -621,19 +562,12 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
 
     @objc private func voiceChanged(_ sender: NSPopUpButton) {
         guard let id = entityId(from: sender) else { return }
-        let raw = sender.selectedItem?.representedObject as? String
         AppState.shared.updateCurrent { c in
             guard let i = c.entities.firstIndex(where: { $0.id == id }) else { return }
-            if let raw, let parsed = VoiceIdentifier(rawValue: raw) {
-                let existing = c.entities[i].voice
-                c.entities[i].voice = VoicePreference(
-                    voiceIdentifier: parsed,
-                    rate: existing?.rate ?? 1.0,
-                    pitch: existing?.pitch ?? 1.0
-                )
-            } else {
-                c.entities[i].voice = nil
-            }
+            c.entities[i].voice = VoicePopupBuilder.preference(
+                fromSelectionOf: sender,
+                previous: c.entities[i].voice
+            )
         }
     }
 

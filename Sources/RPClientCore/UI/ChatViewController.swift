@@ -16,6 +16,11 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     /// `Settings.voiceActive`; greys out when `voiceEnabled` (the subsystem
     /// gate) is off, with a tooltip pointing the user to Settings.
     private let speakerButton = NSButton()
+    /// Phase 6 §7.5b — per-chat default narrator voice. nil/(use settings
+    /// default) falls through to `Settings.defaultVoice`. Entities with
+    /// their own `voice` override both. Speaker layer (§7.4) is the consumer.
+    private let voicePicker = NSPopUpButton()
+    private let voiceLabel = NSTextField(labelWithString: "Voice:")
     private var turnViews: [TurnView] = []
     private var dividerView: ContextDivider?
     private var dividerWidthConstraint: NSLayoutConstraint?
@@ -61,6 +66,18 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         chatHeader.addSubview(serverPicker)
         configureSpeakerButton()
         chatHeader.addSubview(speakerButton)
+
+        voiceLabel.font = Theme.font(11)
+        voiceLabel.textColor = .secondaryLabelColor
+        voiceLabel.translatesAutoresizingMaskIntoConstraints = false
+        voicePicker.target = self
+        voicePicker.action = #selector(voicePickerChanged(_:))
+        voicePicker.bezelStyle = .rounded
+        voicePicker.font = Theme.font(11)
+        voicePicker.translatesAutoresizingMaskIntoConstraints = false
+        chatHeader.addSubview(voiceLabel)
+        chatHeader.addSubview(voicePicker)
+
         v.addSubview(chatHeader)
         NSLayoutConstraint.activate([
             chatHeader.heightAnchor.constraint(equalToConstant: 28),
@@ -72,6 +89,11 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             speakerButton.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
             speakerButton.widthAnchor.constraint(equalToConstant: 22),
             speakerButton.heightAnchor.constraint(equalToConstant: 22),
+            voicePicker.trailingAnchor.constraint(equalTo: speakerButton.leadingAnchor, constant: -8),
+            voicePicker.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
+            voicePicker.widthAnchor.constraint(lessThanOrEqualToConstant: 220),
+            voiceLabel.trailingAnchor.constraint(equalTo: voicePicker.leadingAnchor, constant: -6),
+            voiceLabel.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
         ])
 
         // Stack tracks the panel width with a small symmetric gutter; turns
@@ -221,6 +243,7 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         dividerView = nil
         dividerWidthConstraint = nil
         rebuildServerPicker()
+        rebuildVoicePicker()
         guard let chat = AppState.shared.currentChat else {
             removeEmptyState()
             return
@@ -551,7 +574,27 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
 
     @objc private func handleSettingsChanged() {
         rebuildServerPicker()
+        rebuildVoicePicker()
         refreshSpeakerButton()
+    }
+
+    private func rebuildVoicePicker() {
+        VoicePopupBuilder.populate(
+            voicePicker,
+            options: VoicePopupBuilder.currentOptions(),
+            current: AppState.shared.currentChat?.voice,
+            sentinelTitle: "(use settings default)"
+        )
+        voicePicker.isEnabled = AppState.shared.currentChat != nil
+    }
+
+    @objc private func voicePickerChanged(_ sender: NSPopUpButton) {
+        AppState.shared.updateCurrent { c in
+            c.voice = VoicePopupBuilder.preference(
+                fromSelectionOf: sender,
+                previous: c.voice
+            )
+        }
     }
 
     // MARK: - Voice toggle (Phase 6 §7.1i)

@@ -29,6 +29,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let voiceChangeButton = NSButton(title: "Change location…", target: nil, action: nil)
     private let voiceLibraryButton = NSButton(title: "Voice library…", target: nil, action: nil)
     private var voiceLibraryWC: VoiceLibraryWindowController?
+    /// Phase 6 §7.5b — global default narrator voice. Bottom of the
+    /// fallback chain (entity → chat → settings). Picker only — rate/pitch
+    /// tuning lives on the per-entity card; the global default rides at 1.0/1.0.
+    private let defaultVoicePopup = NSPopUpButton()
     private let qwenThinkingCheck = NSButton(
         checkboxWithTitle: "Qwen 3: enable thinking mode (strips <think>…</think> from replies)",
         target: nil, action: nil)
@@ -308,6 +312,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         voiceStorageLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         voiceChangeButton.setContentHuggingPriority(.required, for: .horizontal)
 
+        let defaultVoiceLabel = NSTextField(labelWithString: "Default narrator voice:")
+
         let grid = NSGridView(views: [
             [NSView(), serversHeader],
             [NSView(), serversHelp],
@@ -326,6 +332,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             [NSView(), qwenThinkingCheck],
             [NSView(), voiceCheck],
             [voiceStorageTitle, voiceStorageStack],
+            [defaultVoiceLabel, defaultVoicePopup],
             [NSView(), separator],
             [NSView(), appearanceHeader],
             [fontOffsetLabel, fontStack],
@@ -535,6 +542,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         selectPersonaInPopup(s.defaultPersonaId)
         voiceCheck.state = s.voiceEnabled ? .on : .off
         refreshVoiceStorageRow()
+        VoicePopupBuilder.populate(
+            defaultVoicePopup,
+            options: VoicePopupBuilder.currentOptions(),
+            current: s.defaultVoice,
+            sentinelTitle: "(none — system fallback)"
+        )
         qwenThinkingCheck.state = s.qwenThinkingEnabled ? .on : .off
         ctxField.integerValue = s.maxContextOverride
 
@@ -610,6 +623,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             s.defaultPersonaId = nil
         }
         s.voiceEnabled = voiceCheck.state == .on
+        s.defaultVoice = VoicePopupBuilder.preference(
+            fromSelectionOf: defaultVoicePopup,
+            previous: s.defaultVoice
+        )
         s.qwenThinkingEnabled = qwenThinkingCheck.state == .on
         s.maxContextOverride = max(0, ctxField.integerValue)
 
