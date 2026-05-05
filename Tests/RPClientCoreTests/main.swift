@@ -21,6 +21,7 @@ let suites: [TestSuite] = [
     chatServerPickerTests(),
     avatarSourceTests(),
     speakerTests(),
+    kokoroVoiceCatalogueTests(),
 ]
 
 exit(TestRunner.run(suites))
