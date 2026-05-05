@@ -482,28 +482,63 @@ Sequenced ahead of §7.2–§7.4 (was §7.5, promoted 2026-05-05). Rationale: §
 **Costs accepted:**
 
 - New dependency: ONNX Runtime (vendored xcframework, ~50MB binary impact). This ships with the .app regardless of where models live.
-- First-launch model fetch: ~325MB download with progress UI + retry/fallback. AVKit stays available as the fallback engine when the model is missing or fetch fails — the §7.0 adapter is not deleted, just demoted.
+- Two-tier asset model: one base ONNX model (~310MB, downloaded once) plus per-voice embedding files (~500KB each, ~50+ available across English/Chinese/Japanese/Spanish/French/Hindi). User downloads the base model once, then opts in to whichever voices they want à la carte rather than getting a fixed set.
+- AVKit stays available as the fallback engine when the base model is missing or fetch fails — the §7.0 adapter is not deleted, just demoted.
 - Latency floor (~300–500ms after warm-up) means we keep §7.0's "speak after stream finishes" pattern; we do not attempt sub-utterance streaming TTS in §7.1. §7.4's queue-aware shape can revisit if needed.
 
-**Model storage path is user-configurable.** Default location is `~/Library/Application Support/RPClient/voice-models/`, but Settings exposes a "Voice model location" picker (NSOpenPanel, directory-only) so the user can target an external SSD or any mounted volume. Rationale: the user already runs RPClient development off an external SSD; once stored there, the size budget for voice models effectively goes away — future engines (XTTS, multi-language voice packs) become viable without burning boot-disk space. The path is persisted as an absolute URL string in `Settings.voiceModelPath: String?`. On launch (and on `NSWorkspace.didMountNotification` / `didUnmountNotification`), `KokoroModelStore` re-validates the path; when the volume is absent, `state` goes back to `.missing` and speech falls back to AVKit cleanly — never a crash on unplug. App is unsandboxed today, so a raw path is sufficient; a sandboxed build would need security-scoped bookmarks (noted in §10).
+**Model storage path is user-configurable.** Default location is `~/Library/Application Support/RPClient/voice-models/`, but Settings exposes a "Voice model location" picker (NSOpenPanel, directory-only) so the user can target an external SSD or any mounted volume. Rationale: the user already runs RPClient development off an external SSD that stays mounted; once stored there, the size budget for voice models effectively goes away — future engines (XTTS, multi-language voice packs) become viable without burning boot-disk space. The path is persisted as an absolute URL string in `Settings.voiceModelPath: String?`. On launch (and on `NSWorkspace.didMountNotification` / `didUnmountNotification`), `KokoroModelStore` re-validates the path; when the volume is absent, `state` goes back to `.missing` and speech falls back to AVKit cleanly — never a crash on unplug, even though the user's setup is always-mounted in practice. App is unsandboxed today, so a raw path is sufficient; a sandboxed build would need security-scoped bookmarks (noted in §10).
+
+Layout under the configured root:
+
+```
+<voiceModelPath>/kokoro/
+  model.onnx                    (~310 MB, base model, downloaded once)
+  voices/
+    af_bella.bin                (~500 KB each)
+    af_nicole.bin
+    am_adam.bin
+    bf_emma.bin
+    ...                         (only the voices the user opts in to)
+  manifest.json                 (catalogue of installed voices + checksums)
+```
+
+**Voice catalogue UI.** Settings → Voice tab grows a "Voice library" section listing the full catalogue from a bundled `kokoro-voices.json` manifest (name, language, accent, gender, sample-text):
+
+```
+Voice library                                       [Set storage location…]
+
+  Base model               [Download (310 MB)]   ●  ready  /Volumes/SSD1/…
+  ─────────────────────────────────────────────────────────────────────────
+  Available voices
+    af_bella    en-US (F)    [▶ Preview]   [Download]
+    af_nicole   en-US (F)    [▶ Preview]   [✓ Installed]   [Remove]
+    am_adam     en-US (M)    [▶ Preview]   [Download]
+    bf_emma     en-GB (F)    [▶ Preview]   [Download]
+    …
+```
+
+Per-voice rows: language/accent label, gender, Preview button (synthesises a short canned line — only enabled once base model + that voice are installed), Download/Installed-Remove button. Filter chips at the top (language, gender). Status dot reflects `KokoroModelStore.state`. The "Set storage location…" link opens an `NSOpenPanel` for the directory picker; existing downloaded files relocate or are re-resolved when the path changes.
 
 **Implementation sketch:**
 
 1. **Dependency wiring.** Add `onnxruntime-objc` (or the SwiftPM-friendly equivalent) as a vendored xcframework. Confirm it builds via `./build.sh` and stays out of the test binary's link path so `swift run RPClientCoreTests` doesn't pull it in.
-2. **Model fetch UX.** New `Voice/KokoroModelStore.swift` — resolves a cache directory at `Settings.voiceModelPath ?? "~/Library/Application Support/RPClient/voice-models/"` plus `kokoro/`, exposes `state: .missing | .downloading(progress) | .ready(url) | .volumeUnavailable`. Settings gains a "Download voice model (325 MB)" button and a "Voice model location" directory picker on the Voice section; first run with `voiceEnabled = true` and `state == .missing` shows a one-shot toast pointing the user there rather than auto-downloading. SHA-256 checksum verification on completion. Subscribes to `NSWorkspace.didMount/didUnmountNotification` and re-resolves state when the configured path's volume comes or goes.
-3. **Adapter.** New `Voice/KokoroSpeechSynthesizer.swift` conforming to `SpeechSynthesizing`. On `speak(_:)`: synthesises PCM frames via ONNX Runtime, streams into an `AVAudioEngine` player node. On `stopSpeaking()`: cancels the synth task and flushes the player. Falls back to `AVSpeechSynthesizerAdapter` when the model isn't `.ready`.
-4. **Wiring.** `AppState` (or wherever the §7.0 `Speaker` is constructed) picks the adapter based on model state. No change to the `SpeechSynthesizing` protocol; no change to `Speaker`'s call sites.
-5. **Voice identifier namespacing.** §7.2's `voiceIdentifier` is stored as `engine:voice-id` (e.g. `kokoro:af_bella`, `avkit:com.apple.voice.premium.en-US.Ava`) so swapping engines later doesn't invalidate stored prefs.
-6. **Smoke test.** `./build.sh && ./run.sh`, fetch the model, toggle Speak replies, send a message, confirm Kokoro output is materially better than the §7.0 AVKit baseline.
+2. **Model + voice store.** New `Voice/KokoroModelStore.swift` — resolves the cache root at `Settings.voiceModelPath ?? <Application Support>` plus `kokoro/`. Exposes `baseModelState: .missing | .downloading(progress) | .ready(url) | .volumeUnavailable` and `voiceState(id:) -> VoiceState` keyed per voice. Reads/writes `manifest.json` for the installed-voice list and SHA-256 checksums. Subscribes to `NSWorkspace.didMount/didUnmountNotification` and re-resolves state when the configured volume comes or goes.
+3. **Voice catalogue.** Bundled `Resources/kokoro-voices.json` lists every voice the upstream Kokoro release ships (id, language, accent, gender, ~10-word sample text, download URL, expected SHA-256). Pure data — no network call to fetch the catalogue itself; updated when we bump the Kokoro version.
+4. **Adapter.** New `Voice/KokoroSpeechSynthesizer.swift` conforming to `SpeechSynthesizing`. On `speak(_:)`: synthesises PCM frames via ONNX Runtime, streams into an `AVAudioEngine` player node. On `stopSpeaking()`: cancels the synth task and flushes the player. Falls back to `AVSpeechSynthesizerAdapter` when the base model isn't `.ready`.
+5. **Wiring.** `AppState` (or wherever the §7.0 `Speaker` is constructed) picks the adapter based on model state. No change to the `SpeechSynthesizing` protocol; no change to `Speaker`'s call sites.
+6. **Voice identifier namespacing.** §7.2's `voiceIdentifier` is stored as `engine:voice-id` (e.g. `kokoro:af_bella`, `avkit:com.apple.voice.premium.en-US.Ava`) so swapping engines later doesn't invalidate stored prefs. §7.5's voice picker is sourced from the catalogue, filtered to currently-installed voices.
+7. **Settings UI.** New `UI/Settings/VoiceLibraryView.swift` rendering the catalogue table, download progress bars, and the storage-location picker. Per-voice download is a one-shot URLSession download task with progress reporting; cancellable mid-download.
+8. **Smoke test.** `./build.sh && ./run.sh`, set storage path to the external SSD, download base model + one voice, toggle Speak replies, send a message, confirm Kokoro output is materially better than the §7.0 AVKit baseline.
 
 **Risks / open:**
 
 - **ONNX Runtime on Apple Silicon.** Confirm a SwiftPM-installable distribution exists (Microsoft's official `onnxruntime-objc` cocoapod is the canonical path; SwiftPM mirroring may need a vendored xcframework wrapper). If integration is hostile, escalate to a small Swift package that wraps the C API directly.
-- **Model download UX.** No progress spinner today in Settings; this is the first long-running side-task in that surface. Land it as a contained NSProgress-bound view rather than inventing a download manager.
-- **Test coverage.** Adapter logic that's pure (text → token-id sequence munging, voice-id parsing) is testable. The ONNX-driven synth and `AVAudioEngine` glue are smoke-tested per the AppKit/side-effect exemption — flag honestly, don't fake unit tests for "did the audio play."
+- **Download UX.** No progress UI today in Settings — this is the first long-running side-task in that surface, and the multi-row catalogue makes it a *parallel* download manager (user can hit "Download" on three voices at once). Cap concurrency at 2 to avoid thrashing the user's bandwidth.
+- **Catalogue currency.** The bundled `kokoro-voices.json` goes stale when upstream adds voices. Acceptable trade-off vs. fetching a remote catalogue (which would mean a hardcoded URL with its own decay risk). Bump the manifest in lockstep with Kokoro version bumps.
+- **Test coverage.** Pure logic is testable: catalogue parsing, manifest read/write, voice-id parsing, storage-path resolution, mount/unmount state transitions. The ONNX-driven synth, URLSession downloads, and `AVAudioEngine` glue are smoke-tested per the AppKit/side-effect exemption — flag honestly, don't fake unit tests for "did the audio play."
 - **Binary size.** xcframework adds ~50MB to the .app. Acceptable for a local-first model-running app, but worth measuring before/after.
 
-**Effort: 1–2 days.** Dependency wiring + model fetch UX is the long pole; the adapter itself is contained.
+**Effort: 2–3 days.** Voice library UI is the long pole now (catalogue table + download manager + storage picker); the adapter itself is contained.
 
 ### 7.2 Data model
 
