@@ -177,7 +177,7 @@ enum SpeakerAttribution {
                         firstPersonEntityId: firstPersonEntityId
                     )
                     ?? mostRecentMention(
-                        in: String(text[..<boundary]),
+                        in: scopedLookback(in: text, before: boundary),
                         needles: needles,
                         firstPersonEntityId: firstPersonEntityId
                     )
@@ -232,9 +232,26 @@ enum SpeakerAttribution {
         while i < endIdx, text[i].isWhitespace { i = text.index(after: i) }
         guard i < endIdx else { return nil }
 
-        // Walk forward until a known dialogue verb word-bounded match. Stop
-        // at sentence boundaries (`. ! ? \n`) or another quote so we don't
-        // grab a verb from the *next* sentence.
+        // First-word short-circuit: if the very first word after the
+        // (optional) comma + whitespace is a bare `I`, treat as first-person
+        // regardless of what verb (if any) follows. Catches `"...," I begin /
+        // murmur / sigh / huff / ...` — the action verbs we'd otherwise need
+        // to add to the verb list one-by-one. `I` is unambiguous as a
+        // subject (English capitalisation), so the false-positive risk is
+        // low.
+        let firstWordStart = i
+        var firstWordEnd = i
+        while firstWordEnd < endIdx, text[firstWordEnd].isLetter {
+            firstWordEnd = text.index(after: firstWordEnd)
+        }
+        let firstWord = String(text[firstWordStart..<firstWordEnd])
+        if firstWord == "I" {
+            return firstPersonEntityId
+        }
+
+        // Otherwise walk forward until a known dialogue verb word-bounded
+        // match. Stop at sentence boundaries (`. ! ? \n`) or another quote
+        // so we don't grab a verb from the *next* sentence.
         let subjectStart = i
         let lookaheadEnd = text.index(i, offsetBy: 80, limitedBy: endIdx) ?? endIdx
         var verbRange: Range<String.Index>? = nil
@@ -333,6 +350,32 @@ enum SpeakerAttribution {
             return id
         }
         return nil
+    }
+
+    /// Lookback window for the most-recent-mention rule. Without this,
+    /// long replies suffer from "first mention wins forever" — the entity
+    /// named at the start of a reply keeps outranking any closer signals
+    /// because it's the only entity in the preceding text. We cap the
+    /// window at the start of the current paragraph (split by `\n\n`) or
+    /// the last 200 chars before the quote, whichever is more recent
+    /// (i.e. the smaller window).
+    private static func scopedLookback(in text: String, before quotePos: String.Index) -> String {
+        let leading = text[..<quotePos]
+        let total = leading.count
+        let charCap = 200
+        let charStartOffset = max(0, total - charCap)
+
+        // Find the start of the current paragraph (after the last \n\n).
+        var paraStartOffset = 0
+        if let r = leading.range(of: "\n\n", options: .backwards) {
+            paraStartOffset = leading.distance(from: leading.startIndex, to: r.upperBound)
+        }
+
+        // Pick the later (smaller-window) start.
+        let startOffset = max(charStartOffset, paraStartOffset)
+        guard let start = leading.index(leading.startIndex, offsetBy: startOffset, limitedBy: leading.endIndex)
+        else { return String(leading) }
+        return String(leading[start...])
     }
 
     /// Returns the entity id whose name/alias appears latest in `text`

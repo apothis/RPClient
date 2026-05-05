@@ -341,6 +341,77 @@ func speakerTests() -> TestSuite {
         try expectEqual(avkit.spoken, [], "AVKit run should have been dropped after stop()")
     }
 
+    // MARK: - Speaker.matchCharacterToEntity (Phase 6 §7.3 polish)
+
+    s.test("matchCharacterToEntity: exact case-insensitive match wins") {
+        let lina = Entity(name: "Lina", type: .character)
+        let id = Speaker.matchCharacterToEntity(
+            characterName: "lina",
+            entities: [lina]
+        )
+        try expectEqual(id, lina.id)
+    }
+
+    s.test("matchCharacterToEntity: alias also counts") {
+        let mage = Entity(name: "Sage", aliases: ["the mage"], type: .character)
+        let id = Speaker.matchCharacterToEntity(
+            characterName: "the mage",
+            entities: [mage]
+        )
+        try expectEqual(id, mage.id)
+    }
+
+    s.test("matchCharacterToEntity: word-bounded fallback catches multi-word card names") {
+        // Card 'Anna Smith' should still match an entity row named 'Anna'.
+        let anna = Entity(name: "Anna", type: .character)
+        let id = Speaker.matchCharacterToEntity(
+            characterName: "Anna Smith",
+            entities: [anna]
+        )
+        try expectEqual(id, anna.id)
+    }
+
+    s.test("matchCharacterToEntity: word-bounded fallback handles short entity vs. long card") {
+        // Card 'Anna of the Wood' → entity 'Anna' should match.
+        let anna = Entity(name: "Anna", type: .character)
+        let id = Speaker.matchCharacterToEntity(
+            characterName: "Anna of the Wood",
+            entities: [anna]
+        )
+        try expectEqual(id, anna.id)
+    }
+
+    s.test("matchCharacterToEntity: prefers exact match when both exact and word-fallback apply") {
+        let annaShort = Entity(name: "Anna", type: .character)
+        let annaFull = Entity(name: "Anna Smith", type: .character)
+        // Both could match "Anna Smith" — the exact-match pass should pick
+        // the full-name entity even though the short-name entity is listed
+        // first.
+        let id = Speaker.matchCharacterToEntity(
+            characterName: "Anna Smith",
+            entities: [annaShort, annaFull]
+        )
+        try expectEqual(id, annaFull.id)
+    }
+
+    s.test("matchCharacterToEntity: returns nil when no entity matches") {
+        let sage = Entity(name: "Sage", type: .character)
+        let id = Speaker.matchCharacterToEntity(
+            characterName: "Lina",
+            entities: [sage]
+        )
+        try expectEqual(id, nil)
+    }
+
+    s.test("matchCharacterToEntity: empty character name returns nil") {
+        let sage = Entity(name: "Sage", type: .character)
+        let id = Speaker.matchCharacterToEntity(
+            characterName: "   ",
+            entities: [sage]
+        )
+        try expectEqual(id, nil)
+    }
+
     s.test("SpeakOptions(preference: nil) is the default") {
         try expectEqual(SpeakOptions(preference: nil), SpeakOptions.default)
     }

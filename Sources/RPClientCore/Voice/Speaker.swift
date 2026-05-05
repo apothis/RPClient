@@ -345,22 +345,50 @@ final class Speaker {
 
     /// Find the entity that represents the chat's character card (the AI's
     /// persona). Walked through `chat.characterId → AppState.characters →
-    /// name` and matched against `chat.entities` by case-insensitive name
-    /// or alias. Returns nil if the chat has no character set, or if no
-    /// entity matches by name. The match is on entity name/alias so
-    /// users who keep an entity row for their chat character get
-    /// first-person attribution; users who don't lose nothing.
+    /// name`, then matched against `chat.entities`. Returns nil if the
+    /// chat has no character set, or if no entity matches.
     private func resolveFirstPersonEntityId(in chat: Chat) -> UUID? {
         guard let characterId = chat.characterId,
               let character = AppState.shared.characters.first(where: { $0.id == characterId })
         else { return nil }
-        let lookupName = character.name.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !lookupName.isEmpty else { return nil }
-        for ent in chat.entities {
-            let candidates = ([ent.name] + ent.aliases)
+        return Speaker.matchCharacterToEntity(
+            characterName: character.name,
+            entities: chat.entities
+        )
+    }
+
+    /// Two-pass match between a character card name and the chat's entity
+    /// rows.
+    /// 1. Exact case-insensitive match against entity name or alias.
+    /// 2. Word-bounded fallback: if any whitespace-separated word in the
+    ///    character name matches any word of an entity name/alias.
+    /// The fallback handles common setups where the card name carries an
+    /// extra qualifier the user didn't put in their entity row — e.g. card
+    /// `"Anna of the Wood"` matching entity `"Anna"`.
+    static func matchCharacterToEntity(characterName: String, entities: [Entity]) -> UUID? {
+        let charName = characterName.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !charName.isEmpty else { return nil }
+
+        func lowerCandidates(_ ent: Entity) -> [String] {
+            ([ent.name] + ent.aliases)
                 .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-            if candidates.contains(lookupName) {
-                return ent.id
+                .filter { !$0.isEmpty }
+        }
+        // Pass 1 — exact match.
+        for ent in entities {
+            if lowerCandidates(ent).contains(charName) { return ent.id }
+        }
+        // Pass 2 — word-bounded fallback.
+        let charWords = Set(
+            charName.split(whereSeparator: { !$0.isLetter }).map(String.init)
+        )
+        guard !charWords.isEmpty else { return nil }
+        for ent in entities {
+            for cand in lowerCandidates(ent) {
+                let candWords = Set(
+                    cand.split(whereSeparator: { !$0.isLetter }).map(String.init)
+                )
+                if !charWords.isDisjoint(with: candWords) { return ent.id }
             }
         }
         return nil

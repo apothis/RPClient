@@ -260,6 +260,67 @@ func speakerAttributionTests() -> TestSuite {
         try expectEqual(attributed?.entityId, sage.id)
     }
 
+    s.test("heuristic: bare 'I' after a quote attributes to first-person regardless of verb") {
+        // English capitalisation makes bare `I` an unambiguous first-person
+        // subject — when it appears as the first word right after a close
+        // quote, the speaker is the AI character regardless of the action
+        // verb that follows. Catches `"...," I begin / murmur / sigh / huff
+        // / chuckle / ...` — verbs we'd otherwise have to enumerate in the
+        // dialogue-verb list one by one.
+        let segs = SpeakerAttribution.split(
+            text: #""Hello," I begin, looking around."#,
+            entities: [sage, kira],
+            mode: .heuristic,
+            firstPersonEntityId: kira.id
+        )
+        let attributed = segs.first { $0.entityId != nil }
+        try expectEqual(attributed?.entityId, kira.id)
+    }
+
+    s.test("heuristic: 'I' short-circuit requires a first-person hint") {
+        let segs = SpeakerAttribution.split(
+            text: #""Hello," I begin, looking around."#,
+            entities: [sage, kira],
+            mode: .heuristic,
+            firstPersonEntityId: nil
+        )
+        // No first-person hint → no attribution at all (no third-person
+        // mention either, so it falls all the way to narrator).
+        let attributed = segs.first { $0.entityId != nil }
+        try expectEqual(attributed?.entityId, nil)
+    }
+
+    s.test("heuristic: lookback caps at ~200 chars so far-earlier mentions don't dominate") {
+        // Sage at the very start, then 600+ chars of narration with no
+        // entity name, then a quote. The cap ensures the closer (no-name)
+        // narration is what the attribution sees, not the long-stale Sage
+        // mention. Without a hint or a third-person name in scope, the
+        // attribution should fall through to narrator (entityId == nil).
+        let earlyContext = "Sage walked into the room. "
+            + String(repeating: "Time passed quietly without anyone speaking. ", count: 20)
+        let segs = SpeakerAttribution.split(
+            text: earlyContext + "\"Hello.\"",
+            entities: [sage, kira],
+            mode: .heuristic
+        )
+        let attributed = segs.first { $0.entityId != nil }
+        try expectEqual(attributed?.entityId, nil)
+    }
+
+    s.test("heuristic: paragraph break scopes lookback to the current paragraph") {
+        // Sage in paragraph 1; nothing identifying in paragraph 2. The
+        // quote in paragraph 2 should not pick up Sage from across the
+        // break. (Without scoping, Sage would still be the only mention
+        // and would win.)
+        let segs = SpeakerAttribution.split(
+            text: "Sage waved goodbye and walked off.\n\nA pause. \"So long.\"",
+            entities: [sage, kira],
+            mode: .heuristic
+        )
+        let attributed = segs.first { $0.entityId != nil }
+        try expectEqual(attributed?.entityId, nil)
+    }
+
     s.test("heuristic: alias also matches as dialogue-verb subject") {
         // Sage's alias is "the mage". "the mage said" should attribute to Sage.
         let segs = SpeakerAttribution.split(
