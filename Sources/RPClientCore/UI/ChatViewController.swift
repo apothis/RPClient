@@ -219,8 +219,9 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             removeEmptyState()
         }
         let lastAssistantIdx = chat.turns.lastIndex(where: { $0.role == .assistant })
+        let character = chat.characterId.flatMap { AppState.shared.character(id: $0) }
         for (i, t) in chat.turns.enumerated() {
-            let tv = TurnView(turn: t)
+            let tv = TurnView(turn: t, character: character)
             tv.delegate = self
             tv.isLastAssistant = (i == lastAssistantIdx)
             tv.setVariantState(

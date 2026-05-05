@@ -58,7 +58,12 @@ final class TurnView: NSView, NSTextViewDelegate {
     private let bubble = NSView()
     private let textView = FocusAwareTextView()
     private let scrollView = NSScrollView()
-    private let glyph = NSTextField(labelWithString: "")
+    /// Assistant-side speaker indicator. V2_PLAN §6.2 — when the chat has a
+    /// character attached, this carries the character avatar resolved via
+    /// `AvatarSource`; otherwise it falls back to a tinted ✦ rendered through
+    /// `placeholderAvatar` so character-less chats keep their current
+    /// visual signature.
+    private let avatar = NSImageView()
 
     private let toolbar = NSStackView()
     private let copyButton: NSButton
@@ -175,11 +180,15 @@ final class TurnView: NSView, NSTextViewDelegate {
 
     private let bubblePadX: CGFloat = 14
     private let bubblePadY: CGFloat = 10
-    private let glyphCol: CGFloat = 28
+    /// Width of the leading speaker column on assistant turns. Reserves space
+    /// for a 32-px circular avatar (V2_PLAN §6.2) plus an 8-px gap before the
+    /// reply bubble starts.
+    private let glyphCol: CGFloat = 40
+    private let avatarSize: CGFloat = 32
     private let toolbarHeight: CGFloat = 22
     private let toolbarTopGap: CGFloat = 4
 
-    init(turn: Turn) {
+    init(turn: Turn, character: Character? = nil) {
         self.turnId = turn.id
         self.role = turn.role
         self.rawText = turn.text
@@ -206,12 +215,18 @@ final class TurnView: NSView, NSTextViewDelegate {
         addSubview(bubble)
 
         if role == .assistant {
-            glyph.stringValue = "✦"
-            glyph.font = Theme.font(15, weight: .semibold)
-            glyph.textColor = .secondaryLabelColor
-            glyph.wantsLayer = true
-            glyph.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(glyph)
+            avatar.imageScaling = .scaleProportionallyUpOrDown
+            avatar.wantsLayer = true
+            avatar.layer?.cornerRadius = avatarSize / 2
+            avatar.layer?.masksToBounds = true
+            avatar.translatesAutoresizingMaskIntoConstraints = false
+            if let character {
+                avatar.image = AvatarSource.shared.image(
+                    forCharacter: character.id, name: character.name)
+            } else {
+                avatar.image = placeholderAvatar(initials: "✦")
+            }
+            addSubview(avatar)
         }
 
         textView.isRichText = true
@@ -334,9 +349,10 @@ final class TurnView: NSView, NSTextViewDelegate {
             ])
         } else {
             NSLayoutConstraint.activate([
-                glyph.topAnchor.constraint(equalTo: topAnchor, constant: 1),
-                glyph.leadingAnchor.constraint(equalTo: leadingAnchor),
-                glyph.widthAnchor.constraint(equalToConstant: glyphCol - 8),
+                avatar.topAnchor.constraint(equalTo: topAnchor),
+                avatar.leadingAnchor.constraint(equalTo: leadingAnchor),
+                avatar.widthAnchor.constraint(equalToConstant: avatarSize),
+                avatar.heightAnchor.constraint(equalToConstant: avatarSize),
 
                 bubble.topAnchor.constraint(equalTo: topAnchor),
                 bubble.leadingAnchor.constraint(equalTo: leadingAnchor, constant: glyphCol),
@@ -548,10 +564,10 @@ final class TurnView: NSView, NSTextViewDelegate {
             pulse.autoreverses = true
             pulse.repeatCount = .infinity
             pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            glyph.layer?.add(pulse, forKey: "streamPulse")
+            avatar.layer?.add(pulse, forKey: "streamPulse")
         } else {
-            glyph.layer?.removeAnimation(forKey: "streamPulse")
-            glyph.layer?.opacity = 1.0
+            avatar.layer?.removeAnimation(forKey: "streamPulse")
+            avatar.layer?.opacity = 1.0
         }
     }
 
