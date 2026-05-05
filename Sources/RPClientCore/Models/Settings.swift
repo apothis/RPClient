@@ -59,6 +59,12 @@ struct Settings: Codable, Equatable {
     /// fall back to `userName` as before). The library window owns assignment
     /// of this — Settings just remembers the pointer.
     var defaultPersonaId: UUID?
+    /// Filesystem location for downloaded TTS voice models (Phase 6 §7.1).
+    /// Nil = unset; the first-run prompt fires when the user enables Speak
+    /// replies, picks an external volume if mounted, and persists the choice
+    /// here. AVKit fallback runs whenever this is nil or the volume isn't
+    /// available.
+    var voiceModelPath: String?
 
     /// Temporary façade preserving the pre-Phase-4 single-server API. Reads
     /// the default profile's baseURL; setter mutates the default profile's
@@ -99,7 +105,8 @@ struct Settings: Codable, Equatable {
             factExtractionEveryNTurns: 4,
             priorityTopicLibrary: [],
             qwenThinkingEnabled: false,
-            defaultPersonaId: nil
+            defaultPersonaId: nil,
+            voiceModelPath: nil
         )
     }()
 
@@ -115,7 +122,8 @@ struct Settings: Codable, Equatable {
          factExtractionEnabled: Bool, factExtractionEveryNTurns: Int,
          priorityTopicLibrary: [LibraryTopic],
          qwenThinkingEnabled: Bool = false,
-         defaultPersonaId: UUID? = nil) {
+         defaultPersonaId: UUID? = nil,
+         voiceModelPath: String? = nil) {
         self.servers = servers
         self.defaultServerId = defaultServerId
         self.summarizerServerId = summarizerServerId
@@ -134,6 +142,7 @@ struct Settings: Codable, Equatable {
         self.priorityTopicLibrary = priorityTopicLibrary
         self.qwenThinkingEnabled = qwenThinkingEnabled
         self.defaultPersonaId = defaultPersonaId
+        self.voiceModelPath = voiceModelPath
     }
 
     init(from decoder: Decoder) throws {
@@ -173,6 +182,7 @@ struct Settings: Codable, Equatable {
         priorityTopicLibrary = try c.decodeIfPresent([LibraryTopic].self, forKey: .priorityTopicLibrary) ?? d.priorityTopicLibrary
         qwenThinkingEnabled = try c.decodeIfPresent(Bool.self, forKey: .qwenThinkingEnabled) ?? d.qwenThinkingEnabled
         defaultPersonaId = try c.decodeIfPresent(UUID.self, forKey: .defaultPersonaId)
+        voiceModelPath = try c.decodeIfPresent(String.self, forKey: .voiceModelPath)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -184,6 +194,7 @@ struct Settings: Codable, Equatable {
         case uiFontOffset, replyTokensOverride
         case factExtractionEnabled, factExtractionEveryNTurns
         case priorityTopicLibrary, qwenThinkingEnabled, defaultPersonaId
+        case voiceModelPath
     }
 
     func encode(to encoder: Encoder) throws {
@@ -206,5 +217,6 @@ struct Settings: Codable, Equatable {
         try c.encode(priorityTopicLibrary, forKey: .priorityTopicLibrary)
         try c.encode(qwenThinkingEnabled, forKey: .qwenThinkingEnabled)
         try c.encodeIfPresent(defaultPersonaId, forKey: .defaultPersonaId)
+        try c.encodeIfPresent(voiceModelPath, forKey: .voiceModelPath)
     }
 }

@@ -135,6 +135,50 @@ func settingsServersCodableTests() -> TestSuite {
         try expectEqual(s2.servers.count, 1)
     }
 
+    // MARK: - voiceModelPath (Phase 6 §7.1b)
+
+    s.test("voiceModelPath defaults to nil") {
+        try expectNil(Settings.default.voiceModelPath)
+    }
+
+    s.test("voiceModelPath round-trips through Codable") {
+        var s2 = Settings.default
+        s2.voiceModelPath = "/Volumes/SSD1/voice-models"
+        let data = try encoder.encode(s2)
+        let decoded = try decoder.decode(Settings.self, from: data)
+        try expectEqual(decoded.voiceModelPath, "/Volumes/SSD1/voice-models")
+    }
+
+    s.test("legacy settings without voiceModelPath decode as nil") {
+        let legacyJSON = """
+        {
+          "serverURL": "http://localhost:5001",
+          "userName": "",
+          "defaultTemplateId": "gemma",
+          "defaultSamplerPresetId": "balanced",
+          "voiceEnabled": false,
+          "maxContextOverride": 0,
+          "retrieval": {
+            "enabled": true,
+            "topK": 6,
+            "minScore": 0.2,
+            "tokenCap": 2000,
+            "embeddingDim": 0,
+            "embeddingDimLocked": false,
+            "embeddingModel": ""
+          },
+          "uiFontOffset": 1,
+          "replyTokensOverride": 0,
+          "factExtractionEnabled": true,
+          "factExtractionEveryNTurns": 4,
+          "priorityTopicLibrary": [],
+          "qwenThinkingEnabled": false
+        }
+        """.data(using: .utf8)!
+        let decoded = try decoder.decode(Settings.self, from: legacyJSON)
+        try expectNil(decoded.voiceModelPath)
+    }
+
     s.test("decode tolerates servers array missing default id by re-migrating") {
         // If somehow `servers` is present but `defaultServerId` doesn't match
         // any of them, decode should fall back to the legacy migration path.
