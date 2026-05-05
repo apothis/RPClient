@@ -601,7 +601,11 @@ k. **Adapter — split into k-prep, k1–k4 (engine), then integration.** Highes
 
       Two new files in `RPClientCore`: `MinimalZipReader.swift` (STORE-only, ~120 LOC, throws `unsupportedCompression` on DEFLATE since voices don't compress) and `KokoroVoiceFile.swift` (thin wrapper exposing `loadStyleEmbedding(from:) throws -> [Float]`). 9 new tests: ZIP reader covers single + multi-entry round-trips, EOCD with trailing comment, missing-entry nil return, garbage input → `eocdNotFound`, DEFLATE entry → `unsupportedCompression`. Voice loader runs as integration tests against any voice file under `voiceModelPath` (skipped with a printed note when no voice has been downloaded yet) — verifies 130560 floats, all finite, all reasonably bounded.
 
-   k2. **espeak-ng subprocess wrapper.** Pending — `Process` + `Pipe` to pipe text → `espeak-ng -q --ipa` → phoneme string. Misaki post-processing if needed for quality. Falls back to `AVSpeechSynthesizerAdapter` when `EspeakNg.find()` returns nil.
+   k2. **Text → token-id pipeline. Split into k2a (espeak client) + k2b (tokenizer).**
+
+   k2a. **EspeakNgClient — shipped 2026-05-05.** `Sources/RPClientCore/Voice/EspeakNgClient.swift`: `Process` + `Pipe` wrapper that pipes text on stdin to `espeak-ng -q --ipa=3 -v <code>` and captures the IPA string from stdout. Stdin route (rather than positional argument) sidesteps shell-quoting issues for long passages. `KokoroLanguage → espeak voice code` mapping is pure-tested for all 9 languages (en-us, en-gb, ja, cmn, fr-fr, es, it, hi, pt-br). Smoke tests run against the real espeak-ng when present (skipped with a printed note otherwise) — verify "Hello, world." returns non-empty IPA, output is deterministic, and a bogus binary path throws `launchFailed`. The Speaker-level fallback to AVKit when `EspeakNg.find()` returns nil lives in §7.1l (engine selection).
+
+   k2b. **KokoroTokenizer — pending.** Pure mapping from IPA characters to Int64 token ids using misaki's vocab. The vocab string needs to be byte-perfect against upstream — getting it wrong means the model produces gibberish — so the next commit pulls the canonical vocab from `hexgrad/kokoro` and pins it in a Swift literal with a citation.
 
    k3. **ONNX session loader + inference.** Pending — load `model.onnx`, run with phoneme tokens + style embedding + speed → PCM frames.
 

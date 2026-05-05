@@ -31,6 +31,7 @@ let suites: [TestSuite] = [
     espeakNgTests(),
     minimalZipReaderTests(),
     kokoroVoiceFileTests(),
+    espeakNgClientTests(),
 ]
 
 exit(TestRunner.run(suites))
