@@ -52,6 +52,7 @@ enum HelpIndex {
         HelpPage(id: "characters-personas",  title: "Characters & personas",   book: .userGuide),
         HelpPage(id: "library",              title: "Library window",          book: .userGuide),
         HelpPage(id: "multi-server",         title: "Multi-server",            book: .userGuide),
+        HelpPage(id: "voices",               title: "Voices",                  book: .userGuide),
         HelpPage(id: "settings",             title: "Settings",                book: .userGuide),
         HelpPage(id: "troubleshooting",      title: "Troubleshooting",         book: .userGuide),
         // Slice 3a — Technical Reference (priority tier).
@@ -68,6 +69,8 @@ enum HelpIndex {
         HelpPage(id: "tech-world-info-injector", title: "World-info injector",   book: .technical),
         HelpPage(id: "tech-entities",           title: "Entity store",           book: .technical),
         HelpPage(id: "tech-testing",            title: "Testing (TestKit)",      book: .technical),
+        // Slice 6 — voices.
+        HelpPage(id: "tech-voices",             title: "Voice subsystem",        book: .technical),
     ]
 
     static func page(id: String) -> HelpPage? {

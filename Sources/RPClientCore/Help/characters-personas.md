@@ -69,6 +69,17 @@ In the prompt, the persona block is rendered by [PromptBuilder.renderPersonaBloc
 
 You can have many personas and switch between them per-chat — useful for running the same character in different POVs.
 
+## Avatars
+
+Drop a PNG onto a character row in the Library (or a persona row) to set its avatar. Avatars show up:
+
+- **Sidebar** — 32 px circular avatar to the left of each chat row, sourced from the chat's character.
+- **Chat view** — 32 px avatar at the top-left of each assistant turn (matches Open WebUI styling). Character-less chats fall back to a `✦` glyph.
+
+Persona avatars on user turns and entity avatars in turns are deferred — see V2_PLAN §6.4 for the rationale. Today the avatar slot is character-only.
+
+The same image works at every site (sidebar, chat view, library card) — RPClient resizes at draw time. Use a square PNG; non-square images get centre-cropped.
+
 ## Library window
 
 `File → Show Library` (⇧⌘L). Two tabs:

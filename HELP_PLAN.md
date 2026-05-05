@@ -2,7 +2,7 @@
 
 In-app help system with two books: a **User Guide** (task-first, "how do I…") and a **Technical Reference** (system-first, "how does it work"). Same window, same renderer, different TOC. Frozen markdown shipped as bundle resources — content edits happen in source, not at runtime.
 
-**Status as of 2026-05-05.** Slices 1–4 shipped on branch `v2-plan` (25 pages across User Guide + Technical Reference). Slice 5 (V8 multi-server coverage — new `multi-server` page plus stale-prose fixes across 6 existing pages) shipped 2026-05-05 in TDD style: failing TestKit cases first, then content. Future work is content maintenance — keeping the pages in sync with the codebase as features land.
+**Status as of 2026-05-05.** Slices 1–5 shipped on branch `v2-plan`. Slice 6 (Phase 5 V10 avatars + Phase 6 V6 voices coverage) shipped 2026-05-05 in TDD style. Help system is at 28 pages across User Guide + Technical Reference. Future work is content maintenance — keeping the pages in sync with the codebase as features land.
 
 ---
 
@@ -66,6 +66,7 @@ External `https:` links pass through to `NSWorkspace.shared.open(url)`.
 │  Slice 4   Long-tail user guide               ✅ 2026-05-05      │
 │  Slice 3b  Tech reference (tier 2)            ✅ 2026-05-05      │
 │  Slice 5   V8 multi-server coverage (TDD)     ✅ 2026-05-05      │
+│  Slice 6   V10 avatars + V6 voices (TDD)      ✅ 2026-05-05      │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -245,7 +246,50 @@ Deferred to future maintenance:
 
 ---
 
-## 8. Open follow-ups
+## 8. Slice 6 — V10 avatars + V6 voices ✅ shipped 2026-05-05
+
+Phase 5 (V10 avatars) and Phase 6 (V6 voices, §7.0–§7.1n) shipped between Slice 5 and this one — ~40 commits introducing a whole TTS subsystem (Kokoro 82M ONNX, espeak-ng, two-tier toggle, voice library window, per-voice download, configurable storage path) plus sidebar + chat-view avatars.
+
+### TDD workflow
+
+7 failing TestKit cases written first:
+
+- `voices` page exists.
+- `voices` mentions Kokoro, espeak-ng, voice library, the two-tier toggle.
+- `tech-voices` page exists.
+- `tech-voices` mentions `RPClientVoice`, `KokoroEngine`, ONNX, the espeak/tokenizer pipeline.
+- `settings.md` documents the voice subsystem.
+- `troubleshooting.md` covers espeak-ng failures.
+- `tech-architecture.md` lists the `RPClientVoice` target.
+
+Watched fail, authored content to green.
+
+### New pages
+
+| Slug | Title | Hook |
+|---|---|---|
+| `voices` | Voices | Quick-start, two-tier toggle (subsystem vs runtime), voice library window, 9 languages / 54 voices, storage location, what gets spoken, when to leave it off, worked example. |
+| `tech-voices` | Voice subsystem | Two-target split rationale (`RPClientVoice` isolation), end-to-end pipeline diagram (text → espeak → tokenizer → engine → audio), download manager, storage layout, engine schema (legacy export), the load-bearing scalar-iteration tokenizer choice. |
+
+### Pages updated
+
+| File | Change |
+|---|---|
+| `settings.md` | New "Voice subsystem" section. |
+| `troubleshooting.md` | New "Voices" section: greyed-out button, "subsystem on but nothing speaks" diagnostic ladder, base-model SHA-256 retry, single-voice scope. |
+| `tech-architecture.md` | Targets list bumped from 3 to 5 (`RPClientVoice`, `KokoroProbe`, `KokoroSmoke`); file map gains the Voice directories and `AvatarSource.swift`. |
+| `characters-personas.md` | New "Avatars" section covering sidebar + chat-view placement, deferred sub-items (persona, entity, inline images). |
+| `chat-view.md` | New "Speaker button" section covering disabled/enabled/muted/orange-tint states. |
+
+### What this slice did *not* cover
+
+Per V2_PLAN §7.2–§7.5, Phase 6 is not done — per-character voice attribution, entity → voice mapping, mid-stream speaking are all future. The `tech-voices` page closes with a "What this doesn't cover yet" section pointing at those.
+
+The Slice 5 follow-ups (HelpButton on Settings → Servers, anchor-level deep-links from inspector pane "?" buttons) remain deferred.
+
+---
+
+## 9. Open follow-ups
 
 Carry these in mind but don't block on them:
 

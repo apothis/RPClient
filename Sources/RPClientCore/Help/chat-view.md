@@ -38,6 +38,17 @@ Somewhere along the chat there's a thin horizontal divider with a token count la
 
 If the chat is short enough to fit entirely in context, no divider appears.
 
+## Speaker button
+
+The chat header has a small speaker glyph just to the right of the template / preset / server pickers. It controls whether the next reply will speak through your default audio device:
+
+- **Disabled (faded)** — the voice subsystem is off in `Settings… → Enable voice subsystem`. Enabling the subsystem activates the button.
+- **Enabled (speaker icon)** — replies will speak.
+- **Enabled (slashed speaker)** — replies are muted at the runtime level. Toggling this is a quick mute without unloading the engine.
+- **Orange tint** — a reply is actively speaking right now. The colour clears when the reply finishes (or when speaking is interrupted by a new turn / chat switch).
+
+For the full TTS story, see [Voices](voices).
+
 ## Empty state
 
 A new chat with no turns shows an empty state with a hint. If you started the chat from a character card, the character's greeting (if any) is already populated as the first assistant turn — you don't see the empty state, you just type a reply.

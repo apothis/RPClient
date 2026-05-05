@@ -111,6 +111,35 @@ tail -f $TMPDIR/rpclient-debug.log
 
 Most of what's in there is uninteresting; the bits that matter are stack traces from caught errors and the per-request timing breakdowns.
 
+## Voices
+
+### "Speak replies" button is greyed out
+
+**Cause.** The voice subsystem is off. The chat-header speaker button is disabled until `Settings… → Enable voice subsystem` is ticked.
+
+**Fix.** Enable the subsystem in Settings; the button becomes active. If it's still disabled after that, see the next item.
+
+### Voice subsystem is on but nothing speaks
+
+**Check, in order:**
+
+1. **espeak-ng installed?** Open `Voice library…` from the Settings storage row. The top status row reads `✓ found at <path>` if installed, or `◯ not installed` with a copy-paste `brew install espeak-ng`. Without it, only the AVKit fallback voices work; Kokoro voices are silent.
+2. **Base model downloaded?** Same window, base-model row. State should read `✓ ready`. If not, download it (~325 MB).
+3. **At least one voice downloaded?** Per-voice rows show their state. Voice download is disabled until the base model is ready (the engine is useless without it).
+4. **Volume reachable?** If the storage path is on an external drive that's been unplugged, the banner reads `⚠︎ volume unavailable`. Replug, or `Change location…` to a different path.
+
+### Base-model download fails repeatedly
+
+**Cause.** Most often a SHA-256 mismatch — the partial download didn't match the canonical hash. The download manager discards the temp file and marks the task failed rather than installing a corrupt model.
+
+**Fix.** Click **Download** again on the base-model row. The retry starts fresh. If it keeps failing, your network is rewriting the file in transit (corporate proxy, captive portal) or HuggingFace served a different artifact — try from a different network.
+
+### Wrong voice plays
+
+**Cause.** The single-voice path always uses the configured "current" voice. Per-character attribution (different voices for different speakers in a turn) is a future feature; the codebase is not there yet.
+
+**Fix.** This is by design today.
+
 ## Side-call ran on the wrong server
 
 **Symptom.** You configured a small fast model for summaries, but the summarizer is clearly running on your main workstation.

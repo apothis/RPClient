@@ -85,6 +85,17 @@ Vector search over chat history. Off by default. Requires KoboldCpp running with
 
 See [Retrieval](memory-retrieval) for how the eligibility predicate works.
 
+## Voice subsystem
+
+Two settings in this group, plus a storage row.
+
+- **Enable voice subsystem** — heavy switch. When ticked, RPClient loads the Kokoro TTS engine and listens for assistant-reply finish events. When unticked, the engine isn't loaded at all (no resident memory cost). Default off.
+- **Voice storage** — read-only label showing the configured model path, plus **Set/Change location…** and **Voice library…** buttons. The path is where the base model and per-voice tensors land. The first time you enable the subsystem, RPClient prompts you to pick a path (cancelling the prompt rolls the subsystem back to off — see [Voices](voices)).
+
+The chat-header speaker button is the runtime toggle (enabled only when the subsystem is on). The two are split because the subsystem is the heavyweight switch and the runtime toggle is the cheap mute.
+
+For the full voice flow, see the dedicated [Voices](voices) page.
+
 ## Qwen 3: enable thinking mode
 
 Toggle `<think>…</think>` reasoning passthrough for Qwen3 models. The trace is stripped from the persisted reply text before retrieval, summary, or the chunker see it. See [Templates](templates).

@@ -100,6 +100,67 @@ func helpIndexTests() -> TestSuite {
             "tech-app-state should describe AppState's registry ownership")
     }
 
+    // Phase 5 (V10 avatars) + Phase 6 (V6 voices) shipped after Slice 5.
+    // Avatars are small and fold into existing pages; voices are large
+    // enough to warrant their own user-guide + tech pages.
+    s.test("voices user guide page exists") {
+        try expectTrue(HelpIndex.page(id: "voices") != nil,
+            "voices page not registered in HelpIndex")
+    }
+
+    s.test("voices page covers the load-bearing concepts") {
+        let md = try expectNotNil(HelpIndex.markdown(for:
+            HelpIndex.page(id: "voices") ?? HelpPage(id: "_", title: "_", book: .userGuide)))
+        try expectTrue(md.contains("Kokoro"),
+            "voices page should name the Kokoro engine")
+        try expectTrue(md.contains("espeak-ng"),
+            "voices page should mention the espeak-ng prerequisite")
+        try expectTrue(md.contains("voice library") || md.contains("Voice library"),
+            "voices page should describe the voice library window")
+        try expectTrue(md.lowercased().contains("subsystem")
+            && (md.contains("two-tier") || md.lowercased().contains("active")),
+            "voices page should explain the two-tier toggle (subsystem vs runtime)")
+    }
+
+    s.test("tech-voices page exists") {
+        try expectTrue(HelpIndex.page(id: "tech-voices") != nil,
+            "tech-voices page not registered in HelpIndex")
+    }
+
+    s.test("tech-voices describes the Kokoro pipeline") {
+        let md = try expectNotNil(HelpIndex.markdown(for:
+            HelpIndex.page(id: "tech-voices") ?? HelpPage(id: "_", title: "_", book: .technical)))
+        try expectTrue(md.contains("RPClientVoice"),
+            "tech-voices should name the RPClientVoice target")
+        try expectTrue(md.contains("KokoroEngine"),
+            "tech-voices should describe KokoroEngine")
+        try expectTrue(md.contains("ONNX") || md.contains("onnxruntime"),
+            "tech-voices should mention the ONNX Runtime dependency")
+        try expectTrue(md.contains("KokoroTokenizer") || md.contains("EspeakNgClient"),
+            "tech-voices should describe the espeak → tokenizer pipeline")
+    }
+
+    s.test("settings page documents the voice subsystem") {
+        let md = try expectNotNil(HelpIndex.markdown(for:
+            HelpIndex.page(id: "settings") ?? HelpPage(id: "_", title: "_", book: .userGuide)))
+        try expectTrue(md.contains("voice subsystem") || md.contains("Voice storage"),
+            "settings.md should document the voice subsystem fields")
+    }
+
+    s.test("troubleshooting page mentions espeak-ng failures") {
+        let md = try expectNotNil(HelpIndex.markdown(for:
+            HelpIndex.page(id: "troubleshooting") ?? HelpPage(id: "_", title: "_", book: .userGuide)))
+        try expectTrue(md.contains("espeak-ng"),
+            "troubleshooting.md should cover the espeak-ng dependency for voices")
+    }
+
+    s.test("tech-architecture lists the RPClientVoice target") {
+        let md = try expectNotNil(HelpIndex.markdown(for:
+            HelpIndex.page(id: "tech-architecture") ?? HelpPage(id: "_", title: "_", book: .technical)))
+        try expectTrue(md.contains("RPClientVoice"),
+            "tech-architecture should list the RPClientVoice target")
+    }
+
     // Inspector pane "?" buttons reference page ids by string. A typo here
     // wouldn't fail to compile; this assertion catches it at test time
     // before the user sees a "Page not found" page.

@@ -4,11 +4,13 @@ RPClient is a native macOS AppKit application written in Swift, with zero third-
 
 ## Targets
 
-The package has three targets:
+The package has five targets:
 
-- **`RPClient`** — the executable. A 7-line entry point that builds an `NSApplication`, sets an `AppDelegate`, and runs the event loop. See [Sources/RPClient/main.swift](Sources/RPClient/main.swift).
-- **`RPClientCore`** — the library. Everything else: models, storage, network, prompt assembly, memory subsystem, all UI code. The `Core` split exists so `@testable import RPClientCore` can run against internal types from a separate test executable.
-- **`RPClientCoreTests`** — a homegrown TestKit runner. No XCTest; no Xcode required. Covered in the testing page (Slice 3b).
+- **`RPClient`** — the executable. A 7-line entry point that builds an `NSApplication`, sets an `AppDelegate`, and runs the event loop. See [Sources/RPClient/main.swift](Sources/RPClient/main.swift). Depends on `RPClientCore` and `RPClientVoice`.
+- **`RPClientCore`** — the library. Models, storage, network, prompt assembly, memory subsystem, voice support that doesn't need ONNX, all UI code. The `Core` split exists so `@testable import RPClientCore` can run against internal types from a separate test executable.
+- **`RPClientVoice`** — Kokoro TTS engine, ONNX session, audio playback. Isolated from `RPClientCore` so the ~50 MB native ONNX Runtime library doesn't link into `RPClientCoreTests` (which has nothing to do with voices). See [tech-voices](tech-voices) for the rationale.
+- **`RPClientCoreTests`** — a homegrown TestKit runner. No XCTest; no Xcode required. Covered in the testing page.
+- **`KokoroProbe`, `KokoroSmoke`** — single-purpose throwaway-grade utilities for ONNX session introspection and end-to-end voice smoke-testing. Run via `swift run KokoroProbe <path>` / `swift run KokoroSmoke "text"`. Not part of the shipped binary.
 
 ## High-level dataflow
 
@@ -119,6 +121,9 @@ Aborting a generation is a transport-level cancel of the inflight `URLSessionDat
 | Network — per-server transport | [KoboldClient.swift](Sources/RPClientCore/KoboldClient.swift) |
 | Server profile model + roles | [Models/ServerProfile.swift](Sources/RPClientCore/Models/ServerProfile.swift) |
 | Server URL probe | [ServerProbe.swift](Sources/RPClientCore/ServerProbe.swift) |
+| Voice subsystem (storage + tokenizer + download) | [Sources/RPClientCore/Voice](Sources/RPClientCore/Voice) |
+| Voice engine (ONNX + audio playback) | [Sources/RPClientVoice](Sources/RPClientVoice) |
+| Avatars | [UI/AvatarSource.swift](Sources/RPClientCore/UI/AvatarSource.swift) |
 | Prompt assembly | [PromptBuilder.swift](Sources/RPClientCore/PromptBuilder.swift) |
 | Token-budget allocation | [Memory/TokenBudget.swift](Sources/RPClientCore/Memory/TokenBudget.swift) |
 | Memory pipeline | [Memory/](Sources/RPClientCore/Memory) |
