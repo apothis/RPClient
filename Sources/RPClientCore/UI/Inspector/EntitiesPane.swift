@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 
 /// Inspector pane for the structured entity store (Step C).
 /// Renders a flat list of entity cards, each with its facts as nested rows.
@@ -163,7 +164,13 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
         // rebuilds when heat decays after a fresh send, not only on edits.
         var bits: [String] = ["t=\(currentUserTurn)"]
         for ent in entities {
-            bits.append("\(ent.id.uuidString):\(ent.name):\(ent.type.rawValue):\(ent.pinnedByUser):\(ent.aliases.joined(separator: ","))")
+            let voiceBit: String
+            if let v = ent.voice {
+                voiceBit = "\(v.voiceIdentifier.rawValue):\(v.rate):\(v.pitch)"
+            } else {
+                voiceBit = "-"
+            }
+            bits.append("\(ent.id.uuidString):\(ent.name):\(ent.type.rawValue):\(ent.pinnedByUser):\(ent.aliases.joined(separator: ",")):v=\(voiceBit)")
             for f in ent.facts {
                 bits.append(" \(f.id.uuidString):\(f.text):\(f.lastReinforcedTurn):\(f.mentionCount):\(f.pinnedByUser)")
             }
@@ -233,6 +240,8 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
         aliasesField.identifier = NSUserInterfaceItemIdentifier("aliases:\(ent.id.uuidString)")
         aliasesField.translatesAutoresizingMaskIntoConstraints = false
 
+        let voiceSection = makeVoiceSection(for: ent)
+
         let factsStack = NSStackView()
         factsStack.orientation = .vertical
         factsStack.spacing = 2
@@ -256,6 +265,7 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
         card.addSubview(pinCheck)
         card.addSubview(deleteBtn)
         card.addSubview(aliasesField)
+        card.addSubview(voiceSection)
         card.addSubview(factsStack)
         card.addSubview(addFactBtn)
 
@@ -280,15 +290,198 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
             aliasesField.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -8),
             aliasesField.topAnchor.constraint(equalTo: typePopup.bottomAnchor, constant: 6),
 
+            voiceSection.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 8),
+            voiceSection.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -8),
+            voiceSection.topAnchor.constraint(equalTo: aliasesField.bottomAnchor, constant: 6),
+
             factsStack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 8),
             factsStack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -8),
-            factsStack.topAnchor.constraint(equalTo: aliasesField.bottomAnchor, constant: 6),
+            factsStack.topAnchor.constraint(equalTo: voiceSection.bottomAnchor, constant: 6),
 
             addFactBtn.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 8),
             addFactBtn.topAnchor.constraint(equalTo: factsStack.bottomAnchor, constant: 4),
             addFactBtn.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -8)
         ])
         return card
+    }
+
+    /// Voice section: picker + rate/pitch sliders. Phase 6 §7.5a.
+    /// "(use chat default)" maps to `Entity.voice == nil` (falls through to
+    /// `Chat.voice ?? Settings.defaultVoice` at speak time). Sliders are
+    /// hidden when nil so the row stays quiet for the common case.
+    /// Preview button deferred to §7.4 — needs the per-segment style-buffer
+    /// swap that's not in the engine yet.
+    private func makeVoiceSection(for ent: Entity) -> NSView {
+        let row = NSView()
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let label = NSTextField(labelWithString: "Voice:")
+        label.font = Theme.font(11)
+        label.textColor = .secondaryLabelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.translatesAutoresizingMaskIntoConstraints = false
+        popup.font = Theme.font(11)
+        popup.identifier = NSUserInterfaceItemIdentifier("voice:\(ent.id.uuidString)")
+        popup.target = self
+        popup.action = #selector(voiceChanged(_:))
+
+        // First item: chat default (nil). representedObject left nil to mark it.
+        popup.addItem(withTitle: "(use chat default)")
+        popup.lastItem?.representedObject = nil as String?
+
+        let opts = currentVoicePickerOptions()
+        var lastGroup: String? = nil
+        for opt in opts {
+            if opt.groupLabel != lastGroup {
+                popup.menu?.addItem(.separator())
+                let header = NSMenuItem(title: opt.groupLabel, action: nil, keyEquivalent: "")
+                header.isEnabled = false
+                popup.menu?.addItem(header)
+                lastGroup = opt.groupLabel
+            }
+            popup.addItem(withTitle: opt.displayName)
+            popup.lastItem?.representedObject = opt.identifier.rawValue
+        }
+
+        // If the entity has a stored voice that isn't in the current option
+        // list (voice was uninstalled, engine swap, etc.), append it under a
+        // separate "Stored" group so the selection is preserved and visible.
+        let storedRaw = ent.voice?.voiceIdentifier.rawValue
+        let availableRaws = Set(opts.map(\.identifier.rawValue))
+        if let stored = storedRaw, !availableRaws.contains(stored) {
+            popup.menu?.addItem(.separator())
+            let header = NSMenuItem(title: "Stored (unavailable)", action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            popup.menu?.addItem(header)
+            popup.addItem(withTitle: "\(stored) (not installed)")
+            popup.lastItem?.representedObject = stored
+        }
+
+        // Select current.
+        if let stored = storedRaw {
+            popup.selectItem(at: 0)  // fallback
+            for (i, item) in (popup.menu?.items ?? []).enumerated() {
+                if let raw = item.representedObject as? String, raw == stored {
+                    popup.selectItem(at: i)
+                    break
+                }
+            }
+        } else {
+            popup.selectItem(at: 0)
+        }
+
+        row.addSubview(label)
+        row.addSubview(popup)
+
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            label.centerYAnchor.constraint(equalTo: popup.centerYAnchor),
+
+            popup.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 6),
+            popup.topAnchor.constraint(equalTo: row.topAnchor),
+            popup.trailingAnchor.constraint(lessThanOrEqualTo: row.trailingAnchor),
+        ])
+
+        // Sliders only when a voice is set.
+        guard let voice = ent.voice else {
+            popup.bottomAnchor.constraint(equalTo: row.bottomAnchor).isActive = true
+            return row
+        }
+
+        let rateLabel = NSTextField(labelWithString: "Rate")
+        rateLabel.font = Theme.font(10)
+        rateLabel.textColor = .secondaryLabelColor
+        rateLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let rateSlider = NSSlider(value: Double(voice.rate), minValue: 0.5, maxValue: 2.0, target: self, action: #selector(rateChanged(_:)))
+        rateSlider.identifier = NSUserInterfaceItemIdentifier("voice-rate:\(ent.id.uuidString)")
+        rateSlider.isContinuous = false
+        rateSlider.translatesAutoresizingMaskIntoConstraints = false
+
+        let rateValue = NSTextField(labelWithString: String(format: "%.2fx", voice.rate))
+        rateValue.font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        rateValue.textColor = .secondaryLabelColor
+        rateValue.translatesAutoresizingMaskIntoConstraints = false
+
+        let pitchLabel = NSTextField(labelWithString: "Pitch")
+        pitchLabel.font = Theme.font(10)
+        pitchLabel.textColor = .secondaryLabelColor
+        pitchLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let pitchSlider = NSSlider(value: Double(voice.pitch), minValue: 0.5, maxValue: 2.0, target: self, action: #selector(pitchChanged(_:)))
+        pitchSlider.identifier = NSUserInterfaceItemIdentifier("voice-pitch:\(ent.id.uuidString)")
+        pitchSlider.isContinuous = false
+        pitchSlider.translatesAutoresizingMaskIntoConstraints = false
+
+        let pitchValue = NSTextField(labelWithString: String(format: "%.2fx", voice.pitch))
+        pitchValue.font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        pitchValue.textColor = .secondaryLabelColor
+        pitchValue.translatesAutoresizingMaskIntoConstraints = false
+
+        // Kokoro doesn't honour pitch — note inline so the user isn't surprised.
+        if voice.voiceIdentifier.engine == .kokoro {
+            pitchSlider.isEnabled = false
+            pitchSlider.toolTip = "Kokoro voices ignore pitch — use rate to adjust speech tempo."
+            pitchLabel.toolTip = pitchSlider.toolTip
+        }
+
+        row.addSubview(rateLabel)
+        row.addSubview(rateSlider)
+        row.addSubview(rateValue)
+        row.addSubview(pitchLabel)
+        row.addSubview(pitchSlider)
+        row.addSubview(pitchValue)
+
+        NSLayoutConstraint.activate([
+            rateLabel.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            rateLabel.topAnchor.constraint(equalTo: popup.bottomAnchor, constant: 4),
+            rateLabel.widthAnchor.constraint(equalToConstant: 36),
+
+            rateSlider.leadingAnchor.constraint(equalTo: rateLabel.trailingAnchor, constant: 4),
+            rateSlider.centerYAnchor.constraint(equalTo: rateLabel.centerYAnchor),
+            rateSlider.trailingAnchor.constraint(equalTo: rateValue.leadingAnchor, constant: -4),
+
+            rateValue.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            rateValue.centerYAnchor.constraint(equalTo: rateLabel.centerYAnchor),
+            rateValue.widthAnchor.constraint(equalToConstant: 44),
+
+            pitchLabel.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            pitchLabel.topAnchor.constraint(equalTo: rateLabel.bottomAnchor, constant: 2),
+            pitchLabel.widthAnchor.constraint(equalToConstant: 36),
+            pitchLabel.bottomAnchor.constraint(equalTo: row.bottomAnchor),
+
+            pitchSlider.leadingAnchor.constraint(equalTo: pitchLabel.trailingAnchor, constant: 4),
+            pitchSlider.centerYAnchor.constraint(equalTo: pitchLabel.centerYAnchor),
+            pitchSlider.trailingAnchor.constraint(equalTo: pitchValue.leadingAnchor, constant: -4),
+
+            pitchValue.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            pitchValue.centerYAnchor.constraint(equalTo: pitchLabel.centerYAnchor),
+            pitchValue.widthAnchor.constraint(equalToConstant: 44),
+        ])
+        return row
+    }
+
+    /// Live picker option list — `KokoroVoiceCatalogue.all ∩ installedVoiceIds()`
+    /// plus the system AVKit voices. Recomputed per card-build (cheap; no
+    /// ONNX involvement).
+    private func currentVoicePickerOptions() -> [VoicePickerSource.Option] {
+        let installedKokoro: [String]
+        if let raw = AppState.shared.settings.voiceModelPath, !raw.isEmpty {
+            let store = KokoroModelStore(paths: KokoroStoragePaths(root: URL(fileURLWithPath: raw)))
+            installedKokoro = store.installedVoiceIds()
+        } else {
+            installedKokoro = []
+        }
+        let avkit = AVSpeechSynthesisVoice.speechVoices().map { v in
+            VoicePickerSource.AVKitVoice(
+                identifier: v.identifier,
+                displayName: v.name,
+                language: v.language
+            )
+        }
+        return VoicePickerSource.options(installedKokoroIds: installedKokoro, avkitVoices: avkit)
     }
 
     /// Salience styling thresholds. "Hot" facts were reinforced this turn or
@@ -423,6 +616,44 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
             if let i = c.entities.firstIndex(where: { $0.id == id }) {
                 c.entities[i].type = t
             }
+        }
+    }
+
+    @objc private func voiceChanged(_ sender: NSPopUpButton) {
+        guard let id = entityId(from: sender) else { return }
+        let raw = sender.selectedItem?.representedObject as? String
+        AppState.shared.updateCurrent { c in
+            guard let i = c.entities.firstIndex(where: { $0.id == id }) else { return }
+            if let raw, let parsed = VoiceIdentifier(rawValue: raw) {
+                let existing = c.entities[i].voice
+                c.entities[i].voice = VoicePreference(
+                    voiceIdentifier: parsed,
+                    rate: existing?.rate ?? 1.0,
+                    pitch: existing?.pitch ?? 1.0
+                )
+            } else {
+                c.entities[i].voice = nil
+            }
+        }
+    }
+
+    @objc private func rateChanged(_ sender: NSSlider) {
+        guard let raw = sender.identifier?.rawValue,
+              let id = UUID(uuidString: String(raw.dropFirst("voice-rate:".count))) else { return }
+        let value = Float(sender.doubleValue)
+        AppState.shared.updateCurrent { c in
+            guard let i = c.entities.firstIndex(where: { $0.id == id }) else { return }
+            c.entities[i].voice?.rate = value
+        }
+    }
+
+    @objc private func pitchChanged(_ sender: NSSlider) {
+        guard let raw = sender.identifier?.rawValue,
+              let id = UUID(uuidString: String(raw.dropFirst("voice-pitch:".count))) else { return }
+        let value = Float(sender.doubleValue)
+        AppState.shared.updateCurrent { c in
+            guard let i = c.entities.firstIndex(where: { $0.id == id }) else { return }
+            c.entities[i].voice?.pitch = value
         }
     }
 

@@ -704,10 +704,12 @@ The protocol seam may need a queue-aware shape (e.g. `func speak(_ segments: [(v
 
 ### 7.5 UI
 
-- Entity edit sheet gains a Voice section: pick voice, sliders for rate/pitch, "Preview" button. Voice picker is sourced from `KokoroVoiceCatalogue.all` filtered to `KokoroModelStore.installedVoiceIds()`, plus `AVSpeechSynthesisVoice.speechVoices()` for the AVKit fallback.
-- Settings adds default narrator voice (chat-level fallback).
+Two-tier fallback UI (entity → chat → settings — see §7.2). Sub-step shape:
 
-**Effort: ~2 days for §7.2–§7.5 once §7.1 lands.** §7.1 closed 2026-05-05; §7.2 closed 2026-05-05. Remaining order: §7.5 (UI for picking voices, exercises §7.2 immediately) → §7.3 (speaker attribution) → §7.4 (queue + per-segment voice swap).
+- **§7.5a — Entity card Voice section — shipped 2026-05-05.** The "edit sheet" in the original plan is actually the inline entity card in the inspector's Entities pane (no modal). Each card now has a Voice row: NSPopUpButton with "(use chat default)" sentinel + sectioned Kokoro / AVKit options, and rate/pitch sliders (range 0.5..2.0) that appear only when a voice is set. Pure picker source lives in `VoicePickerSource.swift` — `KokoroVoiceCatalogue.all ∩ installedVoiceIds()` plus `AVSpeechSynthesisVoice.speechVoices()` injected by the AppKit layer (so the type stays test-friendly without `AVFoundation` in the test target). 9 pure tests in `VoicePickerSourceTests`. A stored voice that's no longer installed is preserved as a "Stored (unavailable)" item so the selection isn't silently lost. Pitch slider is disabled with tooltip on Kokoro voices (the model has no pitch parameter; speed is the only knob there). **Preview button deferred to §7.4** — previewing an arbitrary Kokoro voice requires the per-segment style-buffer swap that's part of the §7.4 refactor; AVKit-only Preview was rejected as half-finished UX.
+- **§7.5b — Settings default narrator picker + chat-header voice picker** — pending. Settings gets a "Default narrator voice" picker bound to `Settings.defaultVoice`; chat header gets a per-chat voice picker bound to `Chat.voice`. Both use the same `VoicePickerSource` machinery as §7.5a.
+
+**Effort: ~2 days for §7.2–§7.5 once §7.1 lands.** §7.1 closed 2026-05-05; §7.2 closed 2026-05-05; §7.5a closed 2026-05-05. Remaining order: §7.5b (Settings default + chat-header pickers) → §7.4 (queue + per-segment voice swap; unblocks Preview in §7.5a) → §7.3 (speaker attribution).
 
 **Known follow-ups:**
 - Audio trimming between chunks. The model emits ~50–100 ms of trailing silence per synthesized chunk; concatenation accumulates these into noticeable gaps on multi-chunk replies. Upstream `kokoro-onnx` Python uses `trim_audio` on each chunk to remove leading/trailing silence. Add a Swift equivalent (RMS-windowed silence trim) before scheduling each PCM buffer in `KokoroSpeechSynthesizer.speak`. Cosmetic — current §7.1 output is acceptable but not ideal.
@@ -795,9 +797,9 @@ Phases 1–6 together (~15 days of focused work) ship every V2 item except branc
 
 ## 12. Recommended next move
 
-Phases 1, 2, 3 are done. Phase 6 §7.1 (Kokoro engine swap) closed 2026-05-05; §7.2 (per-character voice data model + migration) closed 2026-05-05 — `VoicePreference` lives in `Sources/RPClientCore/Voice/VoicePreference.swift`, `Entity.voice: VoicePreference?` decodes additively (missing key → nil → falls back to chat-default voice). 393/393 tests pass. From a fresh context: pick up at **Phase 6 §7.5 (Entity edit sheet — Voice section)** because it exercises §7.2 end-to-end. Voice picker should source from `KokoroVoiceCatalogue.all` filtered to `KokoroModelStore.installedVoiceIds()` plus `AVSpeechSynthesisVoice.speechVoices()`; rate/pitch sliders bind to `VoicePreference.rate` / `.pitch` (range 0.5..2.0); add a "Preview" button that pipes a canned line through the configured engine.
+Phases 1, 2, 3 are done. Phase 6 §7.1, §7.2 (a/b/c) and §7.5a all closed 2026-05-05. Two-tier fallback shipped (`Entity.voice ?? Chat.voice ?? Settings.defaultVoice`); the entity card now exposes the picker + rate/pitch sliders. 408/408 tests pass. From a fresh context: pick up at **Phase 6 §7.5b (Settings default narrator + chat-header voice picker)**. Reuses `VoicePickerSource`; binds the Settings popup to `Settings.defaultVoice` and adds a chat-header voice button (next to the existing template/sampler/server pickers added in Phase 4) bound to `Chat.voice`.
 
-After that: §7.3 (speaker attribution — heuristic vs tagged), then §7.4 (queue + per-segment voice swap; refactor `KokoroSpeechSynthesizer` to swap style buffers per call instead of holding one at init). See §7.4's "per-segment voice swap" note for the load-bearing design decision.
+After §7.5b: **§7.4** (queue + per-segment voice swap; refactor `KokoroSpeechSynthesizer` to swap style buffers per call instead of holding one at init). §7.4 unlocks the Preview button on the §7.5a card, and is the load-bearing piece for actual per-character routing. See §7.4's "per-segment voice swap" note. Then §7.3 (speaker attribution — heuristic vs tagged) lands last because attribution is only useful once the queue can route.
 
 Phase 4 (V8 Multi-server) is also outstanding and roughly comparable in effort — pick whichever direction feels more pressing. Voice work has the larger surface area built up; multi-server is more self-contained.
 
