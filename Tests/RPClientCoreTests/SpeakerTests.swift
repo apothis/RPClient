@@ -412,6 +412,118 @@ func speakerTests() -> TestSuite {
         try expectEqual(id, nil)
     }
 
+    // MARK: - preview (Phase 6 §7.5c)
+
+    s.test("preview(voice:) is a no-op when voiceEnabled is false") {
+        let avkit = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: false, avkit: avkit)
+        let pref = VoicePreference(
+            voiceIdentifier: VoiceIdentifier(engine: .avkit, voiceId: "com.apple.voice.compact.en-US.Samantha"),
+            rate: 1.0, pitch: 1.0
+        )
+        speaker.preview(voice: pref)
+        try expectEqual(avkit.spoken, [])
+    }
+
+    s.test("preview(voice:) plays even when voiceActive is false (mute is for streamed turns)") {
+        // The Preview button is an explicit user action — a chat-level mute
+        // shouldn't suppress it. Subsystem off (voiceEnabled=false) still does.
+        let avkit = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: true, voiceActive: false, avkit: avkit)
+        let pref = VoicePreference(
+            voiceIdentifier: VoiceIdentifier(engine: .avkit, voiceId: "com.apple.voice.compact.en-US.Samantha"),
+            rate: 1.0, pitch: 1.0
+        )
+        speaker.preview(voice: pref)
+        try expectEqual(avkit.spoken.count, 1)
+    }
+
+    s.test("preview(voice:) routes a Kokoro voice to the Kokoro synth") {
+        let avkit = RecordingSynthesizer()
+        let kokoro = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: true, avkit: avkit, kokoro: kokoro)
+        let pref = VoicePreference(
+            voiceIdentifier: VoiceIdentifier(engine: .kokoro, voiceId: "af_alloy"),
+            rate: 1.0, pitch: 1.0
+        )
+        speaker.preview(voice: pref)
+        try expectEqual(kokoro.spoken.count, 1)
+        try expectEqual(avkit.spoken, [])
+    }
+
+    s.test("preview(voice:) routes an AVKit voice to the AVKit synth") {
+        let avkit = RecordingSynthesizer()
+        let kokoro = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: true, avkit: avkit, kokoro: kokoro)
+        let pref = VoicePreference(
+            voiceIdentifier: VoiceIdentifier(engine: .avkit, voiceId: "com.apple.voice.compact.en-US.Samantha"),
+            rate: 1.0, pitch: 1.0
+        )
+        speaker.preview(voice: pref)
+        try expectEqual(avkit.spoken.count, 1)
+        try expectEqual(kokoro.spoken, [])
+    }
+
+    s.test("preview(voice:) stops any in-flight speech before previewing") {
+        // Preview interrupts streamed audio rather than layering on top of it.
+        let avkit = RecordingSynthesizer()
+        let kokoro = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: true, avkit: avkit, kokoro: kokoro)
+        let pref = VoicePreference(
+            voiceIdentifier: VoiceIdentifier(engine: .kokoro, voiceId: "af_alloy"),
+            rate: 1.0, pitch: 1.0
+        )
+        speaker.preview(voice: pref)
+        // Both engines stopped (Speaker.stop() forwards to both).
+        try expectEqual(avkit.stopCount, 1)
+        try expectEqual(kokoro.stopCount, 1)
+        try expectEqual(kokoro.spoken.count, 1)
+    }
+
+    s.test("preview(voice:) carries the preference's rate and pitch through to options") {
+        let avkit = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: true, avkit: avkit)
+        let pref = VoicePreference(
+            voiceIdentifier: VoiceIdentifier(engine: .avkit, voiceId: "com.apple.voice.compact.en-US.Samantha"),
+            rate: 1.4, pitch: 0.7
+        )
+        speaker.preview(voice: pref)
+        try expectEqual(avkit.spoken.count, 1)
+        try expectEqual(avkit.spoken[0].options.rate, 1.4)
+        try expectEqual(avkit.spoken[0].options.pitch, 0.7)
+    }
+
+    s.test("previewText uses the Kokoro voice's sampleText when catalogued") {
+        let voiceId = VoiceIdentifier(engine: .kokoro, voiceId: "af_alloy")
+        let text = Speaker.previewText(for: voiceId)
+        // af_alloy is American English — pangram lives in KokoroVoiceCatalogue.
+        try expectEqual(text, "The quick brown fox jumps over the lazy dog.")
+    }
+
+    s.test("previewText uses the per-language sample for non-English Kokoro voices") {
+        // ff_siwis is the only French voice — should pick up the French pangram.
+        let voiceId = VoiceIdentifier(engine: .kokoro, voiceId: "ff_siwis")
+        let text = Speaker.previewText(for: voiceId)
+        try expectEqual(text, "Portez ce vieux whisky au juge blond qui fume.")
+    }
+
+    s.test("previewText falls back to an English sample for AVKit voices") {
+        // We don't parse AVKit voice ids for language — keep Speaker free of
+        // AVFoundation. English fallback is fine; a French AVKit voice will
+        // pronounce the English text in a French accent, which still
+        // demonstrates the voice's character.
+        let voiceId = VoiceIdentifier(engine: .avkit, voiceId: "com.apple.voice.compact.fr-FR.Thomas")
+        let text = Speaker.previewText(for: voiceId)
+        try expectEqual(text, "The quick brown fox jumps over the lazy dog.")
+    }
+
+    s.test("previewText falls back to English for an uncatalogued Kokoro voice id") {
+        // Stale stored preference: voice is no longer in the catalogue.
+        let voiceId = VoiceIdentifier(engine: .kokoro, voiceId: "zz_unknown")
+        let text = Speaker.previewText(for: voiceId)
+        try expectEqual(text, "The quick brown fox jumps over the lazy dog.")
+    }
+
     s.test("SpeakOptions(preference: nil) is the default") {
         try expectEqual(SpeakOptions(preference: nil), SpeakOptions.default)
     }

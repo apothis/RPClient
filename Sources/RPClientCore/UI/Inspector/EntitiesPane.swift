@@ -307,12 +307,11 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
         return card
     }
 
-    /// Voice section: picker + rate/pitch sliders. Phase 6 §7.5a.
-    /// "(use chat default)" maps to `Entity.voice == nil` (falls through to
-    /// `Chat.voice ?? Settings.defaultVoice` at speak time). Sliders are
-    /// hidden when nil so the row stays quiet for the common case.
-    /// Preview button deferred to §7.4 — needs the per-segment style-buffer
-    /// swap that's not in the engine yet.
+    /// Voice section: picker + rate/pitch sliders + preview button. Phase 6
+    /// §7.5a (picker, sliders) and §7.5c (preview button). "(use chat default)"
+    /// maps to `Entity.voice == nil` (falls through to `Chat.voice ??
+    /// Settings.defaultVoice` at speak time). Sliders + Preview only appear
+    /// when a voice is set so the row stays quiet for the common case.
     private func makeVoiceSection(for ent: Entity) -> NSView {
         let row = NSView()
         row.translatesAutoresizingMaskIntoConstraints = false
@@ -348,11 +347,29 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
             popup.trailingAnchor.constraint(lessThanOrEqualTo: row.trailingAnchor),
         ])
 
-        // Sliders only when a voice is set.
+        // Sliders + Preview button only when a voice is set.
         guard let voice = ent.voice else {
             popup.bottomAnchor.constraint(equalTo: row.bottomAnchor).isActive = true
             return row
         }
+
+        let previewButton = NSButton(title: "Preview", target: self, action: #selector(previewVoice(_:)))
+        previewButton.bezelStyle = .rounded
+        previewButton.controlSize = .small
+        previewButton.font = Theme.font(11)
+        previewButton.identifier = NSUserInterfaceItemIdentifier("voice-preview:\(ent.id.uuidString)")
+        previewButton.translatesAutoresizingMaskIntoConstraints = false
+        let voiceEnabled = AppState.shared.settings.voiceEnabled
+        previewButton.isEnabled = voiceEnabled
+        previewButton.toolTip = voiceEnabled
+            ? "Synthesize a sample line through this voice"
+            : "Enable the voice subsystem in Settings"
+        row.addSubview(previewButton)
+        NSLayoutConstraint.activate([
+            previewButton.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            previewButton.centerYAnchor.constraint(equalTo: popup.centerYAnchor),
+            previewButton.leadingAnchor.constraint(greaterThanOrEqualTo: popup.trailingAnchor, constant: 8),
+        ])
 
         let rateLabel = NSTextField(labelWithString: "Rate")
         rateLabel.font = Theme.font(10)
@@ -597,6 +614,21 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
             guard let i = c.entities.firstIndex(where: { $0.id == id }) else { return }
             c.entities[i].voice?.pitch = value
         }
+    }
+
+    /// Phase 6 §7.5c — Preview button on the entity card. Resolves the
+    /// entity's current `VoicePreference` and asks the speaker to synth a
+    /// sample line. No-op if the entity has no voice set or the chat has
+    /// gone away — both are guarded UI states (the button only renders when
+    /// `ent.voice != nil`) but the lookup is cheap.
+    @objc private func previewVoice(_ sender: NSButton) {
+        guard let raw = sender.identifier?.rawValue,
+              raw.hasPrefix("voice-preview:"),
+              let id = UUID(uuidString: String(raw.dropFirst("voice-preview:".count))),
+              let chat = AppState.shared.currentChat,
+              let ent = chat.entities.first(where: { $0.id == id }),
+              let voice = ent.voice else { return }
+        AppState.shared.speaker.preview(voice: voice)
     }
 
     @objc private func togglePin(_ sender: NSButton) {

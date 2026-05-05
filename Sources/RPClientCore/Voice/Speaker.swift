@@ -252,6 +252,41 @@ final class Speaker {
         }
     }
 
+    /// Phase 6 §7.5c — synth a short sample line through `voice` so the user
+    /// can audition an entity-card pick before saving. Stops in-flight audio
+    /// first so the preview is immediately audible (layering the preview on
+    /// top of streamed turn audio would be worse than interrupting it).
+    ///
+    /// Honours the subsystem gate (`voiceEnabled`) but bypasses the runtime
+    /// mute (`voiceActive`) — the user explicitly pushed the Preview button,
+    /// the runtime mute is for streamed turns.
+    func preview(voice: VoicePreference) {
+        guard voiceEnabled else { return }
+        let text = Speaker.previewText(for: voice.voiceIdentifier)
+        let options = SpeakOptions(preference: voice)
+        stop()
+        synthesizer(for: options).speak(text, options: options, completion: nil)
+    }
+
+    /// Sample text for `voiceId`. Kokoro voices use the catalogue's
+    /// per-language pangram; AVKit and uncatalogued voices fall back to an
+    /// English pangram (we don't parse AVKit voice ids for language here so
+    /// Speaker stays free of `AVFoundation` lookups, and a non-English AVKit
+    /// voice still demonstrates its character via accent on English text).
+    static func previewText(for voiceId: VoiceIdentifier) -> String {
+        let englishFallback = "The quick brown fox jumps over the lazy dog."
+        switch voiceId.engine {
+        case .kokoro:
+            if let voice = KokoroVoiceCatalogue.voice(id: voiceId.voiceId),
+               !voice.sampleText.isEmpty {
+                return voice.sampleText
+            }
+            return englishFallback
+        case .avkit:
+            return englishFallback
+        }
+    }
+
     /// Cancel any in-flight utterance on either engine immediately and bump
     /// the queue generation so any pending segment-completion callbacks
     /// from a superseded batch are discarded.
