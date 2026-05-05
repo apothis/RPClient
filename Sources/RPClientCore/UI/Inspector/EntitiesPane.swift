@@ -191,12 +191,15 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
     // MARK: - Cards
 
     private func makeCard(for ent: Entity, currentUserTurn: Int) -> NSView {
-        let card = NSView()
+        // Backgrounds + border colours go through updateLayer so they
+        // re-resolve when the system appearance flips between light/dark.
+        // Setting `layer.backgroundColor = NSColor.cgColor` directly snapshots
+        // the current appearance and never updates — that's the bug the rest
+        // of the inspector avoids by using NSColor on AppKit-managed views.
+        let card = EntityCardView()
         card.wantsLayer = true
-        card.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         card.layer?.cornerRadius = 6
         card.layer?.borderWidth = 1
-        card.layer?.borderColor = NSColor.separatorColor.cgColor
         card.translatesAutoresizingMaskIntoConstraints = false
 
         let typePopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -686,5 +689,18 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
                 }
             }
         }
+    }
+}
+
+/// Background + border colours re-resolve on light/dark appearance changes.
+/// AppKit calls `updateLayer()` whenever the effective appearance flips, so
+/// re-evaluating `NSColor.controlBackgroundColor.cgColor` here picks up the
+/// new appearance — unlike a one-shot assignment in `makeCard`, which would
+/// snapshot the colour at construction.
+private final class EntityCardView: NSView {
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        layer?.borderColor = NSColor.separatorColor.cgColor
     }
 }
