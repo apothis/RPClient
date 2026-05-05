@@ -166,6 +166,111 @@ func speakerAttributionTests() -> TestSuite {
         try expectEqual(segs.last?.entityId, nil)
     }
 
+    // MARK: - Dialogue-verb subject detection
+
+    s.test("heuristic: post-quote dialogue verb attributes to the named subject") {
+        // Quote-first pattern with no preceding context — without dialogue-verb
+        // detection, this would fall to narrator.
+        let segs = SpeakerAttribution.split(
+            text: #""Hello," Sage said."#,
+            entities: [sage, kira],
+            mode: .heuristic
+        )
+        let attributed = segs.first { $0.entityId != nil }
+        try expectEqual(attributed?.entityId, sage.id)
+    }
+
+    s.test("heuristic: pre-quote dialogue verb attributes to the named subject") {
+        let segs = SpeakerAttribution.split(
+            text: #"Sage said, "Hello.""#,
+            entities: [sage, kira],
+            mode: .heuristic
+        )
+        let attributed = segs.first { $0.entityId != nil }
+        try expectEqual(attributed?.entityId, sage.id)
+    }
+
+    s.test("heuristic: dialogue verb 'I said' attributes to first-person entity") {
+        let segs = SpeakerAttribution.split(
+            text: #""Hello," I said."#,
+            entities: [sage, kira],
+            mode: .heuristic,
+            firstPersonEntityId: kira.id
+        )
+        let attributed = segs.first { $0.entityId != nil }
+        try expectEqual(attributed?.entityId, kira.id)
+    }
+
+    s.test("heuristic: 'I asked' before quote attributes to first-person entity") {
+        let segs = SpeakerAttribution.split(
+            text: #"I asked, "Are you ready?""#,
+            entities: [sage, kira],
+            mode: .heuristic,
+            firstPersonEntityId: kira.id
+        )
+        let attributed = segs.first { $0.entityId != nil }
+        try expectEqual(attributed?.entityId, kira.id)
+    }
+
+    s.test("heuristic: dialogue verb beats most-recent mention rule") {
+        // Sage was named most recently before the quote, but "Kira said"
+        // immediately after tells us Kira is actually speaking.
+        let segs = SpeakerAttribution.split(
+            text: #"Sage walked over. "Hello," Kira said."#,
+            entities: [sage, kira],
+            mode: .heuristic
+        )
+        let attributed = segs.first { $0.entityId != nil }
+        try expectEqual(attributed?.entityId, kira.id)
+    }
+
+    s.test("heuristic: pronoun subject (she/he/they) falls through to most-recent rule") {
+        // No name attached to "said" — fall back to most-recent rule, which
+        // picks Sage from the preceding narration.
+        let segs = SpeakerAttribution.split(
+            text: #"Sage walked over. "Hello," she said."#,
+            entities: [sage, kira],
+            mode: .heuristic
+        )
+        let attributed = segs.first { $0.entityId != nil }
+        try expectEqual(attributed?.entityId, sage.id)
+    }
+
+    s.test("heuristic: a variety of dialogue verbs are recognised") {
+        for verb in ["said", "asked", "replied", "whispered", "shouted", "exclaimed", "murmured", "answered"] {
+            let segs = SpeakerAttribution.split(
+                text: "\"Hi,\" Sage \(verb).",
+                entities: [sage, kira],
+                mode: .heuristic
+            )
+            let attributed = segs.first { $0.entityId != nil }
+            try expectEqual(attributed?.entityId, sage.id, "verb='\(verb)'")
+        }
+    }
+
+    s.test("heuristic: unknown subject after dialogue verb falls through") {
+        // 'Stranger' isn't an entity. Ignore the dialogue verb and apply
+        // most-recent rule — which picks Sage from the preceding text.
+        let segs = SpeakerAttribution.split(
+            text: #"Sage was nearby. "Hello," Stranger said."#,
+            entities: [sage, kira],
+            mode: .heuristic
+        )
+        let attributed = segs.first { $0.entityId != nil }
+        try expectEqual(attributed?.entityId, sage.id)
+    }
+
+    s.test("heuristic: alias also matches as dialogue-verb subject") {
+        // Sage's alias is "the mage". "the mage said" should attribute to Sage.
+        let segs = SpeakerAttribution.split(
+            text: #""Hello," the mage said."#,
+            entities: [sage, kira],
+            mode: .heuristic
+        )
+        let attributed = segs.first { $0.entityId != nil }
+        try expectEqual(attributed?.entityId, sage.id)
+    }
+
     s.test("heuristic: unmatched opening quote does not eat the rest of the text") {
         // Defensive: a stray `"` shouldn't blackhole all subsequent narration.
         let segs = SpeakerAttribution.split(

@@ -137,20 +137,10 @@ enum SpeakerAttribution {
                     let lead = String(text[cursor..<boundary])
                     appendSegment(&segments, text: lead, entityId: nil)
                 }
-                // Begin a quoted span. Decide the speaker by looking at
-                // narration so far (everything before this quote).
-                let leadingText = String(text[..<boundary])
-                let speaker = mostRecentMention(
-                    in: leadingText,
-                    needles: needles,
-                    firstPersonEntityId: firstPersonEntityId
-                )
-                // Open a placeholder segment; we'll commit it when we see
-                // the close quote (or the end of text — see fallback below).
+                // Begin a quoted span. Decide the speaker.
                 inQuote = true
                 quoteOpener = char
                 cursor = boundary
-                // Try to find the close.
                 let afterOpen = text.index(after: cursor)
                 guard let (closeIdx, _) = nextQuote(from: afterOpen) else {
                     // Unmatched opener — degrade gracefully: emit the rest
@@ -163,6 +153,34 @@ enum SpeakerAttribution {
                     break
                 }
                 let closeAfter = text.index(after: closeIdx)
+                // Speaker resolution priority:
+                //   1. Dialogue-verb subject AFTER the close quote
+                //      (`"Hi," Sage said.`) — most explicit.
+                //   2. Dialogue-verb subject BEFORE the open quote
+                //      (`Sage said, "Hi."`).
+                //   3. Most-recent entity / first-person mention in the
+                //      preceding text (the pre-Step-1.5 fallback).
+                // Pronoun subjects (she/he/they/…) attached to a dialogue
+                // verb intentionally fall through so the most-recent rule
+                // can do its best with the surrounding context.
+                let speaker: UUID? =
+                    speakerFromDialogueVerb(
+                        afterQuoteAt: closeAfter,
+                        in: text,
+                        needles: needles,
+                        firstPersonEntityId: firstPersonEntityId
+                    )
+                    ?? speakerFromDialogueVerb(
+                        beforeQuoteAt: boundary,
+                        in: text,
+                        needles: needles,
+                        firstPersonEntityId: firstPersonEntityId
+                    )
+                    ?? mostRecentMention(
+                        in: String(text[..<boundary]),
+                        needles: needles,
+                        firstPersonEntityId: firstPersonEntityId
+                    )
                 let quoted = String(text[cursor..<closeAfter])
                 appendSegment(&segments, text: quoted, entityId: speaker)
                 cursor = closeAfter
@@ -170,6 +188,151 @@ enum SpeakerAttribution {
             }
         }
         return segments
+    }
+
+    // MARK: - Dialogue-verb subject detection
+
+    /// Common attribution verbs in English RP. Word-bounded match. Kept as
+    /// a Set so lookups are O(1); add to it sparingly — false positives on
+    /// generic verbs ("walked", "smiled") would mis-attribute lots of
+    /// quotes. The list below is intentionally conservative: only words
+    /// that almost always introduce direct speech.
+    private static let dialogueVerbs: Set<String> = [
+        "said", "asked", "replied", "whispered", "murmured", "shouted",
+        "exclaimed", "answered", "continued", "added", "cried", "muttered",
+        "breathed", "hissed", "sighed", "called", "yelled",
+    ]
+
+    /// Pronouns the subject capture might land on. We deliberately don't
+    /// resolve these — their referent depends on context the attribution
+    /// algorithm doesn't track. Returning nil here lets the caller fall
+    /// through to the most-recent-mention rule, which usually does the
+    /// right thing.
+    private static let speakerPronouns: Set<String> = [
+        "she", "he", "they", "we", "you", "it",
+    ]
+
+    /// Pattern: `<subject> <verb>` immediately after a closing quote
+    /// (allowing one optional comma + whitespace between the quote and
+    /// the subject). Returns the resolved entity id when the subject is
+    /// `I` (first-person hint), an entity name, or an alias. Pronoun
+    /// subjects return nil so the caller falls through.
+    private static func speakerFromDialogueVerb(
+        afterQuoteAt closeAfter: String.Index,
+        in text: String,
+        needles: [(needle: String, id: UUID)],
+        firstPersonEntityId: UUID?
+    ) -> UUID? {
+        var i = closeAfter
+        let endIdx = text.endIndex
+        // Allow one comma and whitespace between the close quote and the
+        // subject. Anything else (period, another quote) means there's no
+        // dialogue verb attached to this quote.
+        if i < endIdx, text[i] == "," { i = text.index(after: i) }
+        while i < endIdx, text[i].isWhitespace { i = text.index(after: i) }
+        guard i < endIdx else { return nil }
+
+        // Walk forward until a known dialogue verb word-bounded match. Stop
+        // at sentence boundaries (`. ! ? \n`) or another quote so we don't
+        // grab a verb from the *next* sentence.
+        let subjectStart = i
+        let lookaheadEnd = text.index(i, offsetBy: 80, limitedBy: endIdx) ?? endIdx
+        var verbRange: Range<String.Index>? = nil
+        var w = i
+        while w < lookaheadEnd {
+            let c = text[w]
+            if c == "." || c == "?" || c == "!" || c == "\n"
+                || c == "\"" || c == "\u{201C}" || c == "\u{201D}" {
+                break
+            }
+            if c.isLetter {
+                let wStart = w
+                while w < lookaheadEnd, text[w].isLetter { w = text.index(after: w) }
+                let candidate = String(text[wStart..<w]).lowercased()
+                if dialogueVerbs.contains(candidate) {
+                    verbRange = wStart..<w
+                    break
+                }
+            } else {
+                w = text.index(after: w)
+            }
+        }
+        guard let verbRange else { return nil }
+        let subject = String(text[subjectStart..<verbRange.lowerBound])
+            .trimmingCharacters(in: .whitespaces)
+        return resolveSubject(
+            subject,
+            needles: needles,
+            firstPersonEntityId: firstPersonEntityId
+        )
+    }
+
+    /// Pattern: `<subject> <verb>[,:]?\s*` immediately before an opening
+    /// quote — `Sage said, "Hello."`. Walks backward from the opening
+    /// quote position. Mirror of the post-quote variant.
+    private static func speakerFromDialogueVerb(
+        beforeQuoteAt openIdx: String.Index,
+        in text: String,
+        needles: [(needle: String, id: UUID)],
+        firstPersonEntityId: UUID?
+    ) -> UUID? {
+        var i = openIdx
+        let startIdx = text.startIndex
+        // Skip whitespace
+        while i > startIdx, text[text.index(before: i)].isWhitespace { i = text.index(before: i) }
+        // Optional comma or colon
+        if i > startIdx, let prev = Optional(text.index(before: i)),
+           text[prev] == "," || text[prev] == ":" {
+            i = prev
+            while i > startIdx, text[text.index(before: i)].isWhitespace { i = text.index(before: i) }
+        }
+        // Capture the verb (a run of letters ending at i).
+        let verbEnd = i
+        while i > startIdx, text[text.index(before: i)].isLetter { i = text.index(before: i) }
+        let verb = String(text[i..<verbEnd]).lowercased()
+        guard dialogueVerbs.contains(verb), !verb.isEmpty else { return nil }
+        // Skip whitespace before the verb
+        while i > startIdx, text[text.index(before: i)].isWhitespace { i = text.index(before: i) }
+        // Capture the subject — walk back to the previous sentence boundary
+        // (or up to ~80 chars, whichever comes first).
+        let subjectEnd = i
+        let lookbackLimit = text.index(i, offsetBy: -80, limitedBy: startIdx) ?? startIdx
+        while i > lookbackLimit {
+            let prev = text.index(before: i)
+            let ch = text[prev]
+            if ch == "." || ch == "?" || ch == "!" || ch == "\n"
+                || ch == "\"" || ch == "\u{201C}" || ch == "\u{201D}" {
+                break
+            }
+            i = prev
+        }
+        let subject = String(text[i..<subjectEnd])
+            .trimmingCharacters(in: .whitespaces)
+        return resolveSubject(
+            subject,
+            needles: needles,
+            firstPersonEntityId: firstPersonEntityId
+        )
+    }
+
+    /// Map a dialogue-verb subject string to an entity id.
+    /// - `"I"` (case-sensitive, English capitalisation) → `firstPersonEntityId`.
+    /// - Pronouns (`she`, `he`, `they`, …) → nil so the caller falls through.
+    /// - Otherwise → first needle whose name/alias matches case-insensitively.
+    /// - Subject empty / no match → nil.
+    private static func resolveSubject(
+        _ subject: String,
+        needles: [(needle: String, id: UUID)],
+        firstPersonEntityId: UUID?
+    ) -> UUID? {
+        guard !subject.isEmpty else { return nil }
+        if subject == "I" { return firstPersonEntityId }
+        let lower = subject.lowercased()
+        if speakerPronouns.contains(lower) { return nil }
+        for (needle, id) in needles where needle == lower {
+            return id
+        }
+        return nil
     }
 
     /// Returns the entity id whose name/alias appears latest in `text`
