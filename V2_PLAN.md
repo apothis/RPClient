@@ -458,6 +458,21 @@ Decisions made at Phase 5 kickoff (2026-05-05) — call these out so they don't 
 
 Depends on the Entity store from Memory V2 Step C.
 
+### 7.0 Prestep — basic "Speak replies" (single voice)
+
+Discovered 2026-05-05 while scoping Phase 6: the existing **Speak replies** checkbox in Settings is a stub. `Settings.voiceEnabled` is declared, persisted, and surfaced via [`SettingsWindowController.voiceCheck`](Sources/RPClientCore/UI/SettingsWindowController.swift:25), but **nothing reads it** — there's no `Voice/Speaker.swift`, no `AVSpeechSynthesizer` import anywhere, and git history shows no such file was ever deleted (the checkbox shipped ahead of any TTS implementation). V2_PLAN §7.3's "Existing `Voice/Speaker.swift` currently speaks the whole turn in one voice — refactor:" is therefore wrong; there's nothing to refactor.
+
+The prestep ships the missing single-voice path so the UI promise stops lying, then §7.1–§7.4 layer per-character attribution on top of a working pipeline rather than building TTS from scratch.
+
+Scope:
+
+- New `Sources/RPClientCore/Voice/Speaker.swift`. One `AVSpeechSynthesizer` owned by `AppState` (or a shared `Speaker.shared`). When `Settings.voiceEnabled` is on, observe `AppNotification.streamFinished` and speak the just-completed assistant turn's text with the system default voice. Strip markdown / `<think>` blocks first (reuse `Markdown.stripThinking`).
+- Stop speaking when: a new stream starts, the user navigates to a different chat, or the user toggles the checkbox off mid-utterance.
+- Honour the existing `voiceEnabled` checkbox — no new UI in this prestep. Default narrator-voice picker is deferred to §7.4 alongside the per-entity voice UI.
+- Tests: a small `SpeakerTests` covering the markdown-strip path (pure logic) and the on/off toggle gating. The `AVSpeechSynthesizer` glue itself is smoke-tested per the AppKit/AppState side-effect exemption — no fake unit tests for "did AVKit play sound."
+
+After the prestep ships, §7.1–§7.4 below pick up where it left off: extend `Speaker` to accept a `[(speaker, segment)]` queue rather than one utterance, then wire attribution + per-entity voice picking on top.
+
 ### 7.1 Data model
 
 ```swift
@@ -481,7 +496,7 @@ The hard part. Given a streamed assistant turn, decide which entity is speaking 
 
 ### 7.3 TTS pipeline
 
-Existing [`Voice/Speaker.swift`](Sources/RPClientCore/Voice/Speaker.swift) currently speaks the whole turn in one voice. Refactor:
+After the §7.0 prestep, `Voice/Speaker.swift` will exist and speak the whole turn in one voice. Refactor:
 
 - Split turn text into segments tagged with speaker.
 - Queue an `AVSpeechUtterance` per segment with the matched voice.
@@ -492,7 +507,7 @@ Existing [`Voice/Speaker.swift`](Sources/RPClientCore/Voice/Speaker.swift) curre
 - Entity edit sheet gains a Voice section: pick voice, sliders for rate/pitch, "Preview" button.
 - Settings adds default narrator voice (chat-level fallback).
 
-**Effort: 2 days.**
+**Effort: ~½ day for the §7.0 prestep, +2 days for the rest.**
 
 ---
 
