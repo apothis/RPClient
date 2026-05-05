@@ -2,7 +2,7 @@
 
 Forward plan for the V2 surface area listed in [`PLAN.md`](PLAN.md) §10. The MVP and the Memory V2 subsystem (Steps A–D, see [`MEMORY_V2_PLAN.md`](MEMORY_V2_PLAN.md)) shipped 2026-05-03. This doc plans everything outside the memory subsystem; memory polish is deferred per the user's directive and tracked in [`NEXT_STAGES.md`](NEXT_STAGES.md) §A.
 
-**Status as of 2026-05-04.** Phase 1 (V5 Lorebook UI), Phase 2 (V1 Swipes — including a stale-variant detection follow-up), and Phase 3 (V3 Character cards + V4 Personas) all shipped 2026-05-04. Phase 4 (V8 Multi-server) is next.
+**Status as of 2026-05-05.** Phase 1 (V5 Lorebook UI), Phase 2 (V1 Swipes — including a stale-variant detection follow-up), and Phase 3 (V3 Character cards + V4 Personas) all shipped 2026-05-04. Phase 4 (V8 Multi-server) shipped 2026-05-05. Phase 5 (V10 Avatars) shipped 2026-05-05. Phase 6 (V6 Per-character voices) is next.
 
 ---
 
@@ -20,7 +20,7 @@ From [`PLAN.md`](PLAN.md) §10 (with cross-links to the existing fragmented note
 | V6 | Per-character voices | NEXT_STAGES F2 | Not started |
 | V8 | Multi-server / multi-server switching | NEXT_STAGES F1 | Not started |
 | V9 | Group chats | PLAN.md §10 only | Not started |
-| V10 | Avatars / image rendering | NEXT_STAGES C3 | Not started |
+| V10 | Avatars / image rendering | NEXT_STAGES C3 | **Shipped 2026-05-05** (Phase 5; sidebar + assistant-turn avatars, inline image rendering deferred per §6.3) |
 
 The chat-view UI overhaul (NEXT_STAGES §E) is **not** in this plan — it's a polish track and is sequenced separately.
 
@@ -35,8 +35,8 @@ The order below is the recommended path. Each phase ends with a shippable, runna
 │  Phase 1   V5 Lorebook UI            ✅ shipped 2026-05-04      │
 │  Phase 2   V1 Swipes                 ✅ shipped 2026-05-04      │
 │  Phase 3   V3 Character cards + V4 Personas  ✅ shipped 2026-05-04 │
-│  Phase 4   V8 Multi-server                                      │
-│  Phase 5   V10 Avatars                (small; unlocks V3 polish)│
+│  Phase 4   V8 Multi-server            ✅ shipped 2026-05-05      │
+│  Phase 5   V10 Avatars                ✅ shipped 2026-05-05      │
 │  Phase 6   V6 Per-character voices    (depends on Entity store) │
 │  Phase 7   V2 Full branching          (refactor; design doc)    │
 │  Phase 8   V9 Group chats             (largest; design doc)     │
@@ -423,9 +423,11 @@ What landed differently from §5.6 risks:
 
 ---
 
-## 6. Phase 5 — V10 Avatars / image rendering
+## 6. Phase 5 — V10 Avatars / image rendering ✅ shipped 2026-05-05
 
 Avatars (per-character, per-persona, per-entity) drop in cleanly on top of Phase 3.
+
+**Status (2026-05-05):** sidebar + assistant-turn avatars shipped across three commits (`f6d9192` → `aab21e7` → `897747a`). 5a introduced `AvatarSource` (id → NSImage resolver with library-changed cache invalidation, TDD'd against 5 cases); 5b added the 32px circular avatar slot to each sidebar row; 5c replaced the assistant ✦ glyph in TurnView with the same 32px avatar (placeholder ✦ kept for character-less chats). Persona avatars on user turns, entity avatars, and inline image rendering are deferred — see §6.3 and §6.4 for the deferred sub-items.
 
 ### 6.1 Sidebar avatars
 
