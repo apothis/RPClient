@@ -87,6 +87,69 @@ func speakerTests() -> TestSuite {
         try expectEqual(fake.spoken, [])
     }
 
+    // MARK: - two-tier gating (Phase 6 §7.1f)
+
+    s.test("speak() is a no-op when subsystem on but runtime active false") {
+        let fake = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: true, voiceActive: false, synthesizer: fake)
+        speaker.speak("Hello")
+        try expectEqual(fake.spoken, [])
+    }
+
+    s.test("speak() is a no-op when subsystem off even if runtime active true") {
+        let fake = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: false, voiceActive: true, synthesizer: fake)
+        speaker.speak("Hello")
+        try expectEqual(fake.spoken, [])
+    }
+
+    s.test("speak() forwards when both subsystem and active are true") {
+        let fake = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: true, voiceActive: true, synthesizer: fake)
+        speaker.speak("Hi.")
+        try expectEqual(fake.spoken, ["Hi."])
+    }
+
+    s.test("speak() is a no-op when both subsystem and active are false") {
+        let fake = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: false, voiceActive: false, synthesizer: fake)
+        speaker.speak("Hello")
+        try expectEqual(fake.spoken, [])
+    }
+
+    s.test("setVoiceActive(false) stops in-flight speech when subsystem is on") {
+        let fake = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: true, voiceActive: true, synthesizer: fake)
+        speaker.speak("Hello")
+        try expectEqual(fake.stopCount, 0)
+        speaker.setVoiceActive(false)
+        try expectEqual(fake.stopCount, 1)
+    }
+
+    s.test("setVoiceActive(true) does not call stop") {
+        let fake = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: true, voiceActive: false, synthesizer: fake)
+        speaker.setVoiceActive(true)
+        try expectEqual(fake.stopCount, 0)
+    }
+
+    s.test("voiceActiveChanged notification name exists") {
+        try expectEqual(
+            AppNotification.voiceActiveChanged.rawValue,
+            "RPClient.voiceActiveChanged"
+        )
+    }
+
+    s.test("legacy Speaker init defaults voiceActive to true") {
+        // The single-arg init must keep working (tests + AppState wiring)
+        // and behave as if voiceActive is true so existing callers don't
+        // suddenly go silent.
+        let fake = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: true, synthesizer: fake)
+        speaker.speak("Hi.")
+        try expectEqual(fake.spoken, ["Hi."])
+    }
+
     return s
 }
 

@@ -22,22 +22,28 @@ final class AVSpeechSynthesizerAdapter: SpeechSynthesizing {
     }
 }
 
-/// Single-voice TTS pipeline driven by `Settings.voiceEnabled`. V2_PLAN §7.0
-/// prestep — speaks just-completed assistant turns through the system default
-/// voice. Per-character attribution and voice picking land in §7.1–§7.4 on top
-/// of this surface.
+/// Single-voice TTS pipeline gated on `Settings.voiceEnabled` (subsystem) AND
+/// `Settings.voiceActive` (runtime). V2_PLAN §7.0/§7.1f. Speaks just-completed
+/// assistant turns through the system default voice. Per-character attribution
+/// and voice picking land in §7.1–§7.4 on top of this surface.
 ///
 /// Owned by `AppState`. Subscribes to `streamFinished`, `streamStarted`,
-/// `currentChatChanged`, and `settingsChanged` so callers don't need to drive
-/// it explicitly.
+/// `currentChatChanged`, `settingsChanged`, and `voiceActiveChanged` so
+/// callers don't need to drive it explicitly.
 final class Speaker {
     private let synthesizer: SpeechSynthesizing
     private var voiceEnabled: Bool
+    private var voiceActive: Bool
     private var observers: [NSObjectProtocol] = []
 
-    init(voiceEnabled: Bool, synthesizer: SpeechSynthesizing = AVSpeechSynthesizerAdapter()) {
+    private var shouldSpeak: Bool { voiceEnabled && voiceActive }
+
+    init(voiceEnabled: Bool,
+         voiceActive: Bool = true,
+         synthesizer: SpeechSynthesizing = AVSpeechSynthesizerAdapter()) {
         self.synthesizer = synthesizer
         self.voiceEnabled = voiceEnabled
+        self.voiceActive = voiceActive
     }
 
     deinit {
@@ -45,10 +51,10 @@ final class Speaker {
     }
 
     /// Speak `raw` through the synthesizer, after stripping `<think>` blocks
-    /// and markdown formatting. No-op when `voiceEnabled` is off, or when the
-    /// stripped text is empty.
+    /// and markdown formatting. No-op unless both the subsystem and the
+    /// runtime toggle are on, or when the stripped text is empty.
     func speak(_ raw: String) {
-        guard voiceEnabled else { return }
+        guard shouldSpeak else { return }
         let text = Speaker.plainText(raw)
         guard !text.isEmpty else { return }
         synthesizer.speak(text)
@@ -59,13 +65,22 @@ final class Speaker {
         synthesizer.stopSpeaking()
     }
 
-    /// Mirror `Settings.voiceEnabled` into the speaker. Flipping off mid-
-    /// utterance stops the current speech so the toggle feels live.
+    /// Mirror `Settings.voiceEnabled` (the subsystem gate) into the speaker.
+    /// Flipping off while speech is live stops it so the toggle feels live.
     func setVoiceEnabled(_ enabled: Bool) {
-        if voiceEnabled && !enabled {
+        if shouldSpeak && !enabled {
             synthesizer.stopSpeaking()
         }
         voiceEnabled = enabled
+    }
+
+    /// Mirror `Settings.voiceActive` (the runtime gate) into the speaker.
+    /// Flipping off while speech is live stops it.
+    func setVoiceActive(_ active: Bool) {
+        if shouldSpeak && !active {
+            synthesizer.stopSpeaking()
+        }
+        voiceActive = active
     }
 
     // MARK: - Notification wiring
@@ -93,13 +108,20 @@ final class Speaker {
         let trackSettings = nc.addObserver(
             forName: AppNotification.settingsChanged, object: nil, queue: .main
         ) { [weak self] _ in
-            self?.setVoiceEnabled(AppState.shared.settings.voiceEnabled)
+            let s = AppState.shared.settings
+            self?.setVoiceEnabled(s.voiceEnabled)
+            self?.setVoiceActive(s.voiceActive)
         }
-        observers = [speakIfFinished, stopOnNewStream, stopOnChatSwitch, trackSettings]
+        let trackActive = nc.addObserver(
+            forName: AppNotification.voiceActiveChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.setVoiceActive(AppState.shared.settings.voiceActive)
+        }
+        observers = [speakIfFinished, stopOnNewStream, stopOnChatSwitch, trackSettings, trackActive]
     }
 
     private func handleStreamFinished() {
-        guard voiceEnabled else { return }
+        guard shouldSpeak else { return }
         guard let last = AppState.shared.currentChat?.turns.last,
               last.role == .assistant else { return }
         speak(last.text)

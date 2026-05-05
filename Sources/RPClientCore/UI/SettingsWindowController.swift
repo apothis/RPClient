@@ -22,7 +22,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let templatePopup = NSPopUpButton()
     private let presetPopup = NSPopUpButton()
     private let personaPopup = NSPopUpButton()
-    private let voiceCheck = NSButton(checkboxWithTitle: "Speak replies", target: nil, action: nil)
+    private let voiceCheck = NSButton(checkboxWithTitle: "Enable voice subsystem", target: nil, action: nil)
     private let qwenThinkingCheck = NSButton(
         checkboxWithTitle: "Qwen 3: enable thinking mode (strips <think>…</think> from replies)",
         target: nil, action: nil)

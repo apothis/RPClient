@@ -26,6 +26,11 @@ enum AppNotification {
     /// that mirror Settings state (e.g. the chat header's server picker)
     /// listen for this so they refresh when profiles are added/removed.
     static let settingsChanged = Notification.Name("RPClient.settingsChanged")
+    /// Fires when the runtime voice toggle (`Settings.voiceActive`) flips —
+    /// driven by the chat-header speaker button (Phase 6 §7.1f/i). Distinct
+    /// from `settingsChanged` so the button can update without a full Settings
+    /// save round-trip when desired.
+    static let voiceActiveChanged = Notification.Name("RPClient.voiceActiveChanged")
     /// Fires on the transition edges of `AppState.isThinking` — model has
     /// just entered a `<think>` block, or just left one. The UI binds the
     /// "Thinking…" placeholder on the active assistant turn to this.

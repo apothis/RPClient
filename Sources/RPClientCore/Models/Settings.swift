@@ -26,7 +26,15 @@ struct Settings: Codable, Equatable {
     var userName: String
     var defaultTemplateId: String
     var defaultSamplerPresetId: String
+    /// Subsystem gate for the TTS pipeline (Phase 6 §7.1f). When false, no
+    /// engine init, no model download prompts; the chat-header runtime toggle
+    /// is forced disabled. The Settings checkbox is labelled "Enable voice
+    /// subsystem".
     var voiceEnabled: Bool
+    /// Runtime toggle, distinct from the subsystem gate. Lives on the chat
+    /// header and is the cheap mute the user reaches for per-turn. Speech
+    /// only synthesises when `voiceEnabled && voiceActive`.
+    var voiceActive: Bool
     /// 0 means "use whatever the server reports as true_max_context_length".
     /// Anything > 0 caps the effective context below that.
     var maxContextOverride: Int
@@ -97,6 +105,7 @@ struct Settings: Codable, Equatable {
             defaultTemplateId: "gemma",
             defaultSamplerPresetId: "balanced",
             voiceEnabled: false,
+            voiceActive: true,
             maxContextOverride: 0,
             retrieval: .default,
             uiFontOffset: 1,
@@ -117,7 +126,8 @@ struct Settings: Codable, Equatable {
          embeddingsServerId: UUID? = nil,
          userName: String = "",
          defaultTemplateId: String, defaultSamplerPresetId: String,
-         voiceEnabled: Bool, maxContextOverride: Int, retrieval: RetrievalSettings,
+         voiceEnabled: Bool, voiceActive: Bool = true,
+         maxContextOverride: Int, retrieval: RetrievalSettings,
          uiFontOffset: Int, replyTokensOverride: Int,
          factExtractionEnabled: Bool, factExtractionEveryNTurns: Int,
          priorityTopicLibrary: [LibraryTopic],
@@ -133,6 +143,7 @@ struct Settings: Codable, Equatable {
         self.defaultTemplateId = defaultTemplateId
         self.defaultSamplerPresetId = defaultSamplerPresetId
         self.voiceEnabled = voiceEnabled
+        self.voiceActive = voiceActive
         self.maxContextOverride = maxContextOverride
         self.retrieval = retrieval
         self.uiFontOffset = uiFontOffset
@@ -173,6 +184,7 @@ struct Settings: Codable, Equatable {
         defaultTemplateId = try c.decodeIfPresent(String.self, forKey: .defaultTemplateId) ?? d.defaultTemplateId
         defaultSamplerPresetId = try c.decodeIfPresent(String.self, forKey: .defaultSamplerPresetId) ?? d.defaultSamplerPresetId
         voiceEnabled = try c.decodeIfPresent(Bool.self, forKey: .voiceEnabled) ?? d.voiceEnabled
+        voiceActive = try c.decodeIfPresent(Bool.self, forKey: .voiceActive) ?? d.voiceActive
         maxContextOverride = try c.decodeIfPresent(Int.self, forKey: .maxContextOverride) ?? d.maxContextOverride
         retrieval = try c.decodeIfPresent(RetrievalSettings.self, forKey: .retrieval) ?? d.retrieval
         uiFontOffset = try c.decodeIfPresent(Int.self, forKey: .uiFontOffset) ?? d.uiFontOffset
@@ -190,7 +202,7 @@ struct Settings: Codable, Equatable {
         case summarizerServerId, extractorServerId, embeddingsServerId
         case serverURL  // legacy — migrated on decode, not encoded
         case userName, defaultTemplateId, defaultSamplerPresetId
-        case voiceEnabled, maxContextOverride, retrieval
+        case voiceEnabled, voiceActive, maxContextOverride, retrieval
         case uiFontOffset, replyTokensOverride
         case factExtractionEnabled, factExtractionEveryNTurns
         case priorityTopicLibrary, qwenThinkingEnabled, defaultPersonaId
@@ -208,6 +220,7 @@ struct Settings: Codable, Equatable {
         try c.encode(defaultTemplateId, forKey: .defaultTemplateId)
         try c.encode(defaultSamplerPresetId, forKey: .defaultSamplerPresetId)
         try c.encode(voiceEnabled, forKey: .voiceEnabled)
+        try c.encode(voiceActive, forKey: .voiceActive)
         try c.encode(maxContextOverride, forKey: .maxContextOverride)
         try c.encode(retrieval, forKey: .retrieval)
         try c.encode(uiFontOffset, forKey: .uiFontOffset)
