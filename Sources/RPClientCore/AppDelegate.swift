@@ -63,6 +63,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         true
     }
 
+    public func applicationWillTerminate(_ notification: Notification) {
+        AppState.shared.speaker.stop()
+    }
+
     private func buildMenu() {
         let main = NSMenu()
 

@@ -509,6 +509,23 @@ After the §7.0 prestep, `Voice/Speaker.swift` will exist and speak the whole tu
 
 **Effort: ~½ day for the §7.0 prestep, +2 days for the rest.**
 
+### 7.5 Better TTS engine — investigation (deferred)
+
+The §7.0 prestep wires `AVSpeechSynthesizer` and the system default voice. Smoke-tested 2026-05-05: works, but the output quality is poor — flat prosody, robotic cadence, unsuited to RP. AVKit's premium / "enhanced" voices help marginally but don't close the gap to modern neural TTS. Once §7.1–§7.4 prove the per-character attribution shape, swap the engine.
+
+Candidates to evaluate:
+
+- **Apple Personal Voice / Siri Voice 4** — best of the on-device options, but requires user-side enrolment and is iOS-leaning.
+- **macOS 14+ `SpeechAnalyzer` / on-device neural voices** — check what's exposed in current SDKs; quality has improved meaningfully each release.
+- **Local neural TTS** — Piper, Kokoro, Coqui XTTS run offline on Apple Silicon at usable speed. Piper is the lightest; XTTS supports voice cloning from short samples (genuinely useful for per-character voices). Distribution / model-download UX is the cost.
+- **Cloud APIs** — ElevenLabs, OpenAI TTS, Cartesia. Highest quality, lowest local-engineering cost, but adds an external dependency and per-token billing — at odds with the local-first posture of the rest of RPClient. Probably not the right shape unless gated behind an opt-in.
+
+Decision criteria when picking up: latency to first audible token (under ~400ms feels live), quality on long RP-style passages (not just one-line demos), and whether per-character voice picking can be expressed in the engine's voice catalogue.
+
+The `SpeechSynthesizing` protocol seam from §7.0 is the swap point — a new adapter conforms to it, no other code moves.
+
+**Effort: 1 day to pick + prototype, +1–2 days to wire in depending on engine.**
+
 ---
 
 ## 8. Phase 7 — V2 Full branching

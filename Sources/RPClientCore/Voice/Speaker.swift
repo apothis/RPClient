@@ -1,0 +1,153 @@
+import AVFoundation
+import Foundation
+
+/// Abstraction over `AVSpeechSynthesizer` so the on/off gating in `Speaker`
+/// is testable without touching AVKit. Production wiring uses
+/// `AVSpeechSynthesizerAdapter`; tests inject a recording fake.
+protocol SpeechSynthesizing: AnyObject {
+    func speak(_ text: String)
+    func stopSpeaking()
+}
+
+final class AVSpeechSynthesizerAdapter: SpeechSynthesizing {
+    private let synth = AVSpeechSynthesizer()
+
+    func speak(_ text: String) {
+        let utterance = AVSpeechUtterance(string: text)
+        synth.speak(utterance)
+    }
+
+    func stopSpeaking() {
+        synth.stopSpeaking(at: .immediate)
+    }
+}
+
+/// Single-voice TTS pipeline driven by `Settings.voiceEnabled`. V2_PLAN §7.0
+/// prestep — speaks just-completed assistant turns through the system default
+/// voice. Per-character attribution and voice picking land in §7.1–§7.4 on top
+/// of this surface.
+///
+/// Owned by `AppState`. Subscribes to `streamFinished`, `streamStarted`,
+/// `currentChatChanged`, and `settingsChanged` so callers don't need to drive
+/// it explicitly.
+final class Speaker {
+    private let synthesizer: SpeechSynthesizing
+    private var voiceEnabled: Bool
+    private var observers: [NSObjectProtocol] = []
+
+    init(voiceEnabled: Bool, synthesizer: SpeechSynthesizing = AVSpeechSynthesizerAdapter()) {
+        self.synthesizer = synthesizer
+        self.voiceEnabled = voiceEnabled
+    }
+
+    deinit {
+        for o in observers { NotificationCenter.default.removeObserver(o) }
+    }
+
+    /// Speak `raw` through the synthesizer, after stripping `<think>` blocks
+    /// and markdown formatting. No-op when `voiceEnabled` is off, or when the
+    /// stripped text is empty.
+    func speak(_ raw: String) {
+        guard voiceEnabled else { return }
+        let text = Speaker.plainText(raw)
+        guard !text.isEmpty else { return }
+        synthesizer.speak(text)
+    }
+
+    /// Cancel any in-flight utterance immediately.
+    func stop() {
+        synthesizer.stopSpeaking()
+    }
+
+    /// Mirror `Settings.voiceEnabled` into the speaker. Flipping off mid-
+    /// utterance stops the current speech so the toggle feels live.
+    func setVoiceEnabled(_ enabled: Bool) {
+        if voiceEnabled && !enabled {
+            synthesizer.stopSpeaking()
+        }
+        voiceEnabled = enabled
+    }
+
+    // MARK: - Notification wiring
+
+    /// Subscribe to the stream / chat / settings notifications. Pulled out of
+    /// `init` so unit tests can construct a `Speaker` without touching the
+    /// shared NotificationCenter.
+    func startObserving() {
+        let nc = NotificationCenter.default
+        let speakIfFinished = nc.addObserver(
+            forName: AppNotification.streamFinished, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.handleStreamFinished()
+        }
+        let stopOnNewStream = nc.addObserver(
+            forName: AppNotification.streamStarted, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.synthesizer.stopSpeaking()
+        }
+        let stopOnChatSwitch = nc.addObserver(
+            forName: AppNotification.currentChatChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.synthesizer.stopSpeaking()
+        }
+        let trackSettings = nc.addObserver(
+            forName: AppNotification.settingsChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.setVoiceEnabled(AppState.shared.settings.voiceEnabled)
+        }
+        observers = [speakIfFinished, stopOnNewStream, stopOnChatSwitch, trackSettings]
+    }
+
+    private func handleStreamFinished() {
+        guard voiceEnabled else { return }
+        guard let last = AppState.shared.currentChat?.turns.last,
+              last.role == .assistant else { return }
+        speak(last.text)
+    }
+
+    // MARK: - Plain-text prep
+
+    /// Strip thinking blocks, fenced code blocks, and the small subset of
+    /// markdown the renderer applies (emphasis, inline code, links, headings,
+    /// list markers) so we don't read syntax characters aloud. Fenced code
+    /// blocks are replaced with a "<lang> code block" announcement rather
+    /// than read line-by-line.
+    static func plainText(_ raw: String) -> String {
+        var s = Markdown.stripThinking(raw)
+
+        // 1. Fenced code blocks → "<lang> code block" or "code block".
+        if let re = try? NSRegularExpression(
+            pattern: "```([\\w+-]*)\\n?([\\s\\S]*?)```", options: []
+        ) {
+            let ns = s as NSString
+            let full = NSRange(location: 0, length: ns.length)
+            let matches = re.matches(in: s, options: [], range: full).reversed()
+            let mut = NSMutableString(string: s)
+            for m in matches {
+                let lang = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
+                let label = lang.isEmpty ? "code block" : "\(lang) code block"
+                mut.replaceCharacters(in: m.range, with: label)
+            }
+            s = mut as String
+        }
+
+        // 2. Inline patterns. Process bold before italic so ** isn't eaten by *.
+        s = replace(s, pattern: "\\*\\*([^*\\n]+)\\*\\*", template: "$1")
+        s = replace(s, pattern: "(?<!\\*)\\*([^*\\n]+)\\*(?!\\*)", template: "$1")
+        s = replace(s, pattern: "`([^`\\n]+)`", template: "$1")
+        s = replace(s, pattern: "\\[([^\\]\\n]+)\\]\\([^\\)\\n]*\\)", template: "$1")
+
+        // 3. Line-leading markers: headings, bullets, numbered lists.
+        s = replace(s, pattern: "(?m)^\\s*#{1,6}\\s+", template: "")
+        s = replace(s, pattern: "(?m)^\\s*[-*+]\\s+", template: "")
+        s = replace(s, pattern: "(?m)^\\s*\\d+\\.\\s+", template: "")
+
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func replace(_ s: String, pattern: String, template: String) -> String {
+        guard let re = try? NSRegularExpression(pattern: pattern, options: []) else { return s }
+        let range = NSRange(s.startIndex..., in: s)
+        return re.stringByReplacingMatches(in: s, options: [], range: range, withTemplate: template)
+    }
+}

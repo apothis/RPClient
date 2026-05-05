@@ -20,6 +20,7 @@ let suites: [TestSuite] = [
     serverProbeParseTests(),
     chatServerPickerTests(),
     avatarSourceTests(),
+    speakerTests(),
 ]
 
 exit(TestRunner.run(suites))

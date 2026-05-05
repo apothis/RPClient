@@ -11,6 +11,10 @@ enum AppNotification {
     static let personasChanged = Notification.Name("RPClient.personasChanged")
     static let chatUpdated = Notification.Name("RPClient.chatUpdated")
     static let streamTokenAppended = Notification.Name("RPClient.streamTokenAppended")
+    /// Fires once when an assistant generation kicks off (initial send or
+    /// regen / swipe). Pairs with `streamFinished`. Used by `Speaker` to
+    /// cancel any in-flight TTS the moment a new reply starts streaming.
+    static let streamStarted = Notification.Name("RPClient.streamStarted")
     static let streamFinished = Notification.Name("RPClient.streamFinished")
     static let statusChanged = Notification.Name("RPClient.statusChanged")
     /// Posted on the *transition* edges of `AppState.serverReachable` —
@@ -108,6 +112,10 @@ final class AppState {
     }
 
     let registry: KoboldClientRegistry
+    /// Single-voice TTS pipeline (V2_PLAN §7.0). Mirrors `settings.voiceEnabled`
+    /// and reads finished assistant turns aloud through the system default
+    /// voice. Per-character attribution lands in §7.1+ on top of this surface.
+    let speaker: Speaker
 
     /// Façade pointed at the current chat's effective generation client. Exists
     /// so the many existing call sites that take `kobold:` keep working without
@@ -127,6 +135,8 @@ final class AppState {
         self.characters = Storage.shared.listCharacters()
         self.personas = Storage.shared.listPersonas()
         self.registry = KoboldClientRegistry(settings: s)
+        self.speaker = Speaker(voiceEnabled: s.voiceEnabled)
+        self.speaker.startObserving()
         if chats.isEmpty {
             let c = Chat(templateId: s.defaultTemplateId, samplerPresetId: s.defaultSamplerPresetId)
             Storage.shared.saveChat(c)
@@ -724,6 +734,7 @@ final class AppState {
     private func startStreaming(continuation: Bool = false, freshUserTurn: Bool = false) {
         guard let chat = currentChat else { return }
         isStreaming = true
+        NotificationCenter.default.post(name: AppNotification.streamStarted, object: nil)
         streamIsFreshUserTurn = freshUserTurn
         streamStart = Date()
         firstTokenAt = nil
