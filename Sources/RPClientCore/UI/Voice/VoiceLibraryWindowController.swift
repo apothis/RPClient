@@ -12,7 +12,8 @@ import AppKit
 final class VoiceLibraryWindowController: NSWindowController, NSWindowDelegate {
 
     private let banner = NSTextField(wrappingLabelWithString: "")
-    private let baseModelRow = NSTextField(labelWithString: "")
+    private let baseModelLabel = NSTextField(labelWithString: "")
+    private let baseModelButton = NSButton(title: "Download", target: nil, action: nil)
     private let languagePopup = NSPopUpButton()
     private let genderPopup = NSPopUpButton()
     private let tableView = NSTableView()
@@ -21,6 +22,7 @@ final class VoiceLibraryWindowController: NSWindowController, NSWindowDelegate {
 
     private var rows: [KokoroVoice] = []
     private var settingsObserver: NSObjectProtocol?
+    private var downloadObserver: NSObjectProtocol?
 
     convenience init() {
         let w = NSWindow(
@@ -41,10 +43,18 @@ final class VoiceLibraryWindowController: NSWindowController, NSWindowDelegate {
         ) { [weak self] _ in
             self?.rebuild()
         }
+        downloadObserver = NotificationCenter.default.addObserver(
+            forName: AppNotification.kokoroDownloadStateChanged,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            guard let id = note.userInfo?["id"] as? String else { return }
+            self?.handleDownloadStateChanged(id: id)
+        }
     }
 
     deinit {
         if let o = settingsObserver { NotificationCenter.default.removeObserver(o) }
+        if let o = downloadObserver { NotificationCenter.default.removeObserver(o) }
     }
 
     private func buildUI() {
@@ -54,7 +64,20 @@ final class VoiceLibraryWindowController: NSWindowController, NSWindowDelegate {
         banner.textColor = .secondaryLabelColor
         banner.translatesAutoresizingMaskIntoConstraints = false
 
-        baseModelRow.font = Theme.font(12)
+        baseModelLabel.font = Theme.font(12)
+        baseModelLabel.lineBreakMode = .byTruncatingTail
+        baseModelLabel.usesSingleLineMode = true
+        baseModelLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        baseModelLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        baseModelButton.bezelStyle = .rounded
+        baseModelButton.target = self
+        baseModelButton.action = #selector(baseModelButtonTapped)
+        baseModelButton.setContentHuggingPriority(.required, for: .horizontal)
+
+        let baseModelRow = NSStackView(views: [baseModelLabel, baseModelButton])
+        baseModelRow.orientation = .horizontal
+        baseModelRow.alignment = .centerY
+        baseModelRow.spacing = 8
         baseModelRow.translatesAutoresizingMaskIntoConstraints = false
 
         let langLabel = NSTextField(labelWithString: "Language:")
@@ -153,23 +176,110 @@ final class VoiceLibraryWindowController: NSWindowController, NSWindowDelegate {
     private func rebuild() {
         let s = AppState.shared.settings
         if let raw = s.voiceModelPath, !raw.isEmpty {
-            let url = URL(fileURLWithPath: raw)
             let abbrev = (raw as NSString).abbreviatingWithTildeInPath
             banner.stringValue = "Storage: \(abbrev)"
-            baseModelRow.stringValue = baseModelRowText(rootURL: url)
         } else {
             banner.stringValue = "No storage location set. Open Settings → Voice storage to pick a folder."
-            baseModelRow.stringValue = "Base model: — (no storage location)"
         }
+        refreshBaseModelRow()
         applyFilter()
     }
 
-    private func baseModelRowText(rootURL: URL) -> String {
-        let store = KokoroModelStore(paths: KokoroStoragePaths(root: rootURL))
+    private func currentStore() -> KokoroModelStore? {
+        let s = AppState.shared.settings
+        guard let raw = s.voiceModelPath, !raw.isEmpty else { return nil }
+        return KokoroModelStore(paths: KokoroStoragePaths(root: URL(fileURLWithPath: raw)))
+    }
+
+    private func refreshBaseModelRow() {
+        let dl = KokoroDownloadManager.shared.state(of: "model")
+        if case .running(let bytes, let total) = dl {
+            baseModelLabel.stringValue = "Base model: ⬇︎ \(progressText(bytes: bytes, total: total))"
+            baseModelButton.title = "Cancel"
+            baseModelButton.isEnabled = true
+            return
+        }
+
+        guard let store = currentStore() else {
+            baseModelLabel.stringValue = "Base model: — (no storage location)"
+            baseModelButton.title = "Download"
+            baseModelButton.isEnabled = false
+            return
+        }
         switch store.baseModelState() {
-        case .ready: return "Base model: ✓ ready"
-        case .missing: return "Base model: ◯ not downloaded"
-        case .volumeUnavailable: return "Base model: ⚠︎ volume unavailable"
+        case .ready:
+            baseModelLabel.stringValue = "Base model: ✓ ready"
+            baseModelButton.title = "Remove"
+            baseModelButton.isEnabled = true
+        case .missing:
+            let mb = KokoroVoiceCatalogue.modelByteSize / 1_000_000
+            baseModelLabel.stringValue = "Base model: ◯ not downloaded (\(mb) MB)"
+            baseModelButton.title = "Download"
+            baseModelButton.isEnabled = true
+        case .volumeUnavailable:
+            baseModelLabel.stringValue = "Base model: ⚠︎ volume unavailable"
+            baseModelButton.title = "Download"
+            baseModelButton.isEnabled = false
+        }
+    }
+
+    private func progressText(bytes: Int64, total: Int64?) -> String {
+        let mb: (Int64) -> String = { b in
+            String(format: "%.1f MB", Double(b) / 1_000_000.0)
+        }
+        if let total = total, total > 0 {
+            let pct = Int(Double(bytes) / Double(total) * 100)
+            return "\(mb(bytes)) of \(mb(total)) (\(pct)%)"
+        }
+        return mb(bytes)
+    }
+
+    @objc private func baseModelButtonTapped() {
+        guard let store = currentStore() else { return }
+        let manager = KokoroDownloadManager.shared
+        if case .running = manager.state(of: "model") {
+            manager.cancel(id: "model")
+            return
+        }
+        switch store.baseModelState() {
+        case .ready:
+            do {
+                try store.removeModel()
+                rebuild()
+            } catch {
+                presentRemoveError(error: error)
+            }
+        case .missing:
+            let task = KokoroDownloadTask(
+                asset: .baseModel,
+                sourceURL: KokoroVoiceCatalogue.modelDownloadURL,
+                destinationURL: store.paths.modelURL,
+                expectedBytes: Int64(KokoroVoiceCatalogue.modelByteSize)
+            )
+            manager.enqueue(task, store: store)
+        case .volumeUnavailable:
+            break
+        }
+    }
+
+    private func presentRemoveError(error: Error) {
+        guard let window = window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Couldn't remove the base model"
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window, completionHandler: nil)
+    }
+
+    private func handleDownloadStateChanged(id: String) {
+        if id == "model" {
+            refreshBaseModelRow()
+            // If the download just completed, also refresh the table since
+            // installable voices need the base model to be ready before
+            // they can be downloaded.
+            if case .completed = KokoroDownloadManager.shared.state(of: id) {
+                applyFilter()
+            }
         }
     }
 

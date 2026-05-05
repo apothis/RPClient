@@ -31,6 +31,10 @@ enum AppNotification {
     /// from `settingsChanged` so the button can update without a full Settings
     /// save round-trip when desired.
     static let voiceActiveChanged = Notification.Name("RPClient.voiceActiveChanged")
+    /// Fires whenever a Kokoro asset download transitions state (queued →
+    /// running → completed / cancelled / failed). userInfo carries the task
+    /// id ('model' for the base, voice id for voices). Phase 6 §7.1j2.
+    static let kokoroDownloadStateChanged = Notification.Name("RPClient.kokoroDownloadStateChanged")
     /// Fires on the transition edges of `AppState.isThinking` — model has
     /// just entered a `<think>` block, or just left one. The UI binds the
     /// "Thinking…" placeholder on the active assistant turn to this.
