@@ -24,6 +24,11 @@ public enum KokoroSpeechSynthesizerError: Error {
 /// stopped synchronously on cancel so audio cuts off instantly even if
 /// inference for a follow-up utterance is still queued behind it.
 public final class KokoroSpeechSynthesizer: SpeechSynthesizing {
+    /// Per-chunk unpadded token cap. The model rejects unpadded > 510
+    /// (style buffer length); 500 leaves ~10 tokens of headroom for the
+    /// `KokoroEngine` bound check while still maximising audio per call.
+    static let maxUnpaddedPerChunk = 500
+
     private let engine: KokoroEngine
     private let player: KokoroAudioPlayer
     private let style: [Float]
@@ -74,7 +79,13 @@ public final class KokoroSpeechSynthesizer: SpeechSynthesizing {
 
             let ipa: String
             do {
-                ipa = try self.espeak.phonemize(text: trimmed, language: self.language)
+                // §7.1k7: punctuation-preserving variant. Plain `phonemize`
+                // strips all punctuation from the IPA, which leaves Kokoro
+                // with no pause/intonation cues — speech runs together as
+                // a robotic monotone.
+                ipa = try self.espeak.phonemizePreservingPunctuation(
+                    text: trimmed, language: self.language
+                )
             } catch {
                 NSLog("KokoroSpeechSynthesizer: espeak failed: \(error)")
                 return
@@ -85,19 +96,29 @@ public final class KokoroSpeechSynthesizer: SpeechSynthesizing {
             guard tokens.count > 2 else { return }   // empty after tokenization
             guard self.isCurrent(myGen) else { return }
 
-            let pcm: [Float]
-            do {
-                pcm = try self.engine.synthesize(tokens: tokens, style: self.style, speed: 1.0)
-            } catch {
-                NSLog("KokoroSpeechSynthesizer: synthesize failed: \(error)")
-                return
-            }
-            guard self.isCurrent(myGen) else { return }
-
-            do {
-                try self.player.play(samples: pcm)
-            } catch {
-                NSLog("KokoroSpeechSynthesizer: play failed: \(error)")
+            // Long replies overflow the model's 510-slot style buffer, so
+            // chunk at sentence-punctuation boundaries (§7.1k6) and synth
+            // each chunk in turn. Chunks are scheduled on the player as
+            // soon as they're ready — `AVAudioPlayerNode` queues internally
+            // so playback starts on the first chunk and the rest stitch on
+            // without gaps.
+            let chunks = KokoroTokenChunker.chunk(tokens: tokens, maxUnpadded: Self.maxUnpaddedPerChunk)
+            for chunk in chunks {
+                guard self.isCurrent(myGen) else { return }
+                let pcm: [Float]
+                do {
+                    pcm = try self.engine.synthesize(tokens: chunk, style: self.style, speed: 1.0)
+                } catch {
+                    NSLog("KokoroSpeechSynthesizer: synthesize failed: \(error)")
+                    return
+                }
+                guard self.isCurrent(myGen) else { return }
+                do {
+                    try self.player.play(samples: pcm)
+                } catch {
+                    NSLog("KokoroSpeechSynthesizer: play failed: \(error)")
+                    return
+                }
             }
         }
     }

@@ -87,4 +87,84 @@ public struct EspeakNgClient {
         let raw = String(decoding: outData, as: UTF8.self)
         return raw.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    /// Set of input characters that `phonemizePreservingPunctuation` treats
+    /// as clause-breaking punctuation: input is split on these, IPA is
+    /// produced per segment, and the punctuation chars are stitched back
+    /// in between IPA segments. These are exactly the characters Kokoro's
+    /// vocab has tokens for and the model uses for prosody / pause cues.
+    public static let preservedPunctuation: Set<Swift.Character> = [
+        ",", ";", ":", ".", "!", "?", "—", "…",
+    ]
+
+    /// Phonemize `text`, preserving clause-breaking punctuation in the
+    /// output. Phase 6 §7.1k7.
+    ///
+    /// `espeak-ng -q --ipa=3` strips ALL punctuation from its phoneme
+    /// output (commas, periods, etc. become silent newlines and our
+    /// tokenizer drops them). Without this method, every assistant reply
+    /// runs together as a robotic monotone — the Kokoro model has no
+    /// pause/intonation cues to work with.
+    ///
+    /// Implementation: split the input on `preservedPunctuation`, call
+    /// `phonemize(text:language:)` on each non-empty segment, and stitch
+    /// the IPA back together with the original punctuation chars between
+    /// segments (one space after each cluster of segment-IPA so the next
+    /// segment doesn't run into the previous punct). This costs one
+    /// espeak subprocess invocation per segment (~30 ms on macOS) — for
+    /// typical assistant replies that's 5–10 calls and totals 150–300 ms,
+    /// acceptable.
+    ///
+    /// Upstream `kokoro-onnx` Python uses `phonemizer.phonemize(...,
+    /// preserve_punctuation=True)` which links the espeak shared library
+    /// and preserves punctuation natively. The CLI has no equivalent flag,
+    /// so we orchestrate ourselves.
+    public func phonemizePreservingPunctuation(
+        text: String,
+        language: KokoroLanguage
+    ) throws -> String {
+        let punctuation = Self.preservedPunctuation
+
+        // Walk text once, accumulating non-punct segments and punctuation
+        // characters in their original order.
+        var segments: [String] = []
+        var puncts: [Swift.Character] = []
+        var current = ""
+        for ch in text {
+            if punctuation.contains(ch) {
+                segments.append(current)
+                puncts.append(ch)
+                current = ""
+            } else {
+                current.append(ch)
+            }
+        }
+        segments.append(current)
+
+        // Phonemize each non-empty segment and stitch with the original
+        // punctuation. Insert a single space before a new IPA run when
+        // the previous output didn't already end with whitespace, so
+        // "...word, word..." becomes "...IPA, IPA..." not "...IPA,IPA...".
+        var result = ""
+        for (i, seg) in segments.enumerated() {
+            let trimmed = seg.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty {
+                if !result.isEmpty, !result.hasSuffix(" ") {
+                    result.append(" ")
+                }
+                let ipa = try phonemize(text: trimmed, language: language)
+                result.append(ipa)
+            }
+            if i < puncts.count {
+                // Kokoro's prosody for ASCII colon `:` is empirically flat
+                // — the model produces no audible pause. Map `:` → `.` so
+                // a user-typed colon produces a sentence-end pause; the
+                // user prefers a fuller pause for colons (comma was tested
+                // and felt too short).
+                let pun: Swift.Character = puncts[i] == ":" ? "." : puncts[i]
+                result.append(pun)
+            }
+        }
+        return result
+    }
 }

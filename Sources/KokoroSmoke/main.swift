@@ -58,7 +58,9 @@ print("Style:   \(style.count) floats")
 
 let ipa: String
 do {
-    ipa = try espeak.phonemize(text: text, language: .americanEnglish)
+    // §7.1k7 — preserves , ; : . ! ? — … in the IPA so the model gets
+    // pause/intonation cues. Plain `phonemize` strips them all.
+    ipa = try espeak.phonemizePreservingPunctuation(text: text, language: .americanEnglish)
 } catch {
     die("espeak failed: \(error)")
 }
