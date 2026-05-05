@@ -611,11 +611,30 @@ k. **Adapter — split into k-prep, k1–k4 (engine), then integration.** Highes
 
    9 new tests: vocab integrity (count + spot-check known ids), pad-token wrapping for empty input, hand-traced "Hello, world." IPA → known token sequence (also verified against the real espeak output for that string), space tokens between words preserved, unknown chars dropped, ZWJ tie marks dropped, newlines dropped, end-to-end espeak → tokenize on real espeak-ng (skipped if not installed) produces a non-trivial sequence of in-range tokens.
 
-   k3. **ONNX session loader + inference.** Pending — load `model.onnx`, run with phoneme tokens + style embedding + speed → PCM frames.
+   k3. **ONNX session loader + inference (NEXT UP).** Pending. Lives in `RPClientVoice` (only piece of k that needs ORT symbols). New file `Sources/RPClientVoice/KokoroEngine.swift` (or split `KokoroSession.swift` + `KokoroEngine.swift` if it grows).
 
-   k4. **AVAudioEngine playback.** Pending — `AVAudioEngine` + `AVAudioPlayerNode` to play streamed PCM frames; `stopSpeaking()` cancels the synth task and flushes the player.
+   Inputs to model.onnx (verified against `kokoro-onnx` Python):
+   - `input_ids: int64[1, N]` — `KokoroTokenizer.tokenize(ipa:)` output as a 2D tensor of shape [1, len].
+   - `style: float32[1, 256]` — speaker style embedding. **Open question:** the loaded `.pt` is `[510, 1, 256]` = 130560 floats. The model wants only one `[1, 256]` slice; kokoro-onnx Python indexes by `style[len(input_ids) - 1]` (i.e. picks the slice matching the input length, since the file is conditioned on length 1..510). Verify this against `kokoro-onnx/src/kokoro_onnx/__init__.py` before coding — if the indexing is wrong audio is garbled but plausible-sounding, hard to debug. Reshape to `[1, 256]` after slicing.
+   - `speed: float32[1]` — playback rate, 1.0 = default.
 
-   k5. **`KokoroSpeechSynthesizer` adapter.** Pending — conforms to `SpeechSynthesizing` from §7.0. Lives in `RPClientVoice` (the only piece of k that actually needs ONNX symbols). Selection wiring lives in §7.1l.
+   Output: `audio: float32[N_samples]` — raw PCM at 24 kHz mono. Pass straight to `AVAudioEngine` in k4.
+
+   API sketch:
+   ```swift
+   final class KokoroEngine {
+       init(modelURL: URL) throws         // loads ORTSession, validates IO names
+       func synthesize(tokens: [Int64], style: [Float], speed: Float) throws -> [Float]
+   }
+   ```
+
+   Smoke test: load model + af_alloy.pt, tokens from `EspeakNgClient + KokoroTokenizer` on "Hello, world.", speed 1.0 → return `[Float]` PCM with non-zero RMS, length plausibly ~24000–48000 samples (1–2 s of audio). Validate at the test level by writing the floats to a `.wav` file and listening — there's no automated "is this speech?" check at this layer.
+
+   ORT Swift API to use: `ORTSession`, `ORTValue.init(tensorData:elementType:shape:)` for inputs, `session.run(withInputs:outputNames:runOptions:)` for inference. Names of input/output tensors will be probed at session-init time (`session.inputNames`, `session.outputNames`) and asserted to match expected ("input_ids", "style", "speed", "audio") so a future model bump fails fast.
+
+   k4. **AVAudioEngine playback.** Pending — `AVAudioEngine` + `AVAudioPlayerNode`, schedule the `[Float]` PCM as an `AVAudioPCMBuffer` at 24 kHz mono. `stopSpeaking()` calls `playerNode.stop()` + `engine.reset()`.
+
+   k5. **`KokoroSpeechSynthesizer` adapter.** Pending — conforms to `SpeechSynthesizing` from §7.0. Owns a `KokoroEngine` + `AVAudioEngine` pair. `speak(_:)` runs espeak → tokenize → synthesize → play, all on a background queue so the call returns fast. Lives in `RPClientVoice`. Selection wiring lives in §7.1l.
 
 l. **Wiring.** `AppState` (or wherever the §7.0 `Speaker` is constructed) picks the adapter based on `KokoroModelStore.baseModelState()`. No change to the `SpeechSynthesizing` protocol; no change to `Speaker`'s call sites. `Settings.voiceEnabled` toggle drives initial adapter selection (subsystem on → load Kokoro, subsystem off → swap back to AVKit + deinit Kokoro); mount/unmount notifications on `KokoroModelStore` swap the adapter live.
 
