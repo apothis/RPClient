@@ -12,6 +12,10 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     /// chosen profile.
     private let chatHeader = NSView()
     private let serverPicker = NSPopUpButton()
+    /// Phase 6 §7.1i — runtime voice toggle. Click flips
+    /// `Settings.voiceActive`; greys out when `voiceEnabled` (the subsystem
+    /// gate) is off, with a tooltip pointing the user to Settings.
+    private let speakerButton = NSButton()
     private var turnViews: [TurnView] = []
     private var dividerView: ContextDivider?
     private var dividerWidthConstraint: NSLayoutConstraint?
@@ -55,6 +59,8 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         serverPicker.translatesAutoresizingMaskIntoConstraints = false
         chatHeader.addSubview(serverLabel)
         chatHeader.addSubview(serverPicker)
+        configureSpeakerButton()
+        chatHeader.addSubview(speakerButton)
         v.addSubview(chatHeader)
         NSLayoutConstraint.activate([
             chatHeader.heightAnchor.constraint(equalToConstant: 28),
@@ -62,6 +68,10 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             serverLabel.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
             serverPicker.leadingAnchor.constraint(equalTo: serverLabel.trailingAnchor, constant: 6),
             serverPicker.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
+            speakerButton.trailingAnchor.constraint(equalTo: chatHeader.trailingAnchor, constant: -12),
+            speakerButton.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
+            speakerButton.widthAnchor.constraint(equalToConstant: 22),
+            speakerButton.heightAnchor.constraint(equalToConstant: 22),
         ])
 
         // Stack tracks the panel width with a small symmetric gutter; turns
@@ -127,6 +137,8 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             name: AppNotification.fontChanged, object: nil)
         nc.addObserver(self, selector: #selector(handleSettingsChanged),
             name: AppNotification.settingsChanged, object: nil)
+        nc.addObserver(self, selector: #selector(refreshSpeakerButton),
+            name: AppNotification.voiceActiveChanged, object: nil)
         nc.addObserver(self, selector: #selector(handleScroll),
             name: NSView.boundsDidChangeNotification, object: clip)
 
@@ -539,6 +551,40 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
 
     @objc private func handleSettingsChanged() {
         rebuildServerPicker()
+        refreshSpeakerButton()
+    }
+
+    // MARK: - Voice toggle (Phase 6 §7.1i)
+
+    private func configureSpeakerButton() {
+        speakerButton.bezelStyle = .accessoryBarAction
+        speakerButton.isBordered = false
+        speakerButton.imagePosition = .imageOnly
+        speakerButton.imageScaling = .scaleProportionallyDown
+        speakerButton.target = self
+        speakerButton.action = #selector(speakerButtonTapped)
+        speakerButton.translatesAutoresizingMaskIntoConstraints = false
+        refreshSpeakerButton()
+    }
+
+    @objc private func refreshSpeakerButton() {
+        let s = AppState.shared.settings
+        let symbol = s.voiceActive ? "speaker.wave.2.fill" : "speaker.slash.fill"
+        let label = s.voiceActive ? "Voice on" : "Voice muted"
+        speakerButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+        speakerButton.isEnabled = s.voiceEnabled
+        speakerButton.alphaValue = s.voiceEnabled ? 1.0 : 0.4
+        speakerButton.toolTip = s.voiceEnabled
+            ? (s.voiceActive ? "Mute voice for this chat" : "Unmute voice for this chat")
+            : "Enable the voice subsystem in Settings"
+    }
+
+    @objc private func speakerButtonTapped() {
+        var s = AppState.shared.settings
+        guard s.voiceEnabled else { return }
+        s.voiceActive.toggle()
+        AppState.shared.saveSettings(s)
+        NotificationCenter.default.post(name: AppNotification.voiceActiveChanged, object: nil)
     }
 
     @objc private func serverPickerChanged(_ sender: NSPopUpButton) {
