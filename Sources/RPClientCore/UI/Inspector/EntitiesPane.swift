@@ -561,7 +561,12 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
     }
 
     @objc private func voiceChanged(_ sender: NSPopUpButton) {
-        guard let id = entityId(from: sender) else { return }
+        // Popup identifier is `voice:<UUID>` (see makeVoiceSection); the
+        // generic entityId() helper expects a bare UUID, so parse the prefix
+        // off here, mirroring the rate/pitch slider handlers below.
+        guard let raw = sender.identifier?.rawValue,
+              raw.hasPrefix("voice:"),
+              let id = UUID(uuidString: String(raw.dropFirst("voice:".count))) else { return }
         AppState.shared.updateCurrent { c in
             guard let i = c.entities.firstIndex(where: { $0.id == id }) else { return }
             c.entities[i].voice = VoicePopupBuilder.preference(
