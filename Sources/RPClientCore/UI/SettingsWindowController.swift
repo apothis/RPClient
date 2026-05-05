@@ -27,7 +27,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// Updated live by `voiceModelPathDraft`; persisted via `save()`.
     private let voiceStorageLabel = NSTextField(labelWithString: "(not set)")
     private let voiceChangeButton = NSButton(title: "Change location…", target: nil, action: nil)
-    private var voiceModelPathDraft: String?
+    private let voiceLibraryButton = NSButton(title: "Voice library…", target: nil, action: nil)
+    private var voiceLibraryWC: VoiceLibraryWindowController?
     private let qwenThinkingCheck = NSButton(
         checkboxWithTitle: "Qwen 3: enable thinking mode (strips <think>…</think> from replies)",
         target: nil, action: nil)
@@ -172,6 +173,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         voiceChangeButton.bezelStyle = .rounded
         voiceChangeButton.target = self
         voiceChangeButton.action = #selector(changeVoiceStorageLocation)
+        voiceLibraryButton.bezelStyle = .rounded
+        voiceLibraryButton.target = self
+        voiceLibraryButton.action = #selector(openVoiceLibrary)
 
         let separator = NSBox()
         separator.boxType = .separator
@@ -296,7 +300,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         separator0.translatesAutoresizingMaskIntoConstraints = false
 
         let voiceStorageTitle = NSTextField(labelWithString: "Voice storage:")
-        let voiceStorageStack = NSStackView(views: [voiceStorageLabel, voiceChangeButton])
+        let voiceStorageStack = NSStackView(views: [voiceStorageLabel, voiceChangeButton, voiceLibraryButton])
         voiceStorageStack.orientation = .horizontal
         voiceStorageStack.alignment = .centerY
         voiceStorageStack.spacing = 8
@@ -530,7 +534,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         rebuildPersonaPopup()
         selectPersonaInPopup(s.defaultPersonaId)
         voiceCheck.state = s.voiceEnabled ? .on : .off
-        voiceModelPathDraft = s.voiceModelPath
         refreshVoiceStorageRow()
         qwenThinkingCheck.state = s.qwenThinkingEnabled ? .on : .off
         ctxField.integerValue = s.maxContextOverride
@@ -607,7 +610,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             s.defaultPersonaId = nil
         }
         s.voiceEnabled = voiceCheck.state == .on
-        s.voiceModelPath = voiceModelPathDraft
         s.qwenThinkingEnabled = qwenThinkingCheck.state == .on
         s.maxContextOverride = max(0, ctxField.integerValue)
 
@@ -660,7 +662,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Voice storage row (Phase 6 §7.1g)
 
     private func refreshVoiceStorageRow() {
-        if let raw = voiceModelPathDraft, !raw.isEmpty {
+        let raw = AppState.shared.settings.voiceModelPath ?? ""
+        if !raw.isEmpty {
             voiceStorageLabel.stringValue = (raw as NSString).abbreviatingWithTildeInPath
             voiceStorageLabel.toolTip = raw
             voiceChangeButton.title = "Change location…"
@@ -675,9 +678,23 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         guard let window = window else { return }
         VoiceStoragePromptSheet.present(over: window) { [weak self] picked in
             guard let self = self, let url = picked else { return }
-            self.voiceModelPathDraft = url.path
+            // Save immediately rather than buffering as draft — the Voice
+            // library window (and any other settingsChanged observer) needs
+            // to see the new path right away, and Cancel-on-Settings has no
+            // sensible "revert the path I just picked" semantic.
+            var s = AppState.shared.settings
+            s.voiceModelPath = url.path
+            AppState.shared.saveSettings(s)
             self.refreshVoiceStorageRow()
         }
+    }
+
+    @objc private func openVoiceLibrary() {
+        if voiceLibraryWC == nil {
+            voiceLibraryWC = VoiceLibraryWindowController()
+        }
+        voiceLibraryWC?.showWindow(nil)
+        voiceLibraryWC?.window?.makeKeyAndOrderFront(nil)
     }
 
     // MARK: - Servers editor
