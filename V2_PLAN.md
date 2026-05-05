@@ -671,13 +671,13 @@ struct Entity {
     var voice: VoicePreference?    // nil → use chat default
 }
 struct VoicePreference: Codable, Equatable {
-    var voiceIdentifier: String   // engine-specific voice id
+    var voiceIdentifier: VoiceIdentifier   // §7.1m — `<engine>:<voice-id>`
     var rate: Float
     var pitch: Float
 }
 ```
 
-`voiceIdentifier` is engine-specific — the format depends on what §7.1 ships. AVKit uses `AVSpeechSynthesisVoice.identifier`; a Piper-based engine would use a model filename, etc. Consider whether to namespace it (`engine:voice-id`) so users don't have invalid prefs after an engine swap.
+`voiceIdentifier` is the §7.1m typed value (`engine:voice-id`, Codable as a single string). Existing chats with no voice preference set leave the field nil; migration is "if Entity.voice is missing, treat as nil and fall back to chat-default." `rate` and `pitch` are engine-specific — Kokoro uses speed (treat `rate` as the speed parameter passed through to `KokoroEngine.synthesize`); AVKit honours both natively.
 
 ### 7.3 Speaker attribution
 
@@ -694,14 +694,19 @@ Refactor `Speaker` to drive a queue rather than one utterance:
 - Enqueue one utterance per segment with the matched voice.
 - "Pause / resume" on chat focus changes.
 
-The protocol seam may need a queue-aware shape (e.g. `func speak(_ segments: [(voiceId: String, text: String)])`) — design alongside §7.1's engine pick.
+The protocol seam may need a queue-aware shape (e.g. `func speak(_ segments: [(voiceId: VoiceIdentifier, text: String)])`). Note that `KokoroSpeechSynthesizer` is currently single-voice (one model, one style buffer at init). For per-character voices, we either (a) hold a Kokoro adapter per voice, paying the ~325 MB ONNX session cost per voice (untenable), or (b) make the adapter swap its style buffer per `speak(_:)` call (cheap — style buffer is 510 KB and swapping is instant). Plan: refactor to (b) when §7.4 lands. The model + engine stay shared; only the style embedding (and language for espeak) change per segment.
 
 ### 7.5 UI
 
-- Entity edit sheet gains a Voice section: pick voice, sliders for rate/pitch, "Preview" button.
+- Entity edit sheet gains a Voice section: pick voice, sliders for rate/pitch, "Preview" button. Voice picker is sourced from `KokoroVoiceCatalogue.all` filtered to `KokoroModelStore.installedVoiceIds()`, plus `AVSpeechSynthesisVoice.speechVoices()` for the AVKit fallback.
 - Settings adds default narrator voice (chat-level fallback).
 
-**Effort: ~2 days for §7.2–§7.5 once §7.1 lands.**
+**Effort: ~2 days for §7.2–§7.5 once §7.1 lands.** §7.1 closed 2026-05-05; recommended start order: §7.2 (data model + migration) → §7.5 (UI for picking voices, exercises §7.2 immediately) → §7.3 (speaker attribution) → §7.4 (queue + per-segment voice swap).
+
+**Known follow-ups:**
+- Audio trimming between chunks. The model emits ~50–100 ms of trailing silence per synthesized chunk; concatenation accumulates these into noticeable gaps on multi-chunk replies. Upstream `kokoro-onnx` Python uses `trim_audio` on each chunk to remove leading/trailing silence. Add a Swift equivalent (RMS-windowed silence trim) before scheduling each PCM buffer in `KokoroSpeechSynthesizer.speak`. Cosmetic — current §7.1 output is acceptable but not ideal.
+- Question lilt (rising intonation at `?`). Kokoro's training apparently produces flat prosody for `?`. Not fixable without model retraining; documented limitation.
+- Per-character voice routing assumes the "narrator" / chat-default voice is always Kokoro when the subsystem is on. Quoted lines could be routed to per-entity voices via §7.3's attribution, then §7.4's queue. The selector wiring in §7.1l only knows about a single global voice; needs to be extended to a multi-voice resolver in §7.4.
 
 ---
 
@@ -784,6 +789,10 @@ Phases 1–6 together (~15 days of focused work) ship every V2 item except branc
 
 ## 12. Recommended next move
 
-Phases 1, 2, and 3 are done. From a fresh context: start with **Phase 4 (V8 Multi-server)** — three days of work that unlocks remote KoboldCpp servers and stops the local-only assumption from leaking into UI affordances. Spec is in §5.
+Phases 1, 2, 3 are done. Phase 6 §7.1 (Kokoro engine swap) closed 2026-05-05 — engine, adapter, selector, voice identifier, smoke all verified. From a fresh context: pick up at **Phase 6 §7.2 (per-character voice data model)** — adds `Entity.voice: VoicePreference?`, with `voiceIdentifier: VoiceIdentifier` (the §7.1m typed value). Migration is "missing field → nil → fall back to chat-default voice." Then §7.5 (UI for picking voices) follows naturally because §7.2 gives it something to bind to.
 
-Earlier recommendations preserved for historical context: the original called for "start with Phase 1"; the 2026-05-04 update called for "start with Phase 3." Both are now superseded.
+After that: §7.3 (speaker attribution — heuristic vs tagged), then §7.4 (queue + per-segment voice swap; refactor `KokoroSpeechSynthesizer` to swap style buffers per call instead of holding one at init). See §7.4's "per-segment voice swap" note for the load-bearing design decision.
+
+Phase 4 (V8 Multi-server) is also outstanding and roughly comparable in effort — pick whichever direction feels more pressing. Voice work has the larger surface area built up; multi-server is more self-contained.
+
+Earlier recommendations preserved for historical context: original called for "start with Phase 1"; 2026-05-04 said "start with Phase 3"; 2026-05-04 update said "start with Phase 4 (V8 Multi-server)." All superseded by the §7.1 close.

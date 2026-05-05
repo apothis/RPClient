@@ -574,6 +574,11 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         speakerButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
         speakerButton.isEnabled = s.voiceEnabled
         speakerButton.alphaValue = s.voiceEnabled ? 1.0 : 0.4
+        // Orange when active so the on/off state is visible at a glance —
+        // a black-on-black SF Symbol icon left the user guessing whether
+        // voice was actually enabled. nil reverts to the default template
+        // tint when muted.
+        speakerButton.contentTintColor = s.voiceActive ? .systemOrange : nil
         speakerButton.toolTip = s.voiceEnabled
             ? (s.voiceActive ? "Mute voice for this chat" : "Unmute voice for this chat")
             : "Enable the voice subsystem in Settings"
