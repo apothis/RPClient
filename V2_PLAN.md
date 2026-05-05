@@ -466,22 +466,44 @@ The prestep ships the missing single-voice path so the UI promise stops lying. T
 
 **Status: shipped 2026-05-05** in commit `c7a3f81`. New `Sources/RPClientCore/Voice/Speaker.swift` with a `SpeechSynthesizing` protocol seam (production: `AVSpeechSynthesizerAdapter`; tests: recording fake), reads finished assistant turns via `AppNotification.streamFinished`, stops on `streamStarted` / `currentChatChanged` / settings-toggle / app quit. Markdown + `<think>` stripping in `Speaker.plainText`. 10 new SpeakerTests, total 245/245 green.
 
-### 7.1 Better TTS engine — investigation + swap
+### 7.1 Better TTS engine — Kokoro swap
 
 Sequenced ahead of §7.2–§7.4 (was §7.5, promoted 2026-05-05). Rationale: §7.0 smoke-tested AVKit's quality and it's poor — flat prosody, robotic cadence, unsuited to RP. Layering attribution on top of a bad engine just gives you four different bad voices. Swapping the engine is orthogonal to attribution work thanks to the §7.0 protocol seam, so doing it first means §7.2–§7.4 land on output worth attributing to.
 
-Candidates to evaluate:
+**Decision (2026-05-05):** Kokoro 82M (ONNX) is the chosen engine. Apple Premium voices were considered as a cheaper first try (zero new deps, same API) but rejected — the user wants a clean quality jump rather than another tier of "still recognisably synthetic." Cloud APIs (ElevenLabs / OpenAI / Cartesia) were ruled out as misaligned with RPClient's local-first posture. Piper was ruled out (lighter than Kokoro but flatter prosody on long passages); Coqui XTTS was ruled out (defunct upstream, restrictive licence, ~2GB model).
 
-- **Apple Personal Voice / Siri Voice 4** — best of the on-device options, but requires user-side enrolment and is iOS-leaning.
-- **macOS 14+ `SpeechAnalyzer` / on-device neural voices** — check what's exposed in current SDKs; quality has improved meaningfully each release.
-- **Local neural TTS** — Piper, Kokoro, Coqui XTTS run offline on Apple Silicon at usable speed. Piper is the lightest; XTTS supports voice cloning from short samples (genuinely useful for per-character voices). Distribution / model-download UX is the cost.
-- **Cloud APIs** — ElevenLabs, OpenAI TTS, Cartesia. Highest quality, lowest local-engineering cost, but adds an external dependency and per-token billing — at odds with the local-first posture of the rest of RPClient. Probably not the right shape unless gated behind an opt-in.
+**Why Kokoro:**
 
-Decision criteria: latency to first audible token (under ~400ms feels live), quality on long RP-style passages (not just one-line demos), whether per-character voice picking can be expressed in the engine's voice catalogue, and distribution cost (model-download UX, binary size, network dependency).
+- Open-weight neural TTS (~325MB model, ~82M params), Apache-2.0 licence — fits a local-first app distributable without external API contracts.
+- Quality is competitive with commercial cloud TTS on read-aloud English passages — the meaningful tier jump §7.0 was missing.
+- Multiple built-in speaker IDs gives §7.2 a finite-but-sufficient catalogue for per-character voice picking.
+- Runs on Apple Silicon at usable speed via ONNX Runtime; expected ~300–500ms first-audible-token after model warm-up.
 
-The `SpeechSynthesizing` protocol seam from §7.0 is the swap point — a new adapter conforms to it, no other code moves. If the chosen engine streams audio asynchronously, the protocol may need a small extension (e.g. `func speak(_ text: String, completion: (() -> Void)?)`) — that's a contained change.
+**Costs accepted:**
 
-**Effort: 1 day investigation + prototype, +1–2 days to wire in depending on engine.**
+- New dependency: ONNX Runtime (vendored xcframework, ~50MB binary impact). This ships with the .app regardless of where models live.
+- First-launch model fetch: ~325MB download with progress UI + retry/fallback. AVKit stays available as the fallback engine when the model is missing or fetch fails — the §7.0 adapter is not deleted, just demoted.
+- Latency floor (~300–500ms after warm-up) means we keep §7.0's "speak after stream finishes" pattern; we do not attempt sub-utterance streaming TTS in §7.1. §7.4's queue-aware shape can revisit if needed.
+
+**Model storage path is user-configurable.** Default location is `~/Library/Application Support/RPClient/voice-models/`, but Settings exposes a "Voice model location" picker (NSOpenPanel, directory-only) so the user can target an external SSD or any mounted volume. Rationale: the user already runs RPClient development off an external SSD; once stored there, the size budget for voice models effectively goes away — future engines (XTTS, multi-language voice packs) become viable without burning boot-disk space. The path is persisted as an absolute URL string in `Settings.voiceModelPath: String?`. On launch (and on `NSWorkspace.didMountNotification` / `didUnmountNotification`), `KokoroModelStore` re-validates the path; when the volume is absent, `state` goes back to `.missing` and speech falls back to AVKit cleanly — never a crash on unplug. App is unsandboxed today, so a raw path is sufficient; a sandboxed build would need security-scoped bookmarks (noted in §10).
+
+**Implementation sketch:**
+
+1. **Dependency wiring.** Add `onnxruntime-objc` (or the SwiftPM-friendly equivalent) as a vendored xcframework. Confirm it builds via `./build.sh` and stays out of the test binary's link path so `swift run RPClientCoreTests` doesn't pull it in.
+2. **Model fetch UX.** New `Voice/KokoroModelStore.swift` — resolves a cache directory at `Settings.voiceModelPath ?? "~/Library/Application Support/RPClient/voice-models/"` plus `kokoro/`, exposes `state: .missing | .downloading(progress) | .ready(url) | .volumeUnavailable`. Settings gains a "Download voice model (325 MB)" button and a "Voice model location" directory picker on the Voice section; first run with `voiceEnabled = true` and `state == .missing` shows a one-shot toast pointing the user there rather than auto-downloading. SHA-256 checksum verification on completion. Subscribes to `NSWorkspace.didMount/didUnmountNotification` and re-resolves state when the configured path's volume comes or goes.
+3. **Adapter.** New `Voice/KokoroSpeechSynthesizer.swift` conforming to `SpeechSynthesizing`. On `speak(_:)`: synthesises PCM frames via ONNX Runtime, streams into an `AVAudioEngine` player node. On `stopSpeaking()`: cancels the synth task and flushes the player. Falls back to `AVSpeechSynthesizerAdapter` when the model isn't `.ready`.
+4. **Wiring.** `AppState` (or wherever the §7.0 `Speaker` is constructed) picks the adapter based on model state. No change to the `SpeechSynthesizing` protocol; no change to `Speaker`'s call sites.
+5. **Voice identifier namespacing.** §7.2's `voiceIdentifier` is stored as `engine:voice-id` (e.g. `kokoro:af_bella`, `avkit:com.apple.voice.premium.en-US.Ava`) so swapping engines later doesn't invalidate stored prefs.
+6. **Smoke test.** `./build.sh && ./run.sh`, fetch the model, toggle Speak replies, send a message, confirm Kokoro output is materially better than the §7.0 AVKit baseline.
+
+**Risks / open:**
+
+- **ONNX Runtime on Apple Silicon.** Confirm a SwiftPM-installable distribution exists (Microsoft's official `onnxruntime-objc` cocoapod is the canonical path; SwiftPM mirroring may need a vendored xcframework wrapper). If integration is hostile, escalate to a small Swift package that wraps the C API directly.
+- **Model download UX.** No progress spinner today in Settings; this is the first long-running side-task in that surface. Land it as a contained NSProgress-bound view rather than inventing a download manager.
+- **Test coverage.** Adapter logic that's pure (text → token-id sequence munging, voice-id parsing) is testable. The ONNX-driven synth and `AVAudioEngine` glue are smoke-tested per the AppKit/side-effect exemption — flag honestly, don't fake unit tests for "did the audio play."
+- **Binary size.** xcframework adds ~50MB to the .app. Acceptable for a local-first model-running app, but worth measuring before/after.
+
+**Effort: 1–2 days.** Dependency wiring + model fetch UX is the long pole; the adapter itself is contained.
 
 ### 7.2 Data model
 
@@ -572,7 +594,11 @@ After Phase 3, update [`PLAN.md`](PLAN.md) §10 to strike completed items and le
 
 Phases 1, 2, 3, 4 all change the Chat or Settings schema. Add a `Tests/MigrationFixtures/` directory with a snapshot JSON per pre-migration shape, plus a test that loads each, applies migration, and asserts the post-shape. This is cheap insurance against silently breaking older saves.
 
-### 10.5 What this plan does **not** do
+### 10.5 Sandboxing forward-note
+
+RPClient is unsandboxed today. If a sandboxed build (App Store) is ever desired, several Phase 6 surfaces need adjustment: the user-configurable voice-model path (§7.1) needs security-scoped bookmark persistence rather than a raw URL string, and any future "user picks an external directory" UX inherits the same requirement. Not blocking; flagged here so it isn't a surprise later.
+
+### 10.6 What this plan does **not** do
 
 - Memory subsystem polish — see NEXT_STAGES §A.
 - Chat-view UI overhaul — see NEXT_STAGES §E. Some items here (V10 avatars, V6 voices) lightly touch the chat view; the styling pass is independent.
