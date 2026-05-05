@@ -439,6 +439,15 @@ On the chat view, assistant turns show the character avatar at top-left (matches
 
 Markdown `![alt](path)` rendering. Out of scope for this phase; opens questions about copy-to-clipboard, drag-out, sandboxing. Punt to a later cosmetic pass.
 
+### 6.4 Deferred sub-items (potential future work)
+
+Decisions made at Phase 5 kickoff (2026-05-05) — call these out so they don't get lost when picking up the chat-view polish pass later:
+
+- **Persona avatars on user turns.** §6 only specifies *character* avatars. User turns today are right-aligned bubbles with no glyph column, so adding a persona avatar means a layout break. Defer to the chat-view styling pass (NEXT_STAGES §E).
+- **Entity avatars in turns / sidebar.** §6's preamble mentions per-entity avatars but no UI is specified. Defer until V6 (per-character voices) lands the speaker indicator that the entity avatar would naturally pair with.
+- **Avatar size scaling.** Phase 5 ships fixed-32 in the sidebar / in-turn slot, matching the library cards' fixed-96 (which already ignore `uiFontOffset`). Revisit only if a user reports the fixed size feels wrong against an extreme font offset.
+- **Storage `avatarPath` field on Character/Persona.** V2_PLAN §4.1's snippet shows `avatarPath: String?` but the actual models derive the path from id via Storage (see [Persona.swift:8](Sources/RPClientCore/Models/Persona.swift:8) docstring). The plan's snippet is stale; no migration is needed. Mentioned here so future-us doesn't try to "add the missing field."
+
 **Effort: 1 day for sidebar + chat-view avatars (without inline image rendering).**
 
 ---
