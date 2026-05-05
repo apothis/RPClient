@@ -1,21 +1,48 @@
 import AVFoundation
 import Foundation
 
-/// Abstraction over the underlying TTS engine so the on/off gating in
-/// `Speaker` is testable without touching AVKit, and so engine selection
-/// (§7.1l) can swap between AVKit and Kokoro implementations. Production
-/// wiring uses `AVSpeechSynthesizerAdapter` (this file) or
-/// `KokoroSpeechSynthesizer` (RPClientVoice); tests inject a recording fake.
+/// Abstraction over the underlying TTS engine. Each conforming type handles
+/// one engine; multi-engine routing (Kokoro vs AVKit) lives in `Speaker`.
+/// Phase 6 §7.4 expanded the seam from text-only to options-aware so the
+/// per-character fallback chain can flow through to the actual synthesizer
+/// without the speaker layer caring which engine is on the other end.
 public protocol SpeechSynthesizing: AnyObject {
-    func speak(_ text: String)
+    func speak(_ text: String, options: SpeakOptions)
     func stopSpeaking()
 }
 
+extension SpeechSynthesizing {
+    /// Convenience for tests + the `handleStreamFinished` path that doesn't
+    /// have a `SpeakOptions` to hand. Routes through `.default`.
+    public func speak(_ text: String) {
+        speak(text, options: .default)
+    }
+}
+
+/// AVKit-backed `SpeechSynthesizing`. Honours `SpeakOptions.voice` (looked up
+/// via `AVSpeechSynthesisVoice(identifier:)`), `rate`, and `pitch`. A nil or
+/// unrecognised voice falls back to the system default — AVKit's catalogue
+/// is closed-set, so a user-stored identifier that's been removed by an OS
+/// update should still produce *some* audio rather than silence.
 final class AVSpeechSynthesizerAdapter: SpeechSynthesizing {
     private let synth = AVSpeechSynthesizer()
 
-    func speak(_ text: String) {
+    func speak(_ text: String, options: SpeakOptions) {
         let utterance = AVSpeechUtterance(string: text)
+        if let id = options.voice?.voiceId,
+           options.voice?.engine == .avkit,
+           let voice = AVSpeechSynthesisVoice(identifier: id) {
+            utterance.voice = voice
+        }
+        // AVKit native rate range is [Min, Max] with 0.5 ≈ "normal". Our
+        // 1.0-centred multiplier maps to AVKit by halving (rate 1.0 → 0.5).
+        let nativeRate = max(
+            AVSpeechUtteranceMinimumSpeechRate,
+            min(AVSpeechUtteranceMaximumSpeechRate, options.rate * 0.5)
+        )
+        utterance.rate = nativeRate
+        // pitchMultiplier shares our 0.5..2.0 scale.
+        utterance.pitchMultiplier = max(0.5, min(2.0, options.pitch))
         synth.speak(utterance)
     }
 
@@ -24,16 +51,27 @@ final class AVSpeechSynthesizerAdapter: SpeechSynthesizing {
     }
 }
 
-/// Single-voice TTS pipeline gated on `Settings.voiceEnabled` (subsystem) AND
-/// `Settings.voiceActive` (runtime). V2_PLAN §7.0/§7.1f. Speaks just-completed
-/// assistant turns through the system default voice. Per-character attribution
-/// and voice picking land in §7.1–§7.4 on top of this surface.
+/// Multi-engine TTS pipeline gated on `Settings.voiceEnabled` (subsystem) AND
+/// `Settings.voiceActive` (runtime). V2_PLAN §7.0/§7.1f/§7.4. Speaks
+/// just-completed assistant turns; per-call voice routing flows from the
+/// fallback chain `Entity.voice ?? Chat.voice ?? Settings.defaultVoice`,
+/// projected through `SpeakOptions(preference:)` at the call site. Per-character
+/// attribution is still pending §7.3 — until then every turn is one segment
+/// using the chat-resolved voice.
+///
+/// Holds adapters for both engines simultaneously: AVKit is always available
+/// (system default fallback), Kokoro is installed by `KokoroSpeechSelector`
+/// when the model is downloaded and at least one voice is on disk. Routing
+/// is by `options.voice?.engine`; nil voice (no preference set anywhere in
+/// the chain) prefers Kokoro when available, AVKit otherwise — matching the
+/// pre-§7.4 default-engine behaviour.
 ///
 /// Owned by `AppState`. Subscribes to `streamFinished`, `streamStarted`,
 /// `currentChatChanged`, `settingsChanged`, and `voiceActiveChanged` so
 /// callers don't need to drive it explicitly.
 final class Speaker {
-    private var synthesizer: SpeechSynthesizing
+    private let avkit: SpeechSynthesizing
+    private var kokoro: SpeechSynthesizing?
     private var voiceEnabled: Bool
     private var voiceActive: Bool
     private var observers: [NSObjectProtocol] = []
@@ -42,8 +80,10 @@ final class Speaker {
 
     init(voiceEnabled: Bool,
          voiceActive: Bool = true,
-         synthesizer: SpeechSynthesizing = AVSpeechSynthesizerAdapter()) {
-        self.synthesizer = synthesizer
+         avkit: SpeechSynthesizing = AVSpeechSynthesizerAdapter(),
+         kokoro: SpeechSynthesizing? = nil) {
+        self.avkit = avkit
+        self.kokoro = kokoro
         self.voiceEnabled = voiceEnabled
         self.voiceActive = voiceActive
     }
@@ -52,46 +92,64 @@ final class Speaker {
         for o in observers { NotificationCenter.default.removeObserver(o) }
     }
 
-    /// Speak `raw` through the synthesizer, after stripping `<think>` blocks
-    /// and markdown formatting. No-op unless both the subsystem and the
-    /// runtime toggle are on, or when the stripped text is empty.
-    func speak(_ raw: String) {
+    /// Speak `raw` with the given `options`, after stripping `<think>` blocks
+    /// and markdown formatting. No-op unless both gates are on, or when the
+    /// stripped text is empty. Dispatches to the right engine based on
+    /// `options.voice?.engine`.
+    func speak(_ raw: String, options: SpeakOptions = .default) {
         guard shouldSpeak else { return }
         let text = Speaker.plainText(raw)
         guard !text.isEmpty else { return }
-        synthesizer.speak(text)
+        synthesizer(for: options).speak(text, options: options)
     }
 
-    /// Cancel any in-flight utterance immediately.
+    /// Cancel any in-flight utterance on either engine immediately.
     func stop() {
-        synthesizer.stopSpeaking()
+        avkit.stopSpeaking()
+        kokoro?.stopSpeaking()
     }
 
-    /// Replace the underlying synthesizer (e.g. swap from AVKit to Kokoro
-    /// when the voice subsystem comes online, or revert when it goes off).
-    /// Stops any in-flight utterance on the old synthesizer first so audio
-    /// cuts cleanly. §7.1l engine selection.
-    func setSynthesizer(_ new: SpeechSynthesizing) {
-        synthesizer.stopSpeaking()
-        synthesizer = new
+    /// Install or remove the Kokoro adapter. Called by `KokoroSpeechSelector`
+    /// when the engine becomes ready / unready. Stops in-flight Kokoro audio
+    /// on removal so the change is audible.
+    func setKokoroSynthesizer(_ new: SpeechSynthesizing?) {
+        kokoro?.stopSpeaking()
+        kokoro = new
     }
 
     /// Mirror `Settings.voiceEnabled` (the subsystem gate) into the speaker.
-    /// Flipping off while speech is live stops it so the toggle feels live.
+    /// Flipping off while speech is live stops both engines so the toggle
+    /// feels immediate.
     func setVoiceEnabled(_ enabled: Bool) {
         if shouldSpeak && !enabled {
-            synthesizer.stopSpeaking()
+            stop()
         }
         voiceEnabled = enabled
     }
 
     /// Mirror `Settings.voiceActive` (the runtime gate) into the speaker.
-    /// Flipping off while speech is live stops it.
     func setVoiceActive(_ active: Bool) {
         if shouldSpeak && !active {
-            synthesizer.stopSpeaking()
+            stop()
         }
         voiceActive = active
+    }
+
+    /// Pick the engine adapter for these options. Kokoro voices route to the
+    /// Kokoro adapter when installed; if not, fall back to AVKit (the picker
+    /// shouldn't have offered the voice in the first place, but a stale
+    /// stored preference shouldn't produce silence). AVKit voices always
+    /// route to AVKit. Nil voice prefers Kokoro when available — the
+    /// pre-§7.4 default-engine behaviour.
+    private func synthesizer(for options: SpeakOptions) -> SpeechSynthesizing {
+        switch options.voice?.engine {
+        case .avkit:
+            return avkit
+        case .kokoro:
+            return kokoro ?? avkit
+        case nil:
+            return kokoro ?? avkit
+        }
     }
 
     // MARK: - Notification wiring
@@ -109,12 +167,12 @@ final class Speaker {
         let stopOnNewStream = nc.addObserver(
             forName: AppNotification.streamStarted, object: nil, queue: .main
         ) { [weak self] _ in
-            self?.synthesizer.stopSpeaking()
+            self?.stop()
         }
         let stopOnChatSwitch = nc.addObserver(
             forName: AppNotification.currentChatChanged, object: nil, queue: .main
         ) { [weak self] _ in
-            self?.synthesizer.stopSpeaking()
+            self?.stop()
         }
         let trackSettings = nc.addObserver(
             forName: AppNotification.settingsChanged, object: nil, queue: .main
@@ -133,9 +191,15 @@ final class Speaker {
 
     private func handleStreamFinished() {
         guard shouldSpeak else { return }
-        guard let last = AppState.shared.currentChat?.turns.last,
+        guard let chat = AppState.shared.currentChat,
+              let last = chat.turns.last,
               last.role == .assistant else { return }
-        speak(last.text)
+        // Chat-level voice; falls through to the global default; falls
+        // through to nil → engine-default routing. Per-character attribution
+        // (§7.3) will replace this single options value with a queue of
+        // segment-tagged options.
+        let resolved = chat.voice ?? AppState.shared.settings.defaultVoice
+        speak(last.text, options: SpeakOptions(preference: resolved))
     }
 
     // MARK: - Plain-text prep
@@ -148,7 +212,6 @@ final class Speaker {
     static func plainText(_ raw: String) -> String {
         var s = Markdown.stripThinking(raw)
 
-        // 1. Fenced code blocks → "<lang> code block" or "code block".
         if let re = try? NSRegularExpression(
             pattern: "```([\\w+-]*)\\n?([\\s\\S]*?)```", options: []
         ) {
@@ -164,13 +227,11 @@ final class Speaker {
             s = mut as String
         }
 
-        // 2. Inline patterns. Process bold before italic so ** isn't eaten by *.
         s = replace(s, pattern: "\\*\\*([^*\\n]+)\\*\\*", template: "$1")
         s = replace(s, pattern: "(?<!\\*)\\*([^*\\n]+)\\*(?!\\*)", template: "$1")
         s = replace(s, pattern: "`([^`\\n]+)`", template: "$1")
         s = replace(s, pattern: "\\[([^\\]\\n]+)\\]\\([^\\)\\n]*\\)", template: "$1")
 
-        // 3. Line-leading markers: headings, bullets, numbered lists.
         s = replace(s, pattern: "(?m)^\\s*#{1,6}\\s+", template: "")
         s = replace(s, pattern: "(?m)^\\s*[-*+]\\s+", template: "")
         s = replace(s, pattern: "(?m)^\\s*\\d+\\.\\s+", template: "")

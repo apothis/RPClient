@@ -16,11 +16,11 @@ app.setActivationPolicy(.regular)
 // Phase 6 §7.1l — wire the Kokoro engine selector. The factory closure is
 // the only piece that needs RPClientVoice; Core observes settings + asset
 // state and calls back into us when it wants Kokoro built.
-delegate.installKokoroSpeechSelector { modelURL, voiceFileURL, language in
+delegate.installKokoroSpeechSelector { modelURL, defaultVoice, voiceFileURLProvider in
     try KokoroSpeechSynthesizer(
         modelURL: modelURL,
-        voiceFileURL: voiceFileURL,
-        language: language
+        defaultVoice: defaultVoice,
+        voiceFileURLProvider: voiceFileURLProvider
     )
 }
 

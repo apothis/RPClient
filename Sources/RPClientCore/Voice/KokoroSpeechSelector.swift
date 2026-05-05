@@ -1,35 +1,45 @@
 import Foundation
 
-/// Builds a Kokoro `SpeechSynthesizing` from a (model, voice, language)
-/// triple. Only the executable layer can satisfy this — `KokoroSpeechSynthesizer`
+/// Builds a Kokoro `SpeechSynthesizing` configured for per-call voice swap.
+/// Only the executable layer can satisfy this — `KokoroSpeechSynthesizer`
 /// lives in `RPClientVoice`, which Core can't import without dragging the
 /// ~50 MB ONNX runtime into the test target.
+///
+/// The provider closure maps a Kokoro voice id to its on-disk `.pt` file.
+/// Returning nil means "this voice id isn't installed" — the synthesizer
+/// will fall back to its `defaultVoice` for that utterance.
 public typealias KokoroSpeechSynthesizerFactory = (
     _ modelURL: URL,
-    _ voiceFileURL: URL,
-    _ language: KokoroLanguage
+    _ defaultVoice: KokoroVoice,
+    _ voiceFileURLProvider: @escaping (String) -> URL?
 ) throws -> SpeechSynthesizing
 
-/// Picks between AVKit (default) and Kokoro for the global `Speaker`
-/// based on `Settings.voiceEnabled`, `KokoroModelStore.baseModelState()`,
-/// and at-least-one-installed-voice. Re-evaluates on `settingsChanged` and
-/// `kokoroDownloadStateChanged`. Phase 6 §7.1l.
+/// Decides whether the Kokoro adapter is installed in `Speaker` based on
+/// `Settings.voiceEnabled`, `KokoroModelStore.baseModelState()`, and
+/// at-least-one-installed-voice. Re-evaluates on `settingsChanged` and
+/// `kokoroDownloadStateChanged`. Phase 6 §7.1l, expanded for §7.4.
+///
+/// As of §7.4, the selector no longer swaps the Speaker's *only* synthesizer;
+/// `Speaker` holds AVKit and Kokoro adapters simultaneously, and routes
+/// per-call by `SpeakOptions.voice.engine`. The selector's job is now just
+/// "install or remove the Kokoro adapter" — it doesn't pin a specific voice.
+/// The Kokoro adapter resolves voice per `speak()` call from its options.
 ///
 /// The factory is supplied by the RPClient executable so Core doesn't
-/// need to import `RPClientVoice`. On factory throw, falls back to AVKit
-/// silently (NSLog only) — user-visible failure surfacing is deferred to
-/// §7.5 polish.
+/// need to import `RPClientVoice`. On factory throw, the Kokoro adapter
+/// stays uninstalled (NSLog only) — user-visible failure surfacing is
+/// deferred to §7.5 polish.
 final class KokoroSpeechSelector {
     /// Default voice id when multiple are installed. Picked because the
     /// user has it downloaded and the §7.1 development log uses it as
-    /// the primary smoke voice. §7.4 will replace this with per-character
-    /// voice routing.
+    /// the primary smoke voice. The synthesizer falls back to this voice
+    /// when options carry a nil or unresolvable voice identifier.
     static let defaultVoiceId = "af_alloy"
 
     private let factory: KokoroSpeechSynthesizerFactory
     private weak var speaker: Speaker?
     private var isKokoroInstalled = false
-    private var installedVoiceId: String?
+    private var installedDefaultVoiceId: String?
     private var observers: [NSObjectProtocol] = []
 
     init(factory: @escaping KokoroSpeechSynthesizerFactory, speaker: Speaker) {
@@ -59,55 +69,60 @@ final class KokoroSpeechSelector {
         let s = AppState.shared.settings
 
         guard s.voiceEnabled else {
-            revertToAVKit(speaker, reason: "voice subsystem disabled", initial: initial)
+            uninstallKokoro(speaker, reason: "voice subsystem disabled", initial: initial)
             return
         }
         guard let raw = s.voiceModelPath, !raw.isEmpty else {
-            revertToAVKit(speaker, reason: "no storage path configured", initial: initial)
+            uninstallKokoro(speaker, reason: "no storage path configured", initial: initial)
             return
         }
         let store = KokoroModelStore(paths: KokoroStoragePaths(root: URL(fileURLWithPath: raw)))
         guard case let .ready(modelURL, _) = store.baseModelState() else {
-            revertToAVKit(speaker, reason: "base model not ready", initial: initial)
+            uninstallKokoro(speaker, reason: "base model not ready", initial: initial)
             return
         }
         let installed = store.installedVoiceIds()
         guard !installed.isEmpty else {
-            revertToAVKit(speaker, reason: "no voice files installed", initial: initial)
+            uninstallKokoro(speaker, reason: "no voice files installed", initial: initial)
             return
         }
-        let voiceId = installed.contains(Self.defaultVoiceId) ? Self.defaultVoiceId : installed[0]
-        guard let voice = KokoroVoiceCatalogue.all.first(where: { $0.id == voiceId }) else {
-            revertToAVKit(speaker, reason: "voice id \(voiceId) not in catalogue", initial: initial)
+        let defaultVoiceId = installed.contains(Self.defaultVoiceId) ? Self.defaultVoiceId : installed[0]
+        guard let defaultVoice = KokoroVoiceCatalogue.all.first(where: { $0.id == defaultVoiceId }) else {
+            uninstallKokoro(speaker, reason: "voice id \(defaultVoiceId) not in catalogue", initial: initial)
             return
         }
 
-        // No-op if Kokoro is already installed for this voice.
-        if isKokoroInstalled, installedVoiceId == voiceId { return }
+        // No-op if Kokoro is already installed with this default voice.
+        if isKokoroInstalled, installedDefaultVoiceId == defaultVoiceId { return }
 
-        let voiceURL = store.paths.voiceFileURL(id: voiceId)
+        // Provider reads from disk on every call — voices added/removed
+        // between speaks resolve correctly without rebuilding the adapter.
+        let provider: (String) -> URL? = { id in
+            let url = store.paths.voiceFileURL(id: id)
+            return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        }
         do {
-            let synth = try factory(modelURL, voiceURL, voice.language)
-            speaker.setSynthesizer(synth)
+            let synth = try factory(modelURL, defaultVoice, provider)
+            speaker.setKokoroSynthesizer(synth)
             isKokoroInstalled = true
-            installedVoiceId = voiceId
-            log("installed Kokoro voice '\(voiceId)' (\(voice.language.rawValue))")
+            installedDefaultVoiceId = defaultVoiceId
+            log("installed Kokoro adapter (default voice '\(defaultVoiceId)', \(defaultVoice.language.rawValue))")
         } catch {
-            log("factory failed (\(error)); reverting to AVKit")
-            revertToAVKit(speaker, reason: "factory threw", initial: initial)
+            log("factory failed (\(error)); Kokoro stays uninstalled")
+            uninstallKokoro(speaker, reason: "factory threw", initial: initial)
         }
     }
 
-    private func revertToAVKit(_ speaker: Speaker, reason: String, initial: Bool) {
-        // Only swap if Kokoro was actually installed; the initial decision
+    private func uninstallKokoro(_ speaker: Speaker, reason: String, initial: Bool) {
+        // Only remove if Kokoro was actually installed; the initial decision
         // is logged regardless so launches always show the wiring is alive.
         if isKokoroInstalled {
-            speaker.setSynthesizer(AVSpeechSynthesizerAdapter())
+            speaker.setKokoroSynthesizer(nil)
             isKokoroInstalled = false
-            installedVoiceId = nil
-            log("reverted to AVKit (\(reason))")
+            installedDefaultVoiceId = nil
+            log("Kokoro adapter removed (\(reason))")
         } else if initial {
-            log("staying on AVKit (\(reason))")
+            log("Kokoro adapter not installed (\(reason))")
         }
     }
 
