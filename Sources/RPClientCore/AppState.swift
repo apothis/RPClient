@@ -125,6 +125,9 @@ final class AppState {
     /// and reads finished assistant turns aloud through the system default
     /// voice. Per-character attribution lands in §7.1+ on top of this surface.
     let speaker: Speaker
+    /// Kokoro engine selector (§7.1l). Retained so its notification
+    /// observers stay alive; nil until the executable wires the factory.
+    private var kokoroSpeechSelector: KokoroSpeechSelector?
 
     /// Façade pointed at the current chat's effective generation client. Exists
     /// so the many existing call sites that take `kobold:` keep working without
@@ -146,6 +149,9 @@ final class AppState {
         self.registry = KoboldClientRegistry(settings: s)
         self.speaker = Speaker(voiceEnabled: s.voiceEnabled)
         self.speaker.startObserving()
+        // The Kokoro selector (§7.1l) is wired separately via
+        // `installKokoroSpeechSelector(factory:)` so Core doesn't need to
+        // import RPClientVoice — the executable supplies the factory.
         if chats.isEmpty {
             let c = Chat(templateId: s.defaultTemplateId, samplerPresetId: s.defaultSamplerPresetId)
             Storage.shared.saveChat(c)
@@ -154,6 +160,16 @@ final class AppState {
         }
         refreshServerInfo()
         startHealthChecks()
+    }
+
+    /// Install the Kokoro engine selector (§7.1l). Idempotent: safe to call
+    /// at most once; subsequent calls are no-ops. The factory is supplied by
+    /// the executable so Core doesn't import RPClientVoice.
+    func installKokoroSpeechSelector(factory: @escaping KokoroSpeechSynthesizerFactory) {
+        guard kokoroSpeechSelector == nil else { return }
+        let selector = KokoroSpeechSelector(factory: factory, speaker: speaker)
+        kokoroSpeechSelector = selector
+        selector.start()
     }
 
     var currentChat: Chat? {

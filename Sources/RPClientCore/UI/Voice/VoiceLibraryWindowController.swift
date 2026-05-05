@@ -325,6 +325,15 @@ final class VoiceLibraryWindowController: NSWindowController, NSWindowDelegate {
             do {
                 try store.removeModel()
                 rebuild()
+                // §7.1l selector listens for this — without it, Kokoro
+                // stays installed in the global Speaker even though the
+                // model file has been removed and the next speak() will
+                // fail.
+                NotificationCenter.default.post(
+                    name: AppNotification.kokoroDownloadStateChanged,
+                    object: nil,
+                    userInfo: ["id": "model"]
+                )
             } catch {
                 presentRemoveError(error: error)
             }
@@ -449,6 +458,14 @@ final class VoiceLibraryWindowController: NSWindowController, NSWindowDelegate {
             do {
                 try store.removeVoice(id: voice.id)
                 reloadRow(for: voice.id)
+                // §7.1l selector — same rationale as the base-model remove
+                // path: notify so a Kokoro install backed by this voice can
+                // re-evaluate.
+                NotificationCenter.default.post(
+                    name: AppNotification.kokoroDownloadStateChanged,
+                    object: nil,
+                    userInfo: ["id": voice.id]
+                )
             } catch {
                 presentVoiceError(message: "Couldn't remove \(voice.displayName)", error: error)
             }

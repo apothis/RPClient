@@ -33,7 +33,7 @@ final class AVSpeechSynthesizerAdapter: SpeechSynthesizing {
 /// `currentChatChanged`, `settingsChanged`, and `voiceActiveChanged` so
 /// callers don't need to drive it explicitly.
 final class Speaker {
-    private let synthesizer: SpeechSynthesizing
+    private var synthesizer: SpeechSynthesizing
     private var voiceEnabled: Bool
     private var voiceActive: Bool
     private var observers: [NSObjectProtocol] = []
@@ -65,6 +65,15 @@ final class Speaker {
     /// Cancel any in-flight utterance immediately.
     func stop() {
         synthesizer.stopSpeaking()
+    }
+
+    /// Replace the underlying synthesizer (e.g. swap from AVKit to Kokoro
+    /// when the voice subsystem comes online, or revert when it goes off).
+    /// Stops any in-flight utterance on the old synthesizer first so audio
+    /// cuts cleanly. §7.1l engine selection.
+    func setSynthesizer(_ new: SpeechSynthesizing) {
+        synthesizer.stopSpeaking()
+        synthesizer = new
     }
 
     /// Mirror `Settings.voiceEnabled` (the subsystem gate) into the speaker.

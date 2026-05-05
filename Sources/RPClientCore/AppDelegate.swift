@@ -313,4 +313,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         helpWC?.show(pageId: pageId, anchor: anchor)
     }
+
+    /// Wire the §7.1l Kokoro engine selector. The factory must build a
+    /// `KokoroSpeechSynthesizer` (which lives in RPClientVoice) from the
+    /// supplied (model, voice, language) triple. Call once at launch.
+    public func installKokoroSpeechSelector(
+        factory: @escaping KokoroSpeechSynthesizerFactory
+    ) {
+        AppState.shared.installKokoroSpeechSelector(factory: factory)
+    }
 }
