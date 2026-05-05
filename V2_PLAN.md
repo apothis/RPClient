@@ -482,27 +482,29 @@ Sequenced ahead of §7.2–§7.4 (was §7.5, promoted 2026-05-05). Rationale: §
 **Costs accepted:**
 
 - New dependency: ONNX Runtime (vendored xcframework, ~50MB binary impact). This ships with the .app regardless of where models live.
-- Two-tier asset model: one base ONNX model (~310MB, downloaded once) plus per-voice embedding files (~500KB each, ~50+ available across English/Chinese/Japanese/Spanish/French/Hindi). User downloads the base model once, then opts in to whichever voices they want à la carte rather than getting a fixed set.
+- Two-tier asset model, **none of which lives in the .app bundle**: one base ONNX model (`kokoro-v1.0.onnx`, 325 MB exactly, from `github.com/thewh1teagle/kokoro-onnx` releases) plus per-voice tensor files (`<id>.pt`, 523 KB each, 54 voices, from `huggingface.co/hexgrad/Kokoro-82M/voices/`). User downloads the base model once, then opts in to whichever voices they want à la carte. Verified roster spans 9 languages — en-US, en-GB, ja, zh, es, fr, hi, it, pt-BR — with 29 female + 25 male voices.
 - AVKit stays available as the fallback engine when the base model is missing or fetch fails — the §7.0 adapter is not deleted, just demoted.
 - Latency floor (~300–500ms after warm-up) means we keep §7.0's "speak after stream finishes" pattern; we do not attempt sub-utterance streaming TTS in §7.1. §7.4's queue-aware shape can revisit if needed.
 
 **Model storage path is user-configurable, with a first-run prompt.** When the user first toggles `voiceEnabled` on AND `Settings.voiceModelPath` is unset, a one-time sheet appears: "Voice models are large (the base model alone is ~310 MB). Where would you like to store them?" Detected non-system mounted volumes are surfaced as one-click options (largest free volume listed first), with `~/Library/Application Support/RPClient/voice-models/` always present as the conservative fallback, plus a "Choose…" escape hatch for an arbitrary directory. Once chosen, the path is persisted in `Settings.voiceModelPath: String?` and the user is dropped straight into the Voice library manager (next subsection) to pick which voices to install. The user can change the location later via Settings → Voice → "Set storage location…" which opens the same `NSOpenPanel`. Rationale for an auto-detect prompt rather than a hardcoded default: keeps the source portable across machines, but in practice surfaces the user's external SSD as the obvious pick when one is mounted. On launch (and on `NSWorkspace.didMountNotification` / `didUnmountNotification`), `KokoroModelStore` re-validates the path; when the volume is absent, `state` goes back to `.missing` and speech falls back to AVKit cleanly — never a crash on unplug, even though the user's setup is always-mounted in practice. App is unsandboxed today, so a raw path is sufficient; a sandboxed build would need security-scoped bookmarks (noted in §10).
 
-Layout under the configured root:
+Layout under the configured root (everything here is downloaded at runtime — none of it is in the .app bundle):
 
 ```
 <voiceModelPath>/kokoro/
-  model.onnx                    (~310 MB, base model, downloaded once)
+  model.onnx                    (325 MB, kokoro-v1.0.onnx, downloaded once)
   voices/
-    af_bella.bin                (~500 KB each)
-    af_nicole.bin
-    am_adam.bin
-    bf_emma.bin
+    af_bella.pt                 (523 KB each, raw HuggingFace .pt files)
+    af_nicole.pt
+    am_michael.pt
+    bf_emma.pt
     ...                         (only the voices the user opts in to)
-  manifest.json                 (catalogue of installed voices + checksums)
+  manifest.json                 (state file: installed voices + checksums + downloaded-at timestamps)
 ```
 
-**Voice library manager (à la carte, no bulk download).** Settings → Voice tab grows a "Voice library" section — a persistent manager, not a one-shot wizard. Lists the full catalogue from a bundled `kokoro-voices.json` manifest (name, language, accent, gender, sample-text); each voice is browsable but downloaded only when the user opts in. There is **no "download all" affordance** — every download decision is per-voice. The first-run prompt drops the user here after they've picked a storage location.
+The voice catalogue itself (id → language/accent/gender/sample-text mapping) ships as a **Swift literal** in `RPClientVoice` (`Sources/RPClientVoice/KokoroVoiceCatalogue.swift`), not as a Bundle resource. Static reference data, ~5 KB, updated by source edit when we bump the supported Kokoro version. The hard rule "nothing voice-related in the app bundle" applies to assets that the user is paying disk for (model + voices); pure metadata that drives the UI ships with the binary as code.
+
+**Voice library manager (à la carte, no bulk download).** Settings → Voice tab grows a "Voice library" section — a persistent manager, not a one-shot wizard. Lists the full 54-voice catalogue from `KokoroVoiceCatalogue.all` (Swift literal in `RPClientVoice`); each voice is browsable but downloaded only when the user opts in. There is **no "download all" affordance** — every download decision is per-voice, with per-voice Remove to free the 523 KB on demand. The first-run prompt drops the user here after they've picked a storage location.
 
 ```
 Voice library                                       [Set storage location…]
@@ -523,7 +525,7 @@ Per-voice rows: language/accent label, gender, Preview button (synthesises a sho
 
 1. **Dependency wiring (sub-step 7.1a — shipped 2026-05-05).** Pulled `microsoft/onnxruntime-swift-package-manager` 1.24.2 as a SwiftPM dep (binary artifact, not a vendored xcframework — cleaner than committing the framework into the repo). New `RPClientVoice` target (`Sources/RPClientVoice/`) sits between `RPClientCore` and the `RPClient` executable; it owns the ONNX import. `RPClientCoreTests` depends only on `RPClientCore`, so `otool -L` confirms zero ONNX symbols leak into the test binary. Bumped package `platforms: [.macOS(.v14)]` to satisfy ORT's minimum. Stub `OnnxProbe.swift` exposes `onnxRuntimeVersion()`; `main.swift` writes `voice: ONNX Runtime <ver>` to stderr at launch as visible evidence the link path works. `./build.sh` + `swift run RPClientCoreTests` (245/245) both green; .app binary grew from ~7 MB to ~33 MB (only ORT symbols actually referenced get pulled in by static linkage; will grow further when sessions / tensors land in 7.1c).
 2. **Model + voice store.** New `Voice/KokoroModelStore.swift` — resolves the cache root at `Settings.voiceModelPath ?? <Application Support>` plus `kokoro/`. Exposes `baseModelState: .missing | .downloading(progress) | .ready(url) | .volumeUnavailable` and `voiceState(id:) -> VoiceState` keyed per voice. Reads/writes `manifest.json` for the installed-voice list and SHA-256 checksums. Subscribes to `NSWorkspace.didMount/didUnmountNotification` and re-resolves state when the configured volume comes or goes.
-3. **Voice catalogue.** Bundled `Resources/kokoro-voices.json` lists every voice the upstream Kokoro release ships (id, language, accent, gender, ~10-word sample text, download URL, expected SHA-256). Pure data — no network call to fetch the catalogue itself; updated when we bump the Kokoro version.
+3. **Voice catalogue.** `Sources/RPClientVoice/KokoroVoiceCatalogue.swift` exposes `KokoroVoiceCatalogue.all: [KokoroVoice]` as a Swift literal — id, language, accent, gender, ~10-word sample text per voice. Download URL is derived (`https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/<id>.pt`); the model URL + SHA-256 are constants on the catalogue type. **Not** a Bundle resource — ships in the binary as compiled code. Updated by source edit when we bump the Kokoro version.
 4. **Adapter.** New `Voice/KokoroSpeechSynthesizer.swift` conforming to `SpeechSynthesizing`. On `speak(_:)`: synthesises PCM frames via ONNX Runtime, streams into an `AVAudioEngine` player node. On `stopSpeaking()`: cancels the synth task and flushes the player. Falls back to `AVSpeechSynthesizerAdapter` when the base model isn't `.ready`.
 5. **Wiring.** `AppState` (or wherever the §7.0 `Speaker` is constructed) picks the adapter based on model state. No change to the `SpeechSynthesizing` protocol; no change to `Speaker`'s call sites.
 6. **Voice identifier namespacing.** §7.2's `voiceIdentifier` is stored as `engine:voice-id` (e.g. `kokoro:af_bella`, `avkit:com.apple.voice.premium.en-US.Ava`) so swapping engines later doesn't invalidate stored prefs. §7.5's voice picker is sourced from the catalogue, filtered to currently-installed voices.
@@ -534,7 +536,8 @@ Per-voice rows: language/accent label, gender, Preview button (synthesises a sho
 **Risks / open:**
 
 - **Download UX.** No progress UI today in Settings — this is the first long-running side-task in that surface, and the multi-row catalogue makes it a *parallel* download manager (user can hit "Download" on three voices at once). Cap concurrency at 2 to avoid thrashing the user's bandwidth.
-- **Catalogue currency.** The bundled `kokoro-voices.json` goes stale when upstream adds voices. Acceptable trade-off vs. fetching a remote catalogue (which would mean a hardcoded URL with its own decay risk). Bump the manifest in lockstep with Kokoro version bumps.
+- **Catalogue currency.** The Swift-literal `KokoroVoiceCatalogue.all` goes stale when upstream adds voices. Acceptable trade-off vs. fetching a remote catalogue (which would mean a hardcoded URL with its own decay risk). Bump the literal in lockstep with Kokoro version bumps.
+- **.pt parsing on the Swift side.** HuggingFace ships per-voice files as PyTorch `.pt` tensor archives (pickle format). For ONNX inference we need the speaker style embedding as a flat float buffer. Either parse the pickle ourselves (~50 lines for a single-tensor case) or pre-process at download time. Decision deferred to 7.1g (adapter) — 7.1c–7.1f only need to know "the file exists at `<path>/voices/<id>.pt`."
 - **Test coverage.** Pure logic is testable: catalogue parsing, manifest read/write, voice-id parsing, storage-path resolution, mount/unmount state transitions. The ONNX-driven synth, URLSession downloads, and `AVAudioEngine` glue are smoke-tested per the AppKit/side-effect exemption — flag honestly, don't fake unit tests for "did the audio play."
 - **Binary size.** Static linkage of ONNX adds ~25 MB to the .app today (only referenced symbols pulled in); expect ~80 MB once sessions/tensors land in 7.1c. Acceptable for a local-first model-running app.
 - ~~ONNX Runtime on Apple Silicon~~ — resolved in 7.1a: `microsoft/onnxruntime-swift-package-manager` 1.24.2 integrates cleanly via SwiftPM with no xcframework vendoring needed.
