@@ -2,7 +2,7 @@
 
 In-app help system with two books: a **User Guide** (task-first, "how do I…") and a **Technical Reference** (system-first, "how does it work"). Same window, same renderer, different TOC. Frozen markdown shipped as bundle resources — content edits happen in source, not at runtime.
 
-**Status as of 2026-05-05.** All slices shipped on branch `v2-plan`. The help system is feature-complete: 25 pages across the User Guide and Technical Reference, plus search, deep-linking, and TestKit guards. Future work is content maintenance — keeping the pages in sync with the codebase as features land.
+**Status as of 2026-05-05.** Slices 1–4 shipped on branch `v2-plan` (25 pages across User Guide + Technical Reference). Slice 5 (V8 multi-server coverage — new `multi-server` page plus stale-prose fixes across 6 existing pages) shipped 2026-05-05 in TDD style: failing TestKit cases first, then content. Future work is content maintenance — keeping the pages in sync with the codebase as features land.
 
 ---
 
@@ -65,6 +65,7 @@ External `https:` links pass through to `NSWorkspace.shared.open(url)`.
 │  Slice 3a  Tech reference (priority tier)     ✅ 2026-05-05      │
 │  Slice 4   Long-tail user guide               ✅ 2026-05-05      │
 │  Slice 3b  Tech reference (tier 2)            ✅ 2026-05-05      │
+│  Slice 5   V8 multi-server coverage (TDD)     ✅ 2026-05-05      │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -196,7 +197,55 @@ These pages also added inbound links to the existing memory pages — `[author's
 
 ---
 
-## 7. Open follow-ups
+## 7. Slice 5 — V8 multi-server coverage ✅ shipped 2026-05-05
+
+V8 (Phase 4 in [V2_PLAN.md](V2_PLAN.md)) shipped 7 commits between Slices 3b and this one. The help system was unaware of:
+
+- The Settings → Servers section (list of profiles + role popups).
+- The chat header per-chat server picker.
+- `KoboldClientRegistry` and the `ServerRole`-based resolution chain.
+- Side-call role routing (summarizer / extractor / embeddings can each pin to a specific server).
+- The fallback semantics when a referenced profile is deleted.
+
+### TDD workflow
+
+Followed the new repo convention (see `feedback_tdd_workflow.md` in memory): tests first, watch them fail, then write content to make them pass.
+
+Added 6 failing assertions to `helpIndexTests`:
+
+- `multi-server` page exists.
+- `multi-server` page mentions "registry", "per-chat", and "role" (the load-bearing concepts).
+- `settings.md` contains "Servers" (capital S).
+- `troubleshooting.md` covers multi-server scenarios.
+- `tech-architecture.md` mentions the client registry.
+- `tech-kobold-client.md` mentions `KoboldClientRegistry` and role routing.
+- `tech-app-state.md` mentions the registry ownership.
+
+(One additional pre-existing assertion passed accidentally; the rewrite strengthened it.)
+
+### Content changes
+
+| File | Change |
+|---|---|
+| `multi-server.md` | New page. Servers section anatomy, role assignment table, per-chat pin, probe semantics, three worked examples (workstation+cloud, pinning, recovery from deleted profile). |
+| `settings.md` | Replaced single "Server URL" section with a "Servers" section that points at the dedicated page. |
+| `troubleshooting.md` | Server-unreachable diagnostic now references "whichever the active chat is using"; new "Side-call ran on the wrong server" section. |
+| `quick-start.md` | First sentence now reads "one or more servers"; forward-link to multi-server. |
+| `tech-architecture.md` | Diagram updated; new network paragraph splitting registry from per-server transport; file-map gains `KoboldClientRegistry.swift`, `ServerProfile.swift`, `ServerProbe.swift`. |
+| `tech-kobold-client.md` | Page reframed: registry first (cache rationale, `ServerRole` resolution rules, settings-update identity-preservation), then per-server transport. |
+| `tech-app-state.md` | "What AppState owns" section: removed `kobold: KoboldClient`, added `registry: KoboldClientRegistry`. `assembleAndStream` flow now reads the chat-pinned client through the registry. |
+
+### What this slice did *not* cover
+
+Deferred to future maintenance:
+
+- **HelpButton on the Settings → Servers section.** Would deep-link from the Servers UI to `multi-server`. Cheap (one button + one anchor) but requires a small `SettingsWindowController` edit in the right place.
+- **A new tech page on `ServerProbe.swift`.** The probe parser is small and well-tested; current help link is the file pointer in `tech-architecture`. If the probe surface grows it will warrant its own page.
+- **Anchor-level deep-links from inspector pane "?" buttons.** Currently they all open at page-top; a mild polish pass to land each `(?)` on the right section.
+
+---
+
+## 8. Open follow-ups
 
 Carry these in mind but don't block on them:
 

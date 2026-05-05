@@ -1,6 +1,6 @@
 # Quick start
 
-RPClient is a chat client for a local [KoboldCpp](https://github.com/LostRuins/koboldcpp) server. Generation happens on your own machine — there is no cloud component and no account to sign into. This page gets you from a fresh install to a streaming reply in about two minutes.
+RPClient is a chat client for one or more [KoboldCpp](https://github.com/LostRuins/koboldcpp) servers. Generation happens on whichever machine is running KoboldCpp — there is no cloud component and no account to sign into. This page gets you from a fresh install to a streaming reply in about two minutes; for a multi-machine setup see [Multi-server](multi-server).
 
 ## What you need
 

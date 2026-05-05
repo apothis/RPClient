@@ -10,7 +10,7 @@ In rough order:
 - **`currentChatId: UUID?`** — which chat the UI is showing.
 - **`characters: [Character]`, `personas: [Persona]`** — the library.
 - **`settings: Settings`** — global settings.
-- **`kobold: KoboldClient`** — the network client.
+- **`registry: KoboldClientRegistry`** — owns one `KoboldClient` per `ServerProfile`, routes lookups by `ServerRole`. AppState never holds a single client instance any more; it asks the registry for the right one at every call site (chat reply, summarizer, extractor, embeddings). See [tech-kobold-client](tech-kobold-client) for the resolution rules.
 - **`retrieval: RetrievalEngine`** — the per-chat vector store registry.
 - **`isStreaming`, `isSummarizing`, `isExtracting`** — global flags driving the input-bar stop button + activity spinner.
 - **`modelName`, `serverReachable`, `lastUsage`, `tokensPerSecond`** — status bar inputs.
@@ -68,9 +68,10 @@ The user-facing actions:
 All four of "send / regenerate / continue / replace" funnel into `assembleAndStream(...)` ([AppState.swift:763](Sources/RPClientCore/AppState.swift)), which:
 
 1. Reads the chat snapshot.
-2. Calls `TokenBudget.assemble(...)` to build the prompt + usage breakdown.
-3. Calls `kobold.generateStream(...)` with `appendStreamToken` as the per-token handler.
-4. On finish, persists the chat, fires `streamFinished`, and triggers the per-turn maintenance: `maybeAutoSummarize`, fact-extractor cadence check, retrieval re-index.
+2. Resolves the chat client via `registry.client(for: .general, chatOverride: chat.serverId)` — the per-chat pin wins, otherwise the global default.
+3. Calls `TokenBudget.assemble(...)` to build the prompt + usage breakdown.
+4. Calls `client.generateStream(...)` with `appendStreamToken` as the per-token handler.
+5. On finish, persists the chat, fires `streamFinished`, and triggers the per-turn maintenance: `maybeAutoSummarize`, fact-extractor cadence check, retrieval re-index. Each of those resolves *its own* role through the registry, so a side-call can land on a different server than the chat reply did.
 
 ## Per-turn maintenance
 

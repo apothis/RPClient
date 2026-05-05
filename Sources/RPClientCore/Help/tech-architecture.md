@@ -34,15 +34,15 @@ The package has three targets:
                                       │
             ┌─────────────────────────┼─────────────────────────┐
             │                         │                         │
-      ┌─────▼─────┐            ┌──────▼──────┐           ┌──────▼──────┐
-      │  Storage  │            │PromptBuilder│           │KoboldClient │
-      │  (atomic  │            │  (cache-    │           │  (SSE +     │
-      │   JSON)   │            │   aware)    │           │   side-call)│
-      └───────────┘            └──────┬──────┘           └──────┬──────┘
-                                      │                         │
+      ┌─────▼─────┐            ┌──────▼──────┐           ┌──────▼──────────────┐
+      │  Storage  │            │PromptBuilder│           │KoboldClientRegistry │
+      │  (atomic  │            │  (cache-    │           │  (one client per    │
+      │   JSON)   │            │   aware)    │           │   ServerProfile,    │
+      └───────────┘            └──────┬──────┘           │   role-routed)      │
+                                      │                  └──────┬──────────────┘
                                       └─────────┬───────────────┘
                                                 ▼
-                                         koboldcpp HTTP
+                                       one or more koboldcpp HTTP endpoints
 ```
 
 `AppState` is the centre. Every UI surface reads from it and mutates it through one of two helpers:
@@ -96,12 +96,16 @@ Two prompt templates are shipped: Gemma and Qwen3, both implementing the `Prompt
 
 ## Network
 
-[KoboldClient.swift](Sources/RPClientCore/KoboldClient.swift) wraps two endpoint families:
+The network layer is **two pieces**:
 
-- **Generation** — POST to `/api/extra/generate/stream`, parsed as Server-Sent Events. Tokens dispatched to `AppState.appendStreamToken`.
-- **Side-calls** — synchronous-style `generate` for the summarizer, fact extractor, and context blurber. They run on background queues and never go through SSE.
+- **[KoboldClientRegistry.swift](Sources/RPClientCore/KoboldClientRegistry.swift)** — owns one `KoboldClient` per `ServerProfile` and routes lookups by `ServerRole` (`.general`, `.summarizer`, `.extractor`, `.embeddings`). Settings updates re-point existing clients in place so URLSession state and the per-client token-count cache survive.
+- **[KoboldClient.swift](Sources/RPClientCore/KoboldClient.swift)** — the per-server transport. Wraps two endpoint families:
+  - **Generation** — POST to `/api/extra/generate/stream`, parsed as Server-Sent Events. Tokens dispatched to `AppState.appendStreamToken`.
+  - **Side-calls** — synchronous-style `generate` for the summarizer, fact extractor, and context blurber. They run on background queues and never go through SSE.
 
-Aborting a generation is a transport-level cancel of the inflight `URLSessionDataTask`.
+The registry is what makes per-chat server pinning and per-role side-call routing possible. The chat reply uses `client(for: .general, chatOverride: chat.serverId)`; each side-call uses its own role and falls back to the default when the role-specific server is unset or missing. Full details in [tech-kobold-client](tech-kobold-client).
+
+Aborting a generation is a transport-level cancel of the inflight `URLSessionDataTask` on the right client, plus a fire-and-forget `POST /api/extra/abort` against the same server.
 
 ## Where things live (file map)
 
@@ -111,7 +115,10 @@ Aborting a generation is a transport-level cancel of the inflight `URLSessionDat
 | Window + menus + window controller cache | [AppDelegate.swift](Sources/RPClientCore/AppDelegate.swift) |
 | Central state singleton | [AppState.swift](Sources/RPClientCore/AppState.swift) |
 | Storage / atomic JSON | [Storage.swift](Sources/RPClientCore/Storage.swift) |
-| Network | [KoboldClient.swift](Sources/RPClientCore/KoboldClient.swift) |
+| Network — registry / role routing | [KoboldClientRegistry.swift](Sources/RPClientCore/KoboldClientRegistry.swift) |
+| Network — per-server transport | [KoboldClient.swift](Sources/RPClientCore/KoboldClient.swift) |
+| Server profile model + roles | [Models/ServerProfile.swift](Sources/RPClientCore/Models/ServerProfile.swift) |
+| Server URL probe | [ServerProbe.swift](Sources/RPClientCore/ServerProbe.swift) |
 | Prompt assembly | [PromptBuilder.swift](Sources/RPClientCore/PromptBuilder.swift) |
 | Token-budget allocation | [Memory/TokenBudget.swift](Sources/RPClientCore/Memory/TokenBudget.swift) |
 | Memory pipeline | [Memory/](Sources/RPClientCore/Memory) |

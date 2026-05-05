@@ -8,12 +8,14 @@ A field guide to the symptoms you'll most plausibly hit, and the fix or diagnost
 
 **Check, in order:**
 
-1. KoboldCpp is actually running. From a terminal: `curl http://localhost:5001/api/v1/model`.
-2. The URL in `Settings… → Server URL` matches where KoboldCpp is listening.
+1. KoboldCpp is actually running. From a terminal: `curl http://<host>:<port>/api/v1/model`.
+2. The URL in `Settings… → Servers` matches where KoboldCpp is listening. If you've configured multiple servers, the failing one is **whichever the active chat is using** — `(use default)` resolves to `Settings → Servers → Default (chat)`; a per-chat pin uses that pinned profile. Hit **Test** on the row to probe just that profile.
 3. If KoboldCpp is on another machine, the host is reachable: `ping`, then `curl` against the same URL.
 4. **File → Reload Server Info (⌘R)** to force a re-probe without restarting.
 
 The status-bar marker clears automatically once a probe succeeds.
+
+If you have multiple servers configured and only **side-calls** are failing (summarizer / extractor / embeddings) but the main reply works, the role-assignment popup for that side-call is pointing at a dead profile. See [Multi-server](multi-server).
 
 ## Empty replies / model echoes the prompt
 
@@ -108,6 +110,14 @@ tail -f $TMPDIR/rpclient-debug.log
 ```
 
 Most of what's in there is uninteresting; the bits that matter are stack traces from caught errors and the per-request timing breakdowns.
+
+## Side-call ran on the wrong server
+
+**Symptom.** You configured a small fast model for summaries, but the summarizer is clearly running on your main workstation.
+
+**Cause.** The role popup for that side-call is set to `(use default)`, or the assigned profile was deleted (in which case the resolver falls back to the default — see [Multi-server](multi-server)).
+
+**Fix.** `Settings → Servers` → set the role popup to the intended profile. Save.
 
 ## Where settings and chats live
 

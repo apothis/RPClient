@@ -51,6 +51,7 @@ enum HelpIndex {
         HelpPage(id: "templates",            title: "Templates: Gemma vs Qwen3", book: .userGuide),
         HelpPage(id: "characters-personas",  title: "Characters & personas",   book: .userGuide),
         HelpPage(id: "library",              title: "Library window",          book: .userGuide),
+        HelpPage(id: "multi-server",         title: "Multi-server",            book: .userGuide),
         HelpPage(id: "settings",             title: "Settings",                book: .userGuide),
         HelpPage(id: "troubleshooting",      title: "Troubleshooting",         book: .userGuide),
         // Slice 3a — Technical Reference (priority tier).

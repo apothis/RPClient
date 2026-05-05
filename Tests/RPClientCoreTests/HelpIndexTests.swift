@@ -38,6 +38,68 @@ func helpIndexTests() -> TestSuite {
         try expectEqual(HelpRenderer.slugify("  weird  spacing!! "), "weird-spacing")
     }
 
+    // V8 (multi-server) shipped after the help system did, so several pages
+    // need updates. These cases assert the load-bearing concepts appear
+    // somewhere in the relevant pages — they catch staleness when a new
+    // subsystem lands and the docs haven't been pulled along.
+    //
+    // The substrings are deliberately load-bearing: a page that mentions
+    // "KoboldClientRegistry" by name is talking about the V8 architecture;
+    // a page that doesn't is documenting the pre-V8 world.
+    s.test("multi-server user guide page exists") {
+        let page = HelpIndex.page(id: "multi-server")
+        try expectTrue(page != nil, "multi-server page not registered in HelpIndex")
+    }
+
+    s.test("multi-server page covers the load-bearing concepts") {
+        let md = try expectNotNil(HelpIndex.markdown(for:
+            HelpIndex.page(id: "multi-server") ?? HelpPage(id: "_", title: "_", book: .userGuide)))
+        try expectTrue(md.contains("registry") || md.contains("Registry"),
+            "multi-server page should explain the registry concept")
+        try expectTrue(md.lowercased().contains("per-chat"),
+            "multi-server page should mention per-chat server pinning")
+        try expectTrue(md.lowercased().contains("role"),
+            "multi-server page should mention side-call role routing")
+    }
+
+    s.test("settings page documents the Servers section") {
+        let md = try expectNotNil(HelpIndex.markdown(for:
+            HelpIndex.page(id: "settings") ?? HelpPage(id: "_", title: "_", book: .userGuide)))
+        try expectTrue(md.contains("Servers"),
+            "settings.md should document the Settings → Servers section after V8")
+    }
+
+    s.test("troubleshooting page covers multi-server scenarios") {
+        let md = try expectNotNil(HelpIndex.markdown(for:
+            HelpIndex.page(id: "troubleshooting") ?? HelpPage(id: "_", title: "_", book: .userGuide)))
+        try expectTrue(md.lowercased().contains("server")
+            && (md.contains("default") || md.contains("which server") || md.contains("per-chat")),
+            "troubleshooting.md should acknowledge multi-server when diagnosing reachability")
+    }
+
+    s.test("tech-architecture mentions the client registry") {
+        let md = try expectNotNil(HelpIndex.markdown(for:
+            HelpIndex.page(id: "tech-architecture") ?? HelpPage(id: "_", title: "_", book: .technical)))
+        try expectTrue(md.contains("KoboldClientRegistry") || md.contains("client registry"),
+            "tech-architecture should mention the client registry post-V8")
+    }
+
+    s.test("tech-kobold-client describes the registry and role routing") {
+        let md = try expectNotNil(HelpIndex.markdown(for:
+            HelpIndex.page(id: "tech-kobold-client") ?? HelpPage(id: "_", title: "_", book: .technical)))
+        try expectTrue(md.contains("KoboldClientRegistry"),
+            "tech-kobold-client should name the KoboldClientRegistry")
+        try expectTrue(md.contains("ServerRole") || md.lowercased().contains("role routing"),
+            "tech-kobold-client should describe role routing")
+    }
+
+    s.test("tech-app-state mentions the registry ownership") {
+        let md = try expectNotNil(HelpIndex.markdown(for:
+            HelpIndex.page(id: "tech-app-state") ?? HelpPage(id: "_", title: "_", book: .technical)))
+        try expectTrue(md.contains("KoboldClientRegistry") || md.contains("client registry"),
+            "tech-app-state should describe AppState's registry ownership")
+    }
+
     // Inspector pane "?" buttons reference page ids by string. A typo here
     // wouldn't fail to compile; this assertion catches it at test time
     // before the user sees a "Page not found" page.

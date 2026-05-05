@@ -1,8 +1,66 @@
 # KoboldClient & SSE
 
-[KoboldClient.swift](Sources/RPClientCore/KoboldClient.swift) is the network layer. One class, one URLSession, three categories of endpoint: streaming generation, side-call generation, and metadata probes.
+The network layer is two cooperating pieces:
 
-## Endpoint map
+- **[KoboldClientRegistry.swift](Sources/RPClientCore/KoboldClientRegistry.swift)** — registry of `KoboldClient` instances, one per `ServerProfile`. Owns the role-routing logic.
+- **[KoboldClient.swift](Sources/RPClientCore/KoboldClient.swift)** — the per-server transport. One URLSession, three categories of endpoint: streaming generation, side-call generation, and metadata probes.
+
+`AppState` never instantiates a client directly any more; it asks the registry for the right one via `registry.client(for: role, chatOverride:)`. The registry resolves the profile id, returns a cached client (or mints one), and the call site uses it like any other `KoboldClient`.
+
+## KoboldClientRegistry
+
+[KoboldClientRegistry.swift](Sources/RPClientCore/KoboldClientRegistry.swift). Two responsibilities:
+
+1. **Cache one client per profile.** Identity matters — keeping the same `KoboldClient` instance across lookups preserves URLSession state and the per-client token-count cache. Side-call dispatch and chat generation may resolve to the same client many times per turn; minting fresh clients each time would lose every cache hit.
+2. **Resolve roles to profile ids.** `client(for: ServerRole, chatOverride: UUID?)` walks a small priority chain depending on the role.
+
+### Role routing
+
+```swift
+enum ServerRole: String, Codable, CaseIterable, Equatable {
+    case general
+    case summarizer
+    case extractor
+    case embeddings
+}
+```
+
+Resolution rules ([KoboldClientRegistry.swift:47](Sources/RPClientCore/KoboldClientRegistry.swift)):
+
+- **`.general`** — `chatOverride` (per-chat server pin) ?? `defaultServerId`.
+- **`.summarizer`** — `summarizerServerId` ?? `defaultServerId`.
+- **`.extractor`** — `extractorServerId` ?? `defaultServerId`.
+- **`.embeddings`** — `embeddingsServerId` ?? `defaultServerId`.
+
+Each step is gated on **liveness**: if a referenced id is no longer in `settings.servers`, the resolver treats it as `nil` and continues down the chain. This is the recovery path when a profile gets deleted while a role still references it.
+
+If even the default is corrupt, `client(for:)` returns a `cachedFallback()` pointing at `localhost:5001` so the network layer fails gracefully (an HTTP error to a localhost that isn't there) rather than crashing the resolver.
+
+### Settings updates
+
+`updateSettings(_:)` re-points existing cached clients in place rather than minting new ones:
+
+```swift
+for profile in s.servers {
+    if let existing = cache[profile.id], existing.baseURL != profile.baseURL {
+        existing.setBaseURL(profile.baseURL)
+    }
+}
+```
+
+The point of preserving identity: a token-count cache built up over the chat's lifetime survives a URL edit. Mint-on-update would invalidate the cache and produce a slow turn after every settings change.
+
+Removed profiles get evicted from the cache.
+
+### Thread model
+
+Settings updates and client lookups both happen on the main thread today (every AppState callsite). If lookups ever move off the main thread, add a lock around `cache` and `current`.
+
+## Per-server KoboldClient
+
+Each profile gets its own `KoboldClient` once it's first looked up. The class itself is unchanged from the pre-V8 single-client world — it doesn't know about the registry. From its perspective it's still one URLSession against one base URL.
+
+### Endpoint map
 
 | Method | Path | Purpose |
 |---|---|---|

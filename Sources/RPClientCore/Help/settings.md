@@ -4,11 +4,17 @@
 
 Settings are persisted to `~/Library/Application Support/RPClient/settings.json`.
 
-## Server URL
+## Servers
 
-The KoboldCpp endpoint RPClient talks to. Default `http://localhost:5001`. Change this if KoboldCpp runs on another machine on your LAN, or on a non-default port.
+The Settings sheet's **Servers** section is the editor for the list of KoboldCpp instances RPClient can talk to. The default config is one entry called "Default" pointing at `http://localhost:5001`. Most users never touch this section.
 
-`File → Reload Server Info (⌘R)` re-probes the server and refreshes the model name in the status bar without restarting RPClient.
+If you run more than one KoboldCpp — typically a big model for chat replies and a small one for summaries — see the dedicated [Multi-server](multi-server) page. The short version:
+
+- Each row is a profile (name + URL + Test button + status dot + delete).
+- Below the list, four **role-assignment popups** decide which server handles which job: **Default (chat)**, **Summarizer**, **Extractor**, **Embeddings**. The three side-call roles can fall back to the default with `(use default)`.
+- The chat header has a per-chat server picker that overrides the default for that one chat.
+
+`File → Reload Server Info (⌘R)` re-probes the active server(s) and refreshes the status bar.
 
 ## Your name
 
