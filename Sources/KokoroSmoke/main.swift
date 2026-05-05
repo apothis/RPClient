@@ -103,4 +103,22 @@ do {
     die("write WAV failed: \(error)")
 }
 print("Wrote:   \(outputPath)")
-print("Listen:  afplay \(outputPath)")
+
+// Play through KokoroAudioPlayer (k4) — the real path the chat speaker
+// will use. Block until the buffer's completion handler fires so the CLI
+// process doesn't exit mid-playback.
+let player: KokoroAudioPlayer
+do {
+    player = try KokoroAudioPlayer()
+} catch {
+    die("audio player init failed: \(error)")
+}
+let done = DispatchSemaphore(value: 0)
+do {
+    try player.play(samples: pcm) { done.signal() }
+} catch {
+    die("play failed: \(error)")
+}
+print("Playing… (blocks until buffer completion fires)")
+done.wait()
+print("Done.")
