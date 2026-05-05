@@ -21,6 +21,10 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     /// their own `voice` override both. Speaker layer (§7.4) is the consumer.
     private let voicePicker = NSPopUpButton()
     private let voiceLabel = NSTextField(labelWithString: "Voice:")
+    /// Phase 6 §7.5d — per-chat attribution mode picker. Bound to
+    /// `Chat.attributionMode`; consumed by `Speaker` via `SpeakerAttribution`.
+    private let attributionPicker = NSPopUpButton()
+    private let attributionLabel = NSTextField(labelWithString: "Attribution:")
     private var turnViews: [TurnView] = []
     private var dividerView: ContextDivider?
     private var dividerWidthConstraint: NSLayoutConstraint?
@@ -78,6 +82,17 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         chatHeader.addSubview(voiceLabel)
         chatHeader.addSubview(voicePicker)
 
+        attributionLabel.font = Theme.font(11)
+        attributionLabel.textColor = .secondaryLabelColor
+        attributionLabel.translatesAutoresizingMaskIntoConstraints = false
+        attributionPicker.target = self
+        attributionPicker.action = #selector(attributionPickerChanged(_:))
+        attributionPicker.bezelStyle = .rounded
+        attributionPicker.font = Theme.font(11)
+        attributionPicker.translatesAutoresizingMaskIntoConstraints = false
+        chatHeader.addSubview(attributionLabel)
+        chatHeader.addSubview(attributionPicker)
+
         v.addSubview(chatHeader)
         NSLayoutConstraint.activate([
             chatHeader.heightAnchor.constraint(equalToConstant: 28),
@@ -94,6 +109,10 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             voicePicker.widthAnchor.constraint(lessThanOrEqualToConstant: 220),
             voiceLabel.trailingAnchor.constraint(equalTo: voicePicker.leadingAnchor, constant: -6),
             voiceLabel.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
+            attributionPicker.trailingAnchor.constraint(equalTo: voiceLabel.leadingAnchor, constant: -12),
+            attributionPicker.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
+            attributionLabel.trailingAnchor.constraint(equalTo: attributionPicker.leadingAnchor, constant: -6),
+            attributionLabel.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
         ])
 
         // Stack tracks the panel width with a small symmetric gutter; turns
@@ -244,6 +263,7 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         dividerWidthConstraint = nil
         rebuildServerPicker()
         rebuildVoicePicker()
+        rebuildAttributionPicker()
         guard let chat = AppState.shared.currentChat else {
             removeEmptyState()
             return
@@ -575,6 +595,7 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     @objc private func handleSettingsChanged() {
         rebuildServerPicker()
         rebuildVoicePicker()
+        rebuildAttributionPicker()
         refreshSpeakerButton()
     }
 
@@ -594,6 +615,34 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
                 fromSelectionOf: sender,
                 previous: c.voice
             )
+        }
+    }
+
+    /// Phase 6 §7.5d — populate the two-item attribution mode popup and select
+    /// the chat's current mode. `representedObject` carries the rawValue so the
+    /// action handler is decoupled from menu order.
+    private func rebuildAttributionPicker() {
+        attributionPicker.removeAllItems()
+        let modes: [AttributionMode] = [.heuristic, .tagged]
+        for mode in modes {
+            attributionPicker.addItem(withTitle: mode.displayName)
+            attributionPicker.lastItem?.representedObject = mode.rawValue
+        }
+        let current = AppState.shared.currentChat?.attributionMode ?? .heuristic
+        for (i, item) in (attributionPicker.menu?.items ?? []).enumerated() {
+            if (item.representedObject as? String) == current.rawValue {
+                attributionPicker.selectItem(at: i)
+                break
+            }
+        }
+        attributionPicker.isEnabled = AppState.shared.currentChat != nil
+    }
+
+    @objc private func attributionPickerChanged(_ sender: NSPopUpButton) {
+        guard let raw = sender.selectedItem?.representedObject as? String,
+              let mode = AttributionMode(rawValue: raw) else { return }
+        AppState.shared.updateCurrent { c in
+            c.attributionMode = mode
         }
     }
 

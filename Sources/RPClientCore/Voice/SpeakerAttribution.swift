@@ -16,6 +16,14 @@ public enum AttributionMode: String, Codable, Equatable {
     /// attribution when the model follows the convention; falls back to
     /// narrator on untagged or unknown-name lines.
     case tagged
+
+    /// Human-readable label for the §7.5d chat-header picker.
+    public var displayName: String {
+        switch self {
+        case .heuristic: return "Heuristic"
+        case .tagged: return "Tagged"
+        }
+    }
 }
 
 /// One contiguous run of text with its attributed entity (or nil for
