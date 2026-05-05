@@ -37,6 +37,7 @@ let suites: [TestSuite] = [
     voiceIdentifierTests(),
     voicePreferenceTests(),
     entityVoiceTests(),
+    chatSettingsVoiceTests(),
 ]
 
 exit(TestRunner.run(suites))

@@ -683,6 +683,7 @@ Sub-step shape that landed:
 
 - **§7.2a — `VoicePreference` struct + Codable.** New file `Sources/RPClientCore/Voice/VoicePreference.swift`. Custom decoder: missing nested `rate`/`pitch` → 1.0 (matches the `decodeIfPresent ?? default` pattern used in `Entity` and `Settings`); missing or malformed `voiceIdentifier` throws (the preference is unusable without it). 8 pure tests in `VoicePreferenceTests`.
 - **§7.2b — `Entity.voice: VoicePreference?` + migration.** One-line addition to `Entity` plus a `decodeIfPresent` line in its existing custom `init(from:)`. 4 migration tests in `EntityVoiceTests` cover: old-shape JSON (no `voice` key) decodes nil, new-shape round-trips, explicit `null` decodes nil, malformed nested voice rejects the whole entity (we'd rather throw than silently bind the wrong voice).
+- **§7.2c — `Chat.voice: VoicePreference?` + `Settings.defaultVoice: VoicePreference?`.** Two-tier fallback: `Entity.voice ?? Chat.voice ?? Settings.defaultVoice`. Per-chat override mirrors the Entity migration shape (one `decodeIfPresent` line). Settings field uses `encodeIfPresent` so a fresh install doesn't grow a useless `"defaultVoice": null` key. 6 migration tests in `ChatSettingsVoiceTests`. The speaker layer (§7.4) is the consumer of the fallback chain; §7.5 only writes to these fields.
 
 ### 7.3 Speaker attribution
 

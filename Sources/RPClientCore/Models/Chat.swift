@@ -120,6 +120,10 @@ struct Chat: Codable, Equatable, Identifiable {
     /// embeddings) ignores this field — those go through the role overrides
     /// on Settings instead. Pre-Phase-4 chats decode as nil.
     var serverId: UUID?
+    /// Per-chat default narrator voice. Phase 6 §7.2c. Nil falls back to
+    /// `Settings.defaultVoice`; entities with their own `voice` override
+    /// both. The speaker layer (§7.4) is the consumer.
+    var voice: VoicePreference?
 
     init(
         id: UUID = UUID(),
@@ -157,6 +161,7 @@ struct Chat: Codable, Equatable, Identifiable {
         self.personaId = nil
         self.systemPromptMode = .override
         self.serverId = nil
+        self.voice = nil
     }
 
     init(from decoder: Decoder) throws {
@@ -230,6 +235,7 @@ struct Chat: Codable, Equatable, Identifiable {
         personaId = try c.decodeIfPresent(UUID.self, forKey: .personaId)
         systemPromptMode = try c.decodeIfPresent(CardPromptMode.self, forKey: .systemPromptMode) ?? .override
         serverId = try c.decodeIfPresent(UUID.self, forKey: .serverId)
+        voice = try c.decodeIfPresent(VoicePreference.self, forKey: .voice)
     }
 
     /// Best-effort parse of a `memory` string (one fact per line) into entities.
