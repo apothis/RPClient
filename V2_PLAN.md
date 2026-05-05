@@ -589,7 +589,23 @@ j. **Download manager — split into j1 (pure types) + j2 (manager) + future j3 
 
    The base-model row in `VoiceLibraryWindowController` now hosts a Download/Cancel/Remove button next to the state label. Live progress text ("⬇︎ 142.7 MB of 325.5 MB (43%)") via the new notification subscription. Cancel correctly removes the temp file (`URLSession` handles this) and the manifest stays untouched. Smoke-tested end-to-end on a real network: download → mid-flight cancel → restart → completion → remove. Per-voice action buttons (Download/Remove + Preview) deferred to a follow-up commit since they're substantial UI changes (per-row buttons in the table) and don't change the manager.
 
-k. **Adapter.** New `Voice/KokoroSpeechSynthesizer.swift` in `RPClientVoice` conforming to `SpeechSynthesizing`. On `speak(_:)`: synthesises PCM frames via ONNX Runtime, streams into an `AVAudioEngine` player node. On `stopSpeaking()`: cancels the synth task and flushes the player. Falls back to `AVSpeechSynthesizerAdapter` when the base model isn't `.ready`. **Highest-risk sub-step** — see Risks / open for the .pt-parsing + g2p tokenization questions; expect this to surface design choices that ripple back to the plan.
+k. **Adapter — split into k-prep, k1–k4 (engine), then integration.** Highest-risk sub-step. Two design questions settled with the user before code:
+
+   **G2P decision (2026-05-05):** subprocess to system `espeak-ng` rather than vendoring or building a Swift G2P. Reasons: (a) Kokoro was trained on espeak-ng/misaki phonemes, so any other G2P degrades quality via distribution shift; (b) GPL-3 stays out of our binary because espeak-ng runs as a separate process; (c) ~100 LOC of `Process` + `Pipe` wrangling vs. multi-week from-scratch Swift G2P; (d) one-time `brew install espeak-ng` is fair friction for a developer-targeted local-first app, and unblocks the full 9-language catalogue. Rejected alternatives: vendored neural G2P ONNX (~5 MB, English-only, noticeably lower quality due to phoneme distribution mismatch); from-scratch Swift CMUdict + LTS rules (~5K LOC + 3 MB dict); deferring k entirely (half the value of §7.1).
+
+   **.pt parsing decision (2026-05-05):** parse the PyTorch pickle in Swift at inference time (~50 LOC for the single-tensor case). Rejected alternative: pre-process at download time to a flat float buffer (would couple the download path to engine internals).
+
+   **k-prep — espeak-ng detection + library UI surface — shipped 2026-05-05.** New `Sources/RPClientCore/Voice/EspeakNg.swift` with `find()` + a pure `resolve(candidates:fileExists:whichLookup:)` resolver. Probe order: `/opt/homebrew/bin/espeak-ng`, `/usr/local/bin/espeak-ng`, then `/usr/bin/which espeak-ng` for non-default installs. 7 unit tests cover the path-resolution edges; the `which` shell-out is smoke-tested. Voice library window gains a persistent status row above the base-model row: `✓ found at <path>` when present (secondary text), or `◯ not installed — required for Kokoro voices.` with a monospace `brew install espeak-ng` + Copy + Re-check pair when missing. Re-check refreshes detection without an app restart. Window default size also bumped to 760×560 (was 560×520 — too narrow for the 5-column table after h2 added the Action column); minSize 660×360. Autosave key rolled to `.v2` to invalidate any too-narrow saved frame from earlier dev.
+
+   k1. **Pickle (.pt) parser.** Pending — pure parser for the HuggingFace voice tensor archives. ~50 LOC since we only need to extract a single Float32 tensor.
+
+   k2. **espeak-ng subprocess wrapper.** Pending — `Process` + `Pipe` to pipe text → `espeak-ng -q --ipa` → phoneme string. Misaki post-processing if needed for quality. Falls back to `AVSpeechSynthesizerAdapter` when `EspeakNg.find()` returns nil.
+
+   k3. **ONNX session loader + inference.** Pending — load `model.onnx`, run with phoneme tokens + style embedding + speed → PCM frames.
+
+   k4. **AVAudioEngine playback.** Pending — `AVAudioEngine` + `AVAudioPlayerNode` to play streamed PCM frames; `stopSpeaking()` cancels the synth task and flushes the player.
+
+   k5. **`KokoroSpeechSynthesizer` adapter.** Pending — conforms to `SpeechSynthesizing` from §7.0. Lives in `RPClientVoice` (the only piece of k that actually needs ONNX symbols). Selection wiring lives in §7.1l.
 
 l. **Wiring.** `AppState` (or wherever the §7.0 `Speaker` is constructed) picks the adapter based on `KokoroModelStore.baseModelState()`. No change to the `SpeechSynthesizing` protocol; no change to `Speaker`'s call sites. `Settings.voiceEnabled` toggle drives initial adapter selection (subsystem on → load Kokoro, subsystem off → swap back to AVKit + deinit Kokoro); mount/unmount notifications on `KokoroModelStore` swap the adapter live.
 

@@ -12,6 +12,11 @@ import AppKit
 final class VoiceLibraryWindowController: NSWindowController, NSWindowDelegate {
 
     private let banner = NSTextField(wrappingLabelWithString: "")
+    private let espeakStatusLabel = NSTextField(wrappingLabelWithString: "")
+    private let espeakInstallRow = NSStackView()
+    private let espeakCommandLabel = NSTextField(labelWithString: "brew install espeak-ng")
+    private let espeakCopyButton = NSButton(title: "Copy", target: nil, action: nil)
+    private let espeakRecheckButton = NSButton(title: "Re-check", target: nil, action: nil)
     private let baseModelLabel = NSTextField(labelWithString: "")
     private let baseModelButton = NSButton(title: "Download", target: nil, action: nil)
     private let languagePopup = NSPopUpButton()
@@ -26,14 +31,19 @@ final class VoiceLibraryWindowController: NSWindowController, NSWindowDelegate {
 
     convenience init() {
         let w = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
-        w.minSize = NSSize(width: 480, height: 320)
+        // 660 covers the 5 columns at minWidth (180+140+70+110+90 = 590) +
+        // intercell spacing + scrollbar + 32 side padding. Below that the
+        // Action column eats into State.
+        w.minSize = NSSize(width: 660, height: 360)
         w.title = "Voice library"
-        w.setFrameAutosaveName("RPClient.VoiceLibraryWindow")
+        // Autosave key bumped (.v2) so any too-narrow frame saved during
+        // h1/h2 development gets invalidated and the new default applies.
+        w.setFrameAutosaveName("RPClient.VoiceLibraryWindow.v2")
         self.init(window: w)
         w.delegate = self
         buildUI()
@@ -63,6 +73,31 @@ final class VoiceLibraryWindowController: NSWindowController, NSWindowDelegate {
         banner.font = Theme.font(11)
         banner.textColor = .secondaryLabelColor
         banner.translatesAutoresizingMaskIntoConstraints = false
+
+        espeakStatusLabel.font = Theme.font(12)
+        espeakStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+        espeakCommandLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        espeakCommandLabel.textColor = .labelColor
+        espeakCommandLabel.isSelectable = true
+        espeakCopyButton.bezelStyle = .rounded
+        espeakCopyButton.target = self
+        espeakCopyButton.action = #selector(espeakCopyCommand)
+        espeakRecheckButton.bezelStyle = .rounded
+        espeakRecheckButton.target = self
+        espeakRecheckButton.action = #selector(espeakRecheck)
+        espeakInstallRow.orientation = .horizontal
+        espeakInstallRow.alignment = .centerY
+        espeakInstallRow.spacing = 8
+        espeakInstallRow.translatesAutoresizingMaskIntoConstraints = false
+        espeakInstallRow.addArrangedSubview(espeakCommandLabel)
+        espeakInstallRow.addArrangedSubview(espeakCopyButton)
+        espeakInstallRow.addArrangedSubview(espeakRecheckButton)
+
+        let espeakSection = NSStackView(views: [espeakStatusLabel, espeakInstallRow])
+        espeakSection.orientation = .vertical
+        espeakSection.alignment = .leading
+        espeakSection.spacing = 4
+        espeakSection.translatesAutoresizingMaskIntoConstraints = false
 
         baseModelLabel.font = Theme.font(12)
         baseModelLabel.lineBreakMode = .byTruncatingTail
@@ -114,6 +149,7 @@ final class VoiceLibraryWindowController: NSWindowController, NSWindowDelegate {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
         cv.addSubview(banner)
+        cv.addSubview(espeakSection)
         cv.addSubview(baseModelRow)
         cv.addSubview(filterBar)
         cv.addSubview(scrollView)
@@ -123,7 +159,11 @@ final class VoiceLibraryWindowController: NSWindowController, NSWindowDelegate {
             banner.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 16),
             banner.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -16),
 
-            baseModelRow.topAnchor.constraint(equalTo: banner.bottomAnchor, constant: 8),
+            espeakSection.topAnchor.constraint(equalTo: banner.bottomAnchor, constant: 8),
+            espeakSection.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 16),
+            espeakSection.trailingAnchor.constraint(lessThanOrEqualTo: cv.trailingAnchor, constant: -16),
+
+            baseModelRow.topAnchor.constraint(equalTo: espeakSection.bottomAnchor, constant: 12),
             baseModelRow.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 16),
             baseModelRow.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -16),
 
@@ -187,8 +227,41 @@ final class VoiceLibraryWindowController: NSWindowController, NSWindowDelegate {
         } else {
             banner.stringValue = "No storage location set. Open Settings → Voice storage to pick a folder."
         }
+        refreshEspeakRow()
         refreshBaseModelRow()
         applyFilter()
+    }
+
+    private func refreshEspeakRow() {
+        if let url = EspeakNg.find() {
+            espeakStatusLabel.stringValue = "espeak-ng (G2P engine): ✓ found at \(url.path)"
+            espeakStatusLabel.textColor = .secondaryLabelColor
+            espeakInstallRow.isHidden = true
+        } else {
+            espeakStatusLabel.stringValue = "espeak-ng (G2P engine): ◯ not installed — required for Kokoro voices."
+            espeakStatusLabel.textColor = .labelColor
+            espeakInstallRow.isHidden = false
+        }
+    }
+
+    @objc private func espeakCopyCommand() {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString("brew install espeak-ng", forType: .string)
+        // Brief visual confirmation: button title flickers to "Copied" for
+        // ~1.2s. Cheap feedback that beats a sheet alert.
+        let original = espeakCopyButton.title
+        espeakCopyButton.title = "Copied"
+        espeakCopyButton.isEnabled = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            guard let self = self else { return }
+            self.espeakCopyButton.title = original
+            self.espeakCopyButton.isEnabled = true
+        }
+    }
+
+    @objc private func espeakRecheck() {
+        refreshEspeakRow()
     }
 
     private func currentStore() -> KokoroModelStore? {
