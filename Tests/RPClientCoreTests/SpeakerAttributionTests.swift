@@ -105,6 +105,67 @@ func speakerAttributionTests() -> TestSuite {
         try expectEqual(segs.last?.entityId, sage.id)
     }
 
+    s.test("heuristic: first-person markers attribute to the chat's character entity") {
+        // The model's typical RP voice is the chat character speaking in
+        // first person ("I felt..." / "I said..."). Without a hint, the
+        // existing rule would attribute the quote to the most-recently-named
+        // third-party entity. The first-person hint makes "I" win when no
+        // third-person entity has been named more recently.
+        let segs = SpeakerAttribution.split(
+            text: #"I felt nervous. "Hello.""#,
+            entities: [sage, kira],
+            mode: .heuristic,
+            firstPersonEntityId: kira.id
+        )
+        try expectEqual(segs.last?.entityId, kira.id)
+    }
+
+    s.test("heuristic: third-person mention more recent than 'I' wins") {
+        // "I felt nervous as Sage approached. \"Hi, Sage.\"" — Sage is named
+        // *after* the "I", so the heuristic still reads this as third-person
+        // (the AI character addressing Sage by name). The first-person hint
+        // doesn't override a more-recent third-person mention.
+        let segs = SpeakerAttribution.split(
+            text: #"I felt nervous as Sage approached. "Hi.""#,
+            entities: [sage, kira],
+            mode: .heuristic,
+            firstPersonEntityId: kira.id
+        )
+        try expectEqual(segs.last?.entityId, sage.id)
+    }
+
+    s.test("heuristic: 'I' wins when it appears more recently than any third-person mention") {
+        let segs = SpeakerAttribution.split(
+            text: #"Sage walked off. I sat there a while. "Hello.""#,
+            entities: [sage, kira],
+            mode: .heuristic,
+            firstPersonEntityId: kira.id
+        )
+        try expectEqual(segs.last?.entityId, kira.id)
+    }
+
+    s.test("heuristic: first-person hint nil leaves behavior unchanged") {
+        let segs = SpeakerAttribution.split(
+            text: #"I felt nervous. "Hello.""#,
+            entities: [sage, kira],
+            mode: .heuristic,
+            firstPersonEntityId: nil
+        )
+        // No hint, no entity name in surrounding narration → narrator.
+        try expectEqual(segs.last?.entityId, nil)
+    }
+
+    s.test("heuristic: word-bounded 'I' only — don't match 'I' inside other words") {
+        // "Iron", "Ireland", "It" should not trigger first-person.
+        let segs = SpeakerAttribution.split(
+            text: #"Iron rusts. Ireland is wet. It's late. "Hello.""#,
+            entities: [sage, kira],
+            mode: .heuristic,
+            firstPersonEntityId: kira.id
+        )
+        try expectEqual(segs.last?.entityId, nil)
+    }
+
     s.test("heuristic: unmatched opening quote does not eat the rest of the text") {
         // Defensive: a stray `"` shouldn't blackhole all subsequent narration.
         let segs = SpeakerAttribution.split(

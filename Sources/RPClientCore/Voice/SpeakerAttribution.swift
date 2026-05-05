@@ -37,14 +37,27 @@ public struct AttributedSegment: Equatable {
 /// `internal` (not `public`) because `Entity` is internal — the algorithm is
 /// only ever called from within `RPClientCore`. Tests use `@testable import`.
 enum SpeakerAttribution {
+    /// Split a turn into per-entity segments.
+    ///
+    /// - Parameter firstPersonEntityId: Hint for who's speaking when the
+    ///   surrounding narration uses a word-bounded `I`. In RP this is
+    ///   typically the chat's character card resolved to its matching
+    ///   entity — the AI's own persona speaking in first person. Nil
+    ///   disables first-person handling and the older "most-recently-mentioned
+    ///   third-person entity wins" rule applies on its own.
     static func split(
         text: String,
         entities: [Entity],
-        mode: AttributionMode
+        mode: AttributionMode,
+        firstPersonEntityId: UUID? = nil
     ) -> [AttributedSegment] {
         switch mode {
         case .heuristic:
-            return heuristicSplit(text: text, entities: entities)
+            return heuristicSplit(
+                text: text,
+                entities: entities,
+                firstPersonEntityId: firstPersonEntityId
+            )
         case .tagged:
             return taggedSplit(text: text, entities: entities)
         }
@@ -59,7 +72,19 @@ enum SpeakerAttribution {
     /// long-form drift becomes a problem). Unquoted text is narration.
     /// Unmatched opening quotes degrade to narration so a stray `"`
     /// doesn't blackhole the rest of the turn.
-    private static func heuristicSplit(text: String, entities: [Entity]) -> [AttributedSegment] {
+    ///
+    /// First-person handling: if `firstPersonEntityId` is non-nil, the
+    /// position of the most-recent word-bounded `I` is compared against
+    /// the position of the most-recent entity-name match. Whichever
+    /// appears later in the text wins. This catches the common RP shape
+    /// `I felt nervous. "Hello."` — without the hint, no third-person
+    /// entity has been named, so the quote falls to narrator; with it,
+    /// the quote attributes to the chat's character.
+    private static func heuristicSplit(
+        text: String,
+        entities: [Entity],
+        firstPersonEntityId: UUID?
+    ) -> [AttributedSegment] {
         guard !text.isEmpty else { return [] }
 
         // Lowercase needles for fast contains-check; sort by length descending
@@ -115,7 +140,11 @@ enum SpeakerAttribution {
                 // Begin a quoted span. Decide the speaker by looking at
                 // narration so far (everything before this quote).
                 let leadingText = String(text[..<boundary])
-                let speaker = mostRecentMention(in: leadingText, needles: needles)
+                let speaker = mostRecentMention(
+                    in: leadingText,
+                    needles: needles,
+                    firstPersonEntityId: firstPersonEntityId
+                )
                 // Open a placeholder segment; we'll commit it when we see
                 // the close quote (or the end of text — see fallback below).
                 inQuote = true
@@ -144,10 +173,12 @@ enum SpeakerAttribution {
     }
 
     /// Returns the entity id whose name/alias appears latest in `text`
-    /// (or nil if none match).
+    /// (or `firstPersonEntityId` if a word-bounded `I` appears later than
+    /// any third-person entity, or nil if nothing matches).
     private static func mostRecentMention(
         in text: String,
-        needles: [(needle: String, id: UUID)]
+        needles: [(needle: String, id: UUID)],
+        firstPersonEntityId: UUID?
     ) -> UUID? {
         let lower = text.lowercased()
         var bestEnd: String.Index? = nil
@@ -166,7 +197,52 @@ enum SpeakerAttribution {
                 bestId = id
             }
         }
+        // First-person check: word-bounded `I` (case-sensitive — English
+        // capitalisation makes this safe and sidesteps "Iron" / "Ireland"
+        // false positives that case-insensitive substring search would hit).
+        // Compares against the third-person mention end and wins if more
+        // recent.
+        if let fpId = firstPersonEntityId,
+           let fpEnd = lastWordBoundedIEnd(in: text) {
+            if bestEnd == nil || fpEnd > bestEnd! {
+                return fpId
+            }
+        }
         return bestId
+    }
+
+    /// Returns the end index of the most-recent occurrence of a word-bounded
+    /// `I` in `text` — i.e. surrounded by non-letter characters (or string
+    /// edges). Other first-person markers ("me", "my", "myself") are
+    /// deliberately not included: they're lowercase, much more ambiguous,
+    /// and the bare "I" alone catches the common RP shape.
+    private static func lastWordBoundedIEnd(in text: String) -> String.Index? {
+        var i = text.startIndex
+        var lastEnd: String.Index? = nil
+        while i < text.endIndex {
+            let c = text[i]
+            if c == "I" {
+                let beforeIsBoundary: Bool
+                if i == text.startIndex {
+                    beforeIsBoundary = true
+                } else {
+                    let prev = text[text.index(before: i)]
+                    beforeIsBoundary = !prev.isLetter
+                }
+                let next = text.index(after: i)
+                let afterIsBoundary: Bool
+                if next == text.endIndex {
+                    afterIsBoundary = true
+                } else {
+                    afterIsBoundary = !text[next].isLetter
+                }
+                if beforeIsBoundary && afterIsBoundary {
+                    lastEnd = next
+                }
+            }
+            i = text.index(after: i)
+        }
+        return lastEnd
     }
 
     private static func appendSegment(

@@ -286,6 +286,29 @@ final class Speaker {
         observers = [speakIfFinished, stopOnNewStream, stopOnChatSwitch, trackSettings, trackActive]
     }
 
+    /// Find the entity that represents the chat's character card (the AI's
+    /// persona). Walked through `chat.characterId → AppState.characters →
+    /// name` and matched against `chat.entities` by case-insensitive name
+    /// or alias. Returns nil if the chat has no character set, or if no
+    /// entity matches by name. The match is on entity name/alias so
+    /// users who keep an entity row for their chat character get
+    /// first-person attribution; users who don't lose nothing.
+    private func resolveFirstPersonEntityId(in chat: Chat) -> UUID? {
+        guard let characterId = chat.characterId,
+              let character = AppState.shared.characters.first(where: { $0.id == characterId })
+        else { return nil }
+        let lookupName = character.name.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !lookupName.isEmpty else { return nil }
+        for ent in chat.entities {
+            let candidates = ([ent.name] + ent.aliases)
+                .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            if candidates.contains(lookupName) {
+                return ent.id
+            }
+        }
+        return nil
+    }
+
     private func handleStreamFinished() {
         guard shouldSpeak else { return }
         guard let chat = AppState.shared.currentChat,
@@ -300,10 +323,19 @@ final class Speaker {
         let chatDefault = chat.voice ?? AppState.shared.settings.defaultVoice
         let chatDefaultOptions = SpeakOptions(preference: chatDefault)
 
+        // First-person hint: in RP, the model usually speaks AS the chat's
+        // character — the "I" in narration is that character. Resolve the
+        // character card → its name → the entity matching that name, and
+        // pass that entity id as the first-person speaker. Falls back to
+        // nil (older heuristic behaviour) if any link in the chain is
+        // missing.
+        let firstPersonEntityId = resolveFirstPersonEntityId(in: chat)
+
         let attributedSegments = SpeakerAttribution.split(
             text: plain,
             entities: chat.entities,
-            mode: chat.attributionMode
+            mode: chat.attributionMode,
+            firstPersonEntityId: firstPersonEntityId
         )
 
         let segments: [(text: String, options: SpeakOptions)] = attributedSegments.map { seg in
