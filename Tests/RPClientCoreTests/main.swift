@@ -29,6 +29,8 @@ let suites: [TestSuite] = [
     voiceStoragePromptTests(),
     kokoroDownloadTypesTests(),
     espeakNgTests(),
+    minimalZipReaderTests(),
+    kokoroVoiceFileTests(),
 ]
 
 exit(TestRunner.run(suites))
