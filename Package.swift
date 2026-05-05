@@ -63,5 +63,14 @@ let package = Package(
             dependencies: ["RPClientVoice"],
             path: "Sources/KokoroProbe"
         ),
+        // Phase 6 §7.1k3 first-light smoke runner — end-to-end pipeline
+        // from text → espeak-ng → tokenize → KokoroEngine → write WAV.
+        // Acceptance is "does it sound like speech?" — no automated check.
+        // Run with `swift run KokoroSmoke "Hello, world."` then `afplay`.
+        .executableTarget(
+            name: "KokoroSmoke",
+            dependencies: ["RPClientCore", "RPClientVoice"],
+            path: "Sources/KokoroSmoke"
+        ),
     ]
 )
