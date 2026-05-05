@@ -2,17 +2,18 @@ import Foundation
 import RPClientCore
 import RPClientVoice
 
-// First-light smoke for Phase 6 §7.1k3. End-to-end pipeline:
-// text → espeak-ng IPA → KokoroTokenizer → KokoroEngine → float32 PCM →
-// /tmp/kokoro-smoke.wav → afplay. No automated "is this speech" check;
-// the only acceptance criterion is that the output sounds like the text.
+// First-light smoke for Phase 6 §7.1k3 (direct path) and §7.1k5 (adapter).
+// Direct: text → espeak → tokenize → KokoroEngine → KokoroAudioPlayer.
+// Adapter: text → KokoroSpeechSynthesizer (which routes the same).
 //
-// usage: swift run KokoroSmoke ["text" [model.onnx [voice.pt]]]
+// usage: swift run KokoroSmoke [--via-adapter] ["text" [model.onnx [voice.pt]]]
 
-let args = CommandLine.arguments
-let text = args.count >= 2 ? args[1] : "Hello, world."
-let modelPath = args.count >= 3 ? args[2] : "/Volumes/SSD1/VoiceStorage/kokoro/model.onnx"
-let voicePath = args.count >= 4 ? args[3] : "/Volumes/SSD1/VoiceStorage/kokoro/voices/af_alloy.pt"
+var rawArgs = Array(CommandLine.arguments.dropFirst())
+let viaAdapter = rawArgs.first == "--via-adapter"
+if viaAdapter { rawArgs.removeFirst() }
+let text = rawArgs.count >= 1 ? rawArgs[0] : "Hello, world."
+let modelPath = rawArgs.count >= 2 ? rawArgs[1] : "/Volumes/SSD1/VoiceStorage/kokoro/model.onnx"
+let voicePath = rawArgs.count >= 3 ? rawArgs[2] : "/Volumes/SSD1/VoiceStorage/kokoro/voices/af_alloy.pt"
 let outputPath = "/tmp/kokoro-smoke.wav"
 
 func die(_ msg: String) -> Never {
@@ -26,6 +27,26 @@ guard let espeak = EspeakNgClient.resolved() else {
 print("Text:    \(text)")
 print("Model:   \(modelPath)")
 print("Voice:   \(voicePath)")
+print("Mode:    \(viaAdapter ? "via KokoroSpeechSynthesizer adapter" : "direct (engine + player)")")
+
+if viaAdapter {
+    let adapter: KokoroSpeechSynthesizer
+    do {
+        adapter = try KokoroSpeechSynthesizer(
+            modelURL: URL(fileURLWithPath: modelPath),
+            voiceFileURL: URL(fileURLWithPath: voicePath),
+            language: .americanEnglish
+        )
+    } catch {
+        die("adapter init failed: \(error)")
+    }
+    let estimateSec = Double(text.count) * 0.08 + 1.5    // crude — espeak avg ~12 chars/s
+    print(String(format: "speak() → sleeping ~%.1fs while audio plays…", estimateSec))
+    adapter.speak(text)
+    Thread.sleep(forTimeInterval: estimateSec)
+    print("Done.")
+    exit(0)
+}
 
 let style: [Float]
 do {

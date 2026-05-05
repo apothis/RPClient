@@ -1,10 +1,12 @@
 import AVFoundation
 import Foundation
 
-/// Abstraction over `AVSpeechSynthesizer` so the on/off gating in `Speaker`
-/// is testable without touching AVKit. Production wiring uses
-/// `AVSpeechSynthesizerAdapter`; tests inject a recording fake.
-protocol SpeechSynthesizing: AnyObject {
+/// Abstraction over the underlying TTS engine so the on/off gating in
+/// `Speaker` is testable without touching AVKit, and so engine selection
+/// (§7.1l) can swap between AVKit and Kokoro implementations. Production
+/// wiring uses `AVSpeechSynthesizerAdapter` (this file) or
+/// `KokoroSpeechSynthesizer` (RPClientVoice); tests inject a recording fake.
+public protocol SpeechSynthesizing: AnyObject {
     func speak(_ text: String)
     func stopSpeaking()
 }
