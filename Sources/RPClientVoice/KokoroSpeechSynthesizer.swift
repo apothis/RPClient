@@ -105,10 +105,21 @@ public final class KokoroSpeechSynthesizer: SpeechSynthesizing {
     }
 
     public func speak(_ text: String, options: SpeakOptions, completion: (() -> Void)? = nil) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            // Empty text shouldn't strand the queue — fire completion so the
-            // caller can advance.
+        speakBatch([(text: text, options: options)], completion: completion)
+    }
+
+    /// Pipelined batch: stops the player ONCE at the start, then runs each
+    /// segment's espeak → tokenize → chunk → synthesize → schedule sequence
+    /// without re-stopping between segments. PCM buffers chain naturally
+    /// on the player so cross-segment audio is seamless. Phase 6 §7.4b
+    /// cadence polish — same-engine segments now play back-to-back instead
+    /// of waiting for each previous segment's completion before starting
+    /// the next pipeline.
+    public func speakBatch(_ segments: [(text: String, options: SpeakOptions)], completion: (() -> Void)?) {
+        let nonEmpty = segments
+            .map { (text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines), options: $0.options) }
+            .filter { !$0.text.isEmpty }
+        guard !nonEmpty.isEmpty else {
             if let completion = completion {
                 DispatchQueue.main.async(execute: completion)
             }
@@ -116,90 +127,107 @@ public final class KokoroSpeechSynthesizer: SpeechSynthesizing {
         }
 
         let myGen = bumpGeneration()
-        // Stop any audio currently coming out of the player. Pipeline work
-        // already on the queue ahead of us will be skipped by the
-        // generation check below.
+        // Stop any audio from the previous batch. Pipeline work from a prior
+        // batch still on the queue ahead of us bails on its `isCurrent(myGen)`
+        // check, so we won't end up interleaving the two batches' chunks.
         player.stop()
 
-        let resolvedVoice = resolveVoice(from: options.voice)
-        let speed = options.rate
-
-        // Fire-once wrapper: completion runs at exactly one of these moments
-        // — (a) the last chunk's audio finishes, (b) a failure aborts the
-        // pipeline (espeak / synth / play). Supersession (a newer speak()
-        // call bumped the generation) deliberately does NOT fire — that
-        // utterance will fire its own completion, and advancing the queue
-        // past a cancelled segment would skip-ahead.
         let fireOnce = FireOnce(handler: completion)
+        // Tracker fires `fireOnce` exactly when the LAST scheduled chunk's
+        // playback completes. If no chunks ever get scheduled (all segments
+        // failed pre-play), `markAllScheduled` notices `pending == 0` and
+        // fires immediately. Either way the caller's queue advances.
+        let tracker = BatchTracker { fireOnce.fire() }
 
         queue.async { [weak self] in
-            guard let self else { fireOnce.fire(); return }
-            guard self.isCurrent(myGen) else { return }   // superseded — silent
-
-            // Style buffer for this voice, loaded on demand. A missing /
-            // unloadable file falls back to the default voice's cached
-            // style — picker shouldn't have offered an uninstalled voice,
-            // but a stale stored preference shouldn't produce silence.
-            let style: [Float]
-            if let cached = self.cachedStyle(for: resolvedVoice.id) {
-                style = cached
-            } else if let url = self.voiceFileURLProvider(resolvedVoice.id),
-                      let loaded = try? KokoroVoiceFile.loadStyleEmbedding(from: url) {
-                self.cacheStyle(loaded, for: resolvedVoice.id)
-                style = loaded
-            } else if let fallback = self.cachedStyle(for: self.defaultVoice.id) {
-                NSLog("KokoroSpeechSynthesizer: voice '\(resolvedVoice.id)' file missing; falling back to default '\(self.defaultVoice.id)'")
-                style = fallback
-            } else {
-                NSLog("KokoroSpeechSynthesizer: no style available for '\(resolvedVoice.id)' or default '\(self.defaultVoice.id)'")
-                fireOnce.fire()
+            guard let self else {
+                tracker.markAllScheduled()
                 return
             }
 
-            let ipa: String
-            do {
-                // §7.1k7: punctuation-preserving variant. Plain `phonemize`
-                // strips all punctuation from the IPA, which leaves Kokoro
-                // with no pause/intonation cues — speech runs together as
-                // a robotic monotone.
-                ipa = try self.espeak.phonemizePreservingPunctuation(
-                    text: trimmed, language: resolvedVoice.language
-                )
-            } catch {
-                NSLog("KokoroSpeechSynthesizer: espeak failed: \(error)")
-                fireOnce.fire()
-                return
-            }
-            guard self.isCurrent(myGen) else { return }
-
-            let tokens = KokoroTokenizer.tokenize(ipa: ipa)
-            guard tokens.count > 2 else { fireOnce.fire(); return }   // empty after tokenization
-            guard self.isCurrent(myGen) else { return }
-
-            let chunks = KokoroTokenChunker.chunk(tokens: tokens, maxUnpadded: Self.maxUnpaddedPerChunk)
-            guard !chunks.isEmpty else { fireOnce.fire(); return }
-            for (i, chunk) in chunks.enumerated() {
-                guard self.isCurrent(myGen) else { return }
-                let pcm: [Float]
-                do {
-                    pcm = try self.engine.synthesize(tokens: chunk, style: style, speed: speed)
-                } catch {
-                    NSLog("KokoroSpeechSynthesizer: synthesize failed: \(error)")
-                    fireOnce.fire()
+            for seg in nonEmpty {
+                guard self.isCurrent(myGen) else {
+                    // Superseded — discard the rest. The newer batch fires
+                    // its own completion. We deliberately do NOT call
+                    // `markAllScheduled` here: the chunks already scheduled
+                    // by *this* batch are about to fire their completions
+                    // (player.stop drains them) and decrement the tracker;
+                    // tracker will fire when pending hits zero, but the
+                    // Speaker's queue-generation check drops it.
+                    tracker.markAllScheduled()
                     return
                 }
-                guard self.isCurrent(myGen) else { return }
-                let isLast = (i == chunks.count - 1)
+
+                let resolvedVoice = self.resolveVoice(from: seg.options.voice)
+                let speed = seg.options.rate
+
+                let style: [Float]
+                if let cached = self.cachedStyle(for: resolvedVoice.id) {
+                    style = cached
+                } else if let url = self.voiceFileURLProvider(resolvedVoice.id),
+                          let loaded = try? KokoroVoiceFile.loadStyleEmbedding(from: url) {
+                    self.cacheStyle(loaded, for: resolvedVoice.id)
+                    style = loaded
+                } else if let fallback = self.cachedStyle(for: self.defaultVoice.id) {
+                    NSLog("KokoroSpeechSynthesizer: voice '\(resolvedVoice.id)' file missing; falling back to default '\(self.defaultVoice.id)'")
+                    style = fallback
+                } else {
+                    NSLog("KokoroSpeechSynthesizer: no style available for '\(resolvedVoice.id)' or default '\(self.defaultVoice.id)'")
+                    continue   // skip this segment; try next
+                }
+
+                let ipa: String
                 do {
-                    try self.player.play(samples: pcm) {
-                        if isLast { fireOnce.fire() }
+                    ipa = try self.espeak.phonemizePreservingPunctuation(
+                        text: seg.text, language: resolvedVoice.language
+                    )
+                } catch {
+                    NSLog("KokoroSpeechSynthesizer: espeak failed: \(error)")
+                    continue
+                }
+                guard self.isCurrent(myGen) else {
+                    tracker.markAllScheduled()
+                    return
+                }
+
+                let tokens = KokoroTokenizer.tokenize(ipa: ipa)
+                guard tokens.count > 2 else { continue }
+                guard self.isCurrent(myGen) else {
+                    tracker.markAllScheduled()
+                    return
+                }
+
+                let chunks = KokoroTokenChunker.chunk(tokens: tokens, maxUnpadded: Self.maxUnpaddedPerChunk)
+                guard !chunks.isEmpty else { continue }
+                for chunk in chunks {
+                    guard self.isCurrent(myGen) else {
+                        tracker.markAllScheduled()
+                        return
                     }
-                } catch {
-                    NSLog("KokoroSpeechSynthesizer: play failed: \(error)")
-                    fireOnce.fire()
-                    return
+                    let pcm: [Float]
+                    do {
+                        pcm = try self.engine.synthesize(tokens: chunk, style: style, speed: speed)
+                    } catch {
+                        NSLog("KokoroSpeechSynthesizer: synthesize failed: \(error)")
+                        break   // give up on this segment, move to next
+                    }
+                    guard self.isCurrent(myGen) else {
+                        tracker.markAllScheduled()
+                        return
+                    }
+                    do {
+                        tracker.enter()
+                        try self.player.play(samples: pcm) {
+                            tracker.leave()
+                        }
+                    } catch {
+                        NSLog("KokoroSpeechSynthesizer: play failed: \(error)")
+                        tracker.leave()   // we incremented above; balance it
+                        break
+                    }
                 }
             }
+            tracker.markAllScheduled()
         }
     }
 
@@ -248,6 +276,38 @@ public final class KokoroSpeechSynthesizer: SpeechSynthesizing {
         lock.lock()
         defer { lock.unlock() }
         return generation == gen
+    }
+}
+
+/// Tracks "all scheduled chunks have finished playing" across an arbitrary
+/// number of `enter`/`leave` pairs without knowing the count up-front. The
+/// pipeline calls `enter()` before scheduling each player buffer and the
+/// scheduling completion calls `leave()`; once *all* chunks have been
+/// scheduled (`markAllScheduled()`), `onAllDone` fires when the last
+/// `leave()` lands. If `markAllScheduled` is reached with zero `enter`s
+/// (all segments failed pre-play), `onAllDone` fires immediately.
+private final class BatchTracker {
+    private let lock = NSLock()
+    private var pending = 0
+    private var allScheduled = false
+    private let onAllDone: () -> Void
+    init(onAllDone: @escaping () -> Void) { self.onAllDone = onAllDone }
+    func enter() {
+        lock.lock(); pending += 1; lock.unlock()
+    }
+    func leave() {
+        lock.lock()
+        pending -= 1
+        let done = pending == 0 && allScheduled
+        lock.unlock()
+        if done { onAllDone() }
+    }
+    func markAllScheduled() {
+        lock.lock()
+        let done = pending == 0 && !allScheduled
+        allScheduled = true
+        lock.unlock()
+        if done { onAllDone() }
     }
 }
 

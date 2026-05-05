@@ -244,7 +244,9 @@ func speakerTests() -> TestSuite {
 
     // MARK: - speakSegments queue (Phase 6 §7.4b)
 
-    s.test("speakSegments plays the first segment immediately, waits for completion before the next") {
+    s.test("speakSegments crosses engine boundaries via per-run completion") {
+        // Cross-engine: kokoro segment then avkit segment. Each engine
+        // gets its own batched run, sequenced via the run-completion.
         let avkit = RecordingSynthesizer()
         let kokoro = RecordingSynthesizer()
         let speaker = Speaker(voiceEnabled: true, avkit: avkit, kokoro: kokoro)
@@ -260,19 +262,35 @@ func speakerTests() -> TestSuite {
             (text: "First.", options: kokoroVoice),
             (text: "Second.", options: avkitVoice),
         ])
-        // Only the first segment has been forwarded so far.
+        // Kokoro got its run; AVKit's run is gated on Kokoro's completion.
         try expectEqual(kokoro.spoken.map(\.text), ["First."])
         try expectEqual(avkit.spoken, [])
-        // Fire the kokoro completion → second segment dispatches to AVKit.
+        // Fire the kokoro completion → AVKit run dispatches.
         let cont = try expectNotNil(kokoro.lastCompletion)
         cont()
-        // Completion dispatches the next segment via DispatchQueue.main.async,
-        // so we run the run loop briefly to let it settle.
         let deadline = Date().addingTimeInterval(0.5)
         while avkit.spoken.isEmpty && Date() < deadline {
             RunLoop.main.run(until: Date().addingTimeInterval(0.01))
         }
         try expectEqual(avkit.spoken.map(\.text), ["Second."])
+    }
+
+    s.test("speakSegments dispatches consecutive same-engine segments to the engine in one pass") {
+        // Pipelined cadence: an engine that queues utterances natively
+        // (or overrides speakBatch to interleave synthesis with playback)
+        // sees the whole same-engine run in one go rather than one-at-a-time.
+        let avkit = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: true, avkit: avkit)
+        let opts = SpeakOptions(
+            voice: VoiceIdentifier(engine: .avkit, voiceId: "com.apple.voice.compact.en-US.Samantha"),
+            rate: 1.0, pitch: 1.0
+        )
+        speaker.speakSegments([
+            (text: "First.", options: opts),
+            (text: "Second.", options: opts),
+            (text: "Third.", options: opts),
+        ])
+        try expectEqual(avkit.spoken.map(\.text), ["First.", "Second.", "Third."])
     }
 
     s.test("speakSegments is a no-op when both gates are off") {
@@ -292,25 +310,35 @@ func speakerTests() -> TestSuite {
         try expectEqual(avkit.spoken.map(\.text), ["Hi."])
     }
 
-    s.test("stop() between segments prevents the next segment from playing") {
+    s.test("stop() between cross-engine runs prevents the next run from playing") {
+        // Cross-engine sequencing is still completion-driven (same engine
+        // runs are pipelined; runs across engines are gated). If stop()
+        // bumps the queue generation between runs, the next run's
+        // dispatch is dropped even when the previous run's completion
+        // fires after stop().
         let avkit = RecordingSynthesizer()
-        let speaker = Speaker(voiceEnabled: true, avkit: avkit)
+        let kokoro = RecordingSynthesizer()
+        let speaker = Speaker(voiceEnabled: true, avkit: avkit, kokoro: kokoro)
+        let kokoroVoice = SpeakOptions(
+            voice: VoiceIdentifier(engine: .kokoro, voiceId: "af_alloy")
+        )
+        let avkitVoice = SpeakOptions(
+            voice: VoiceIdentifier(engine: .avkit, voiceId: "com.apple.voice.compact.en-US.Samantha")
+        )
         speaker.speakSegments([
-            (text: "First.", options: .default),
-            (text: "Second.", options: .default),
+            (text: "First.", options: kokoroVoice),
+            (text: "Second.", options: avkitVoice),
         ])
-        try expectEqual(avkit.spoken.map(\.text), ["First."])
+        try expectEqual(kokoro.spoken.map(\.text), ["First."])
+        try expectEqual(avkit.spoken, [])
         speaker.stop()
-        // The first segment's completion fires AFTER stop(); the queue
-        // generation has already been bumped, so segment 2 should not
-        // dispatch.
-        let cont = try expectNotNil(avkit.lastCompletion)
+        let cont = try expectNotNil(kokoro.lastCompletion)
         cont()
         let deadline = Date().addingTimeInterval(0.2)
         while Date() < deadline {
             RunLoop.main.run(until: Date().addingTimeInterval(0.01))
         }
-        try expectEqual(avkit.spoken.map(\.text), ["First."])
+        try expectEqual(avkit.spoken, [], "AVKit run should have been dropped after stop()")
     }
 
     s.test("SpeakOptions(preference: nil) is the default") {

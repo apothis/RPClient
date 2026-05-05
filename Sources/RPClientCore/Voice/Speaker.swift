@@ -14,6 +14,17 @@ public protocol SpeechSynthesizing: AnyObject {
     /// `Speaker.speakSegments(_:)` to advance the queue. nil completion
     /// = fire-and-forget (the legacy single-segment path).
     func speak(_ text: String, options: SpeakOptions, completion: (() -> Void)?)
+
+    /// Speak a list of `(text, options)` segments in order. `completion`
+    /// fires once when the LAST segment finishes. Phase 6 §7.4b polish:
+    /// the default impl below queues every segment via `speak()` in a
+    /// single pass — engines that queue utterances natively (AVKit) get
+    /// pipelining for free. Engines whose `speak()` is destructive
+    /// across segments (Kokoro: each `speak()` calls `player.stop()`)
+    /// must override this to interleave synthesis with playback without
+    /// resetting between segments.
+    func speakBatch(_ segments: [(text: String, options: SpeakOptions)], completion: (() -> Void)?)
+
     func stopSpeaking()
 }
 
@@ -22,6 +33,20 @@ extension SpeechSynthesizing {
     /// completion handlers.
     public func speak(_ text: String, options: SpeakOptions = .default) {
         speak(text, options: options, completion: nil)
+    }
+
+    /// Default `speakBatch` — fire all utterances at the engine in a
+    /// single pass, only attaching `completion` to the last. Works for
+    /// engines whose `speak()` queues without resetting (AVKit).
+    public func speakBatch(_ segments: [(text: String, options: SpeakOptions)], completion: (() -> Void)?) {
+        guard !segments.isEmpty else {
+            if let completion { DispatchQueue.main.async(execute: completion) }
+            return
+        }
+        let lastIndex = segments.count - 1
+        for (i, seg) in segments.enumerated() {
+            speak(seg.text, options: seg.options, completion: i == lastIndex ? completion : nil)
+        }
     }
 }
 
@@ -160,10 +185,15 @@ final class Speaker {
         synthesizer(for: options).speak(text, options: options, completion: nil)
     }
 
-    /// Speak a list of `(text, options)` segments in order. Each segment
-    /// fires the next via the adapter's completion callback, so segments
-    /// don't overlap even when they route to different engines. Phase 6
-    /// §7.4b. No-op unless both gates are on. Empty list also no-ops.
+    /// Speak a list of `(text, options)` segments in order. Consecutive
+    /// segments routed to the same engine are grouped into a single
+    /// `speakBatch(_:completion:)` call so that engine can pipeline its
+    /// internal work — synthesis can run while the previous segment is
+    /// still playing. Cross-engine boundaries fall back to the
+    /// completion-driven sequential model. Phase 6 §7.4b (initial impl)
+    /// + cadence polish (this version).
+    ///
+    /// No-op unless both gates are on. Empty list also no-ops.
     func speakSegments(_ segments: [(text: String, options: SpeakOptions)]) {
         guard shouldSpeak else { return }
         let nonEmpty = segments.filter { !$0.text.isEmpty }
@@ -174,24 +204,51 @@ final class Speaker {
         let myGen = queueGeneration
         queueLock.unlock()
 
-        var remaining = nonEmpty
-        playNextSegment(myGen: myGen, remaining: &remaining)
-        // ↑ swift wants the inout passed; we keep a closure-captured copy via
-        //   a helper class so successive completions advance the same queue.
+        let runs = groupRuns(nonEmpty)
+        playNextRun(runs: runs, myGen: myGen)
     }
 
-    private func playNextSegment(myGen: UInt64, remaining: inout [(text: String, options: SpeakOptions)]) {
-        guard !remaining.isEmpty else { return }
+    /// Walk `segments` and group consecutive entries that route to the
+    /// same engine adapter. Each run is passed to that adapter's
+    /// `speakBatch` as a single batch.
+    private func groupRuns(_ segments: [(text: String, options: SpeakOptions)])
+        -> [(synth: SpeechSynthesizing, segments: [(text: String, options: SpeakOptions)])]
+    {
+        var runs: [(synth: SpeechSynthesizing, segments: [(text: String, options: SpeakOptions)])] = []
+        var currentSynth: SpeechSynthesizing? = nil
+        var currentSegs: [(text: String, options: SpeakOptions)] = []
+        for seg in segments {
+            let s = synthesizer(for: seg.options)
+            if let cur = currentSynth, cur === s {
+                currentSegs.append(seg)
+            } else {
+                if let cur = currentSynth, !currentSegs.isEmpty {
+                    runs.append((cur, currentSegs))
+                }
+                currentSynth = s
+                currentSegs = [seg]
+            }
+        }
+        if let cur = currentSynth, !currentSegs.isEmpty {
+            runs.append((cur, currentSegs))
+        }
+        return runs
+    }
+
+    private func playNextRun(
+        runs: [(synth: SpeechSynthesizing, segments: [(text: String, options: SpeakOptions)])],
+        myGen: UInt64
+    ) {
+        guard !runs.isEmpty else { return }
+        var remaining = runs
         let next = remaining.removeFirst()
-        let restRef = QueueRef(items: remaining)
-        synthesizer(for: next.options).speak(next.text, options: next.options) { [weak self] in
+        next.synth.speakBatch(next.segments) { [weak self] in
             guard let self = self else { return }
             self.queueLock.lock()
             let stillCurrent = (self.queueGeneration == myGen)
             self.queueLock.unlock()
             guard stillCurrent else { return }
-            var rest = restRef.items
-            self.playNextSegment(myGen: myGen, remaining: &rest)
+            self.playNextRun(runs: remaining, myGen: myGen)
         }
     }
 
@@ -397,10 +454,3 @@ final class Speaker {
     }
 }
 
-/// Reference wrapper so the segment list can be shared across closure
-/// captures in `playNextSegment` without forcing the whole tail through
-/// each completion handler. Internal to Speaker.
-private final class QueueRef {
-    var items: [(text: String, options: SpeakOptions)]
-    init(items: [(text: String, options: SpeakOptions)]) { self.items = items }
-}
