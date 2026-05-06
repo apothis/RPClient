@@ -2,7 +2,7 @@
 
 Forward plan for the V2 surface area listed in [`PLAN.md`](PLAN.md) §10. The MVP and the Memory V2 subsystem (Steps A–D, see [`MEMORY_V2_PLAN.md`](MEMORY_V2_PLAN.md)) shipped 2026-05-03. This doc covers everything outside the memory subsystem; memory polish is deferred per the user's directive and tracked in [`NEXT_STAGES.md`](NEXT_STAGES.md) §A.
 
-**Status snapshot (2026-05-06).** Phases 1–7 shipped on `v2-plan` (V5 Lorebook, V1 Swipes, V3 Cards + V4 Personas, V8 Multi-server, V10 Avatars, V6 Per-character voices, V2 Full branching). **Phase 7's optional §3.6 (variant-collapse) is deferred indefinitely** — variants and branches are conceptually distinct but functionally fine; collapsing is a pure refactor with no user-visible payoff and a non-trivial migration. Pick it up only when a downstream feature actually needs unified tree semantics. **Phase 8 (V9 Group chats) is the next major chunk of work** and the natural follow-on to branching (group-chat retries are a tree-shaped operation). 551/551 tests pass; 32 commits ahead of origin. The heuristic-refinement research item (§6) remains queued.
+**Status snapshot (2026-05-06).** Phases 1–8 shipped on `v2-plan` (V5 Lorebook, V1 Swipes, V3 Cards + V4 Personas, V8 Multi-server, V10 Avatars, V6 Per-character voices, V2 Full branching, V9 Group chats). Phase 8 also shipped its deferred polish (cast reorder, convert-to-solo) plus a voice-attribution carry-forward improvement and a per-turn replay-audio button. **Phase 7's optional §3.6 (variant-collapse) is deferred indefinitely** — variants and branches are conceptually distinct but functionally fine; collapsing is a pure refactor with no user-visible payoff and a non-trivial migration. **Phase 9 (V11 Card creator) is the next major chunk of work** — beyond the original V2 inventory, expanding into authoring-side tooling. 644/644 tests pass; pushed to origin at 8aebfa0. The heuristic-refinement research item (§7) remains queued.
 
 ---
 
@@ -17,8 +17,9 @@ Forward plan for the V2 surface area listed in [`PLAN.md`](PLAN.md) §10. The MV
 | V5 | Lorebook editor UI | ✅ shipped 2026-05-04 | §2.1 — commits `076f548` → `dacb4fc` |
 | V6 | Per-character voices | ✅ shipped 2026-05-05 | §2.6 (~30 commits, see git log) |
 | V8 | Multi-server | ✅ shipped 2026-05-05 | §2.4 (sub-steps 4a–4f) |
-| V9 | Group chats | ⏳ future | §4 |
+| V9 | Group chats | ✅ shipped 2026-05-06 (§4.1–§4.5 + deferred polish) | §4 + [`V2_PHASE8_GROUP_CHATS.md`](V2_PHASE8_GROUP_CHATS.md) |
 | V10 | Avatars / image rendering | ✅ shipped 2026-05-05 (sidebar + assistant turn; inline images deferred) | §2.5 — commits `f6d9192` → `897747a` |
+| V11 | Card creator (full-feature, AI-assisted) | ⏳ next | §5 |
 
 The chat-view UI overhaul (NEXT_STAGES §E) is **not** in this plan — it's a polish track sequenced separately.
 
@@ -96,7 +97,7 @@ Treat as its own design doc — the data-model swap is small but the `turnIndex:
 
 ---
 
-## 4. Phase 8 — V9 Group chats ⏳ next
+## 4. Phase 8 — V9 Group chats ✅ shipped 2026-05-06
 
 The largest open item, and the natural follow-on to branching (group-chat retries are a tree-shaped operation). Multiple AI characters share one chat, each with their own card / persona / system prompt / voice / avatar. Turns are tagged by speaker; the user steers who speaks next or lets the system decide.
 
@@ -131,30 +132,75 @@ The largest open item, and the natural follow-on to branching (group-chat retrie
 
 ---
 
-## 5. Cross-cutting
+## 5. Phase 9 — V11 Card creator + AI-assisted field population ⏳ next
 
-### 5.1 Schema versioning forward-note
+The first major addition beyond the original V2 plan inventory. Goal: a dedicated card creator window callable from the menu (e.g. `File → New Character…` or `Library → New Card…`) that exposes every card field with examples shown as placeholder content, plus an opt-in "generate this field from prior fields" path that uses the model to draft suggestions the author can then edit. Author retains full control — AI-assist is a draft generator, not an autopilot.
+
+**Step 1 — research-shaped (must precede settle-before-coding decisions).** Survey existing card formats so we know what the surface looks like before deciding what RPClient's editor should expose. References to read end-to-end:
+
+- **SillyTavern v2** character card spec (`chara_card_v2`, embedded in card.png PNG text chunks; spec at github.com/malfoyslastname/character-card-spec-v2). Phase 3 already imports the v2 fields — read the spec for fields RPClient currently ignores or under-exposes.
+- **SillyTavern v3** spec (adds `character_book` + `assets[]` + extensions; same PNG chunk format; backwards-compatible with v2 readers).
+- **KoboldAI Lite** character format (V1 — flat description / personality / scenario; lighter than ST v2; commonly seen in `.json` exports from kobold.cpp).
+- **Tavern AI legacy** format (predecessor to ST; some fields differ).
+- **Open WebUI / Ollama Modelfile** parameters (different shape — more system-prompt-centric; useful as a "what does the LLM-deployment crowd expose" reference).
+- Anything else surfaced by the research pass (Pygmalion, Risu, JanitorAI, Backyard, AI-Dungeon, NovelAI lorebook entries-as-characters).
+
+Output of step 1: a design doc `V2_PHASE9_CARD_CREATOR.md` mirroring the Phase 7 / Phase 8 design-doc shape, containing: prior-art table (format ↔ fields ↔ notes), proposed RPClient field list (superset of supported imports + any RPClient-specific additions), per-field example library, AI-assist field dependency graph (which fields can be auto-drafted from which earlier ones — e.g. personality from description, first message from description+personality+scenario, alternate greetings from first message, etc.).
+
+**Settle-before-coding decisions** (drafted in step 1, sign off in the kickoff session before §5.2 starts):
+
+1. **Card format.** Stay on extended SillyTavern v2 (current shape), adopt v3 for export, or define a superset RPClient-native format that round-trips both? Lean: superset format with v2 exporter (max compatibility) and v3 exporter as opt-in once v3 readers are common.
+2. **Storage.** Same `Character` Codable struct (extended), or a richer creator-side draft type that flattens into `Character` on save? Lean: extend `Character` directly — fewer types, importer code already targets it.
+3. **AI-assist UX.** Per-field "Generate" button vs. unified "auto-fill missing fields" pass vs. inline ghost text the author accepts/rejects. Lean: per-field Generate, since it preserves author control and matches the user's "still changeable by the author" intent.
+4. **Side-call routing.** Reuse `.summarizer` role server (decent text-gen quality; used by Phase 8 §4.4 director) vs. a new `.cardgen` role. Lean: `.summarizer` for v1; add `.cardgen` only if quality demands a dedicated model.
+5. **Source of examples.** Hand-curated example library bundled with the app (used as field placeholders) vs. AI-generated examples? Bundled examples are static editor UX; AI-generated content is the dynamic-fill path. Both can coexist.
+
+**Sub-step staging:**
+
+- **§5.1** — Step-1 prior-art research + design doc draft. Output: `V2_PHASE9_CARD_CREATOR.md`. ~1 day.
+- **§5.2** — Card model expansion (`Character` field additions, schema migration if shape changes, importer + exporter updates, round-trip tests). Pure tests. ~1-2 days.
+- **§5.3** — Card creator window UI (`NSWindowController` + per-field controls organised into tabs / sections, inline validation, examples-as-placeholder, save → `AppState.characters` list). Smoke-tested as a frontend layer. ~3-4 days.
+- **§5.4** — AI-assist field population. Per-field Generate button fires a side-call with the dependency-graph context (e.g., generate personality given description); response populates the field in draft state, author edits before save. Diagnostic logging from commit one (per the new feedback rule). ~2-3 days.
+- **§5.5** — Polish + smoke. Multi-card flows, importer round-trips on real-world cards from the wild (ST/Kobold/etc), AI-assist chained generation across N fields. ~1 day.
+
+**Out of scope for Phase 9:**
+
+- Card portrait / avatar editing inside the creator. V10 already handles avatars; the creator just exposes the existing avatar source.
+- Lorebook (`character_book`) editing within the creator. Phase 1's WorldInfoPane handles per-chat lore, and the importer pulls `charBook` into chat-level worldInfo. Card-bound lorebook editing inside the creator is a follow-up.
+- Multi-card pack import/export (collections, ZIPs of cards).
+- Marketplace integration / sharing / publishing cards externally.
+- Inline character-card preview (live-render the card as the user edits) — optional polish, deferred.
+
+**Effort:** ~1 week total, gated on the step-1 research pass producing the design doc.
+
+**Design doc:** `V2_PHASE9_CARD_CREATOR.md`, drafted in §5.1.
+
+---
+
+## 6. Cross-cutting
+
+### 6.1 Schema versioning forward-note
 
 A `Settings.schemaVersion: Int` hook was proposed at Phase 4 kickoff; never landed because all Phase 4 / 5 / 6 changes were additive `decodeIfPresent` migrations that didn't need a versioned migration path. Add it the first time we hit a non-additive change (e.g., a field rename or type swap) — lazy is fine.
 
-### 5.2 Migration testing convention
+### 6.2 Migration testing convention
 
-Standing convention: every phase that changes Chat or Settings shape ships its own migration tests alongside the data model change. Examples in-tree: `ChatSettingsVoiceTests`, `EntityVoiceTests`, `ChatCodableTests`. A central `Tests/MigrationFixtures/` directory was originally proposed but never created — the per-phase tests have been sufficient. Spin up a fixtures directory if a future phase needs to migrate multiple legacy shapes at once.
+Standing convention: every phase that changes Chat or Settings shape ships its own migration tests alongside the data model change. Examples in-tree: `ChatSettingsVoiceTests`, `EntityVoiceTests`, `ChatCodableTests`, `Phase8MigrationTests`. A central `Tests/MigrationFixtures/` directory was originally proposed but never created — the per-phase tests have been sufficient. Spin up a fixtures directory if a future phase needs to migrate multiple legacy shapes at once.
 
-### 5.3 Sandboxing forward-note
+### 6.3 Sandboxing forward-note
 
 RPClient is unsandboxed today. If a sandboxed build (App Store) is ever desired, the user-configurable voice-model path needs security-scoped bookmark persistence rather than a raw URL string, and any future "user picks an external directory" UX inherits the same requirement. Not blocking — flagged so it isn't a surprise later.
 
-### 5.4 What this plan does NOT do
+### 6.4 What this plan does NOT do
 
 - Memory subsystem polish — see [`NEXT_STAGES.md`](NEXT_STAGES.md) §A.
-- Per-surface UI polish — the visual / interaction overhaul is its own deferred track (see §7), not folded into V2 feature phases.
+- Per-surface UI polish — the visual / interaction overhaul is its own deferred track (see §8), not folded into V2 feature phases.
 - Per-character voices on by default — voice integration is opt-in per chat.
 - Inline image rendering in turns. Out of scope; revisit when there's a demand signal.
 
 ---
 
-## 6. Deferred — Voice attribution heuristic refinement
+## 7. Deferred — Voice attribution heuristic refinement
 
 Moved out of Phase 6 on 2026-05-05 once the attribution-mode picker (§2.6) gave users a runtime escape hatch (switch any chat to Tagged when the heuristic underperforms). Phase 6 ships without this; queued for after Phase 7 / 8 unless attribution quality becomes the limiting factor in actual use.
 
@@ -179,7 +225,7 @@ Moved out of Phase 6 on 2026-05-05 once the attribution-mode picker (§2.6) gave
 
 ---
 
-## 7. Deferred — Complete UI overhaul
+## 8. Deferred — Complete UI overhaul
 
 The app works; it doesn't yet *feel* good. After ~25 features have layered onto the same skeleton — sidebar + chat view + inspector + settings + library — the cumulative effect is visibly accreted: dense headers (chat header now carries Server + Attribution + Voice + speaker mute, all in 28 px), inspector panes that don't share a visual grammar, the Voice library window in its own one-off frame, etc. Nothing's broken; it's just clearly built feature-by-feature rather than designed.
 
@@ -200,7 +246,7 @@ The app works; it doesn't yet *feel* good. After ~25 features have layered onto 
 
 ---
 
-## 8. References
+## 9. References
 
 - [`PLAN.md`](PLAN.md) — original MVP plan (V2 inventory in §10).
 - [`MEMORY_V2_PLAN.md`](MEMORY_V2_PLAN.md) — Memory V2 subsystem plan (Steps A–D, shipped 2026-05-03).
