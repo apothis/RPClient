@@ -578,6 +578,95 @@ func chatBranchingTests() -> TestSuite {
         try expectEqual(chat.activePath, [root.id, asstB.id])
     }
 
+    // MARK: - leaves + divergencePoint (Phase 7 §3.4 — Branches pane helpers)
+
+    s.test("leaves returns all turns with no children") {
+        // Tree:    root → A → A1
+        //               \
+        //                B
+        //                C   (also a child of root, leaf)
+        // Leaves: A1, B, C. Root + A are not leaves.
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        let a = makeAssistant(parentId: root.id, text: "A")
+        let a1 = makeUser(parentId: a.id, text: "A1")
+        let b = makeAssistant(parentId: root.id, text: "B")
+        let c = makeAssistant(parentId: root.id, text: "C")
+        chat.turns = [root, a, a1, b, c]
+        chat.activePath = [root.id, a.id, a1.id]
+
+        let leafIds = Set(chat.leaves.map(\.id))
+        try expectEqual(leafIds, [a1.id, b.id, c.id])
+    }
+
+    s.test("leaves on a single-turn chat returns that turn") {
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        chat.turns = [root]
+        chat.activePath = [root.id]
+        try expectEqual(chat.leaves.map(\.id), [root.id])
+    }
+
+    s.test("leaves on an empty chat returns empty") {
+        let chat = Chat(title: "Test")
+        try expectEqual(chat.leaves, [])
+    }
+
+    s.test("divergencePoint returns the lowest common ancestor with the given path") {
+        // Tree:    root → user → A → A1     (active path)
+        //                       \
+        //                        B → B1     (sibling branch, leaf B1)
+        // divergencePoint(B1, against active) → user.id (common parent of A
+        // and B; user is the deepest ancestor on both paths).
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        let user = makeUser(parentId: root.id, text: "user")
+        let a = makeAssistant(parentId: user.id, text: "A")
+        let a1 = makeUser(parentId: a.id, text: "A1")
+        let b = makeAssistant(parentId: user.id, text: "B")
+        let b1 = makeUser(parentId: b.id, text: "B1")
+        chat.turns = [root, user, a, a1, b, b1]
+        chat.activePath = [root.id, user.id, a.id, a1.id]
+
+        let div = chat.divergencePoint(of: b1.id, against: chat.activePath)
+        try expectEqual(div, user.id)
+    }
+
+    s.test("divergencePoint returns the leaf itself when the leaf is on the active path") {
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        let leaf = makeAssistant(parentId: root.id, text: "leaf")
+        chat.turns = [root, leaf]
+        chat.activePath = [root.id, leaf.id]
+
+        // Leaf is on the active path — the entire path is "common", so
+        // divergence is the leaf itself (no diverging ancestors needed).
+        try expectEqual(chat.divergencePoint(of: leaf.id, against: chat.activePath), leaf.id)
+    }
+
+    s.test("divergencePoint returns the root when only the root is shared") {
+        // Root → A      (active)
+        //      → B      (leaf, parent is root)
+        // Common: only root.
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        let a = makeAssistant(parentId: root.id, text: "A")
+        let b = makeAssistant(parentId: root.id, text: "B")
+        chat.turns = [root, a, b]
+        chat.activePath = [root.id, a.id]
+
+        try expectEqual(chat.divergencePoint(of: b.id, against: chat.activePath), root.id)
+    }
+
+    s.test("divergencePoint returns nil when leaf isn't in the chat") {
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        chat.turns = [root]
+        chat.activePath = [root.id]
+
+        try expectEqual(chat.divergencePoint(of: UUID(), against: chat.activePath), nil)
+    }
+
     // MARK: - Round-trip with explicit branching state
 
     s.test("round-trip preserves parentId, activeChildId, and activePath") {

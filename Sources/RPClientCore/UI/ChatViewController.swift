@@ -535,7 +535,12 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         let id = view.turnId
         AppState.shared.updateCurrent { c in
             c.turns.removeAll(where: { $0.id == id })
+            // Drop the deleted id from activePath so subsequent reads stay
+            // consistent with the tree. Branches pane / minimap rely on
+            // this for correct leaf detection (§3.4 +).
+            c.activePath.removeAll(where: { $0 == id })
         }
+        NotificationCenter.default.post(name: AppNotification.chatTreeChanged, object: nil)
         rebuild()
     }
 

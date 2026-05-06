@@ -39,6 +39,12 @@ enum AppNotification {
     /// just entered a `<think>` block, or just left one. The UI binds the
     /// "Thinking…" placeholder on the active assistant turn to this.
     static let thinkingStateChanged = Notification.Name("RPClient.thinkingStateChanged")
+    /// Phase 7 §3.4 — fires when the current chat's branching tree changes
+    /// shape: a new fork lands, a branch is switched, or a turn is deleted.
+    /// Distinct from `chatUpdated` (which fires on every mutation including
+    /// pure text edits) so panes that only care about tree structure — the
+    /// Branches pane, future minimap — can subscribe narrowly.
+    static let chatTreeChanged = Notification.Name("RPClient.chatTreeChanged")
 }
 
 final class AppState {
@@ -713,6 +719,7 @@ final class AppState {
             ch.turns = c.turns
             ch.activePath = c.activePath
         }
+        NotificationCenter.default.post(name: AppNotification.chatTreeChanged, object: nil)
         startStreaming()
     }
 
@@ -731,6 +738,7 @@ final class AppState {
             c.switchBranch(to: turnId)
         }
         NotificationCenter.default.post(name: AppNotification.currentChatChanged, object: nil)
+        NotificationCenter.default.post(name: AppNotification.chatTreeChanged, object: nil)
     }
 
     /// Destructive regen — overwrite the active variant in place rather than

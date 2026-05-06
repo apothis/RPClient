@@ -700,6 +700,37 @@ struct Chat: Codable, Equatable, Identifiable {
         }
     }
 
+    /// Phase 7 §3.4 — every turn whose id appears in no other turn's
+    /// parentId. Each leaf identifies the tail of one branch; the
+    /// Branches inspector pane uses this list to render a row per
+    /// branch. Order is unspecified — callers sort as needed (the
+    /// Branches pane sorts active-first then by leaf ts descending).
+    var leaves: [Turn] {
+        guard !turns.isEmpty else { return [] }
+        let parented = Set(turns.compactMap(\.parentId))
+        return turns.filter { !parented.contains($0.id) }
+    }
+
+    /// Phase 7 §3.4 — lowest common ancestor between `leafId`'s
+    /// path-to-root and `path`. Used to render "forked at TN" subtitles
+    /// in the Branches pane (where TN is the divergence point's position
+    /// on the active path). Returns the leaf itself when the leaf is on
+    /// `path` (no divergence needed); returns nil if `leafId` isn't in
+    /// `turns`.
+    func divergencePoint(of leafId: UUID, against path: [UUID]) -> UUID? {
+        guard turn(id: leafId) != nil else { return nil }
+        let pathSet = Set(path)
+        var cur: UUID? = leafId
+        var safety = turns.count + 1
+        while let id = cur {
+            if pathSet.contains(id) { return id }
+            safety -= 1
+            if safety < 0 { return nil }
+            cur = turn(id: id)?.parentId
+        }
+        return nil
+    }
+
     /// Pick the next child to descend into when walking down from `turnId`.
     /// Honours `activeChildId` if set and pointing to an existing child;
     /// otherwise picks the earliest child by ts. Returns nil at a leaf.
