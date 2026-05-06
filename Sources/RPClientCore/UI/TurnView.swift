@@ -25,6 +25,12 @@ protocol TurnViewDelegate: AnyObject {
     /// not the root), so users don't have to think about which turn the
     /// keyboard shortcut targets.
     func turnViewDidRequestForkFrom(_ view: TurnView)
+    /// Phase 8 deferred polish — replay this turn's audio fresh
+    /// (re-runs attribution + dispatch; no cached audio). Bypasses
+    /// per-chat voice mute. Surfaced on every assistant turn so debug
+    /// iterations on attribution / voice assignment can be tested
+    /// without regenerating the reply text.
+    func turnViewDidRequestReplayAudio(_ view: TurnView)
 }
 
 private final class FocusAwareTextView: NSTextView {
@@ -77,6 +83,7 @@ final class TurnView: NSView, NSTextViewDelegate {
 
     private let toolbar = NSStackView()
     private let copyButton: NSButton
+    private let replayButton: NSButton
     private let editButton: NSButton
     private let regenButton: NSButton
     /// Phase 7 §3.3+ — explicit "fork from this reply" toolbar button.
@@ -294,6 +301,7 @@ final class TurnView: NSView, NSTextViewDelegate {
         self.multiCast = multiCast
 
         copyButton = TurnView.makeIconButton(symbol: "doc.on.doc", tooltip: "Copy")
+        replayButton = TurnView.makeIconButton(symbol: "speaker.wave.2", tooltip: "Replay audio")
         editButton = TurnView.makeIconButton(symbol: "pencil", tooltip: "Edit")
         regenButton = TurnView.makeIconButton(symbol: "arrow.clockwise", tooltip: "Regenerate")
         forkButton = TurnView.makeIconButton(symbol: "arrow.triangle.branch", tooltip: "Fork branch (⌘B)")
@@ -396,6 +404,7 @@ final class TurnView: NSView, NSTextViewDelegate {
         bubble.addSubview(scrollView)
 
         copyButton.target = self;     copyButton.action     = #selector(copyTapped)
+        replayButton.target = self;   replayButton.action   = #selector(replayTapped)
         editButton.target = self;     editButton.action     = #selector(editTapped)
         regenButton.target = self;    regenButton.action    = #selector(regenTapped)
         forkButton.target = self;     forkButton.action     = #selector(forkTapped)
@@ -422,6 +431,11 @@ final class TurnView: NSView, NSTextViewDelegate {
         // gated in `updateToolbarForEditState` once parentId is known.
         forkButton.isHidden = !(role == .assistant)
         continueButton.isHidden = !(role == .assistant)
+        // Phase 8 deferred polish — replay button shows on every
+        // assistant turn so the user can re-trigger TTS for any
+        // historic reply (not just the trailing one) without
+        // regenerating the text. Hidden on user turns.
+        replayButton.isHidden = !(role == .assistant)
         saveButton.isHidden = true
         cancelButton.isHidden = true
         // Pager stays hidden until setVariantState reports >1 variant.
@@ -445,7 +459,7 @@ final class TurnView: NSView, NSTextViewDelegate {
         toolbar.alphaValue = 0
         for b in [prevVariantButton as NSView, variantLabel, nextVariantButton,
                   discardVariantButton,
-                  copyButton, editButton, regenButton, forkButton, continueButton, deleteButton,
+                  copyButton, editButton, regenButton, forkButton, continueButton, replayButton, deleteButton,
                   saveButton, cancelButton] {
             toolbar.addArrangedSubview(b)
         }
@@ -591,6 +605,10 @@ final class TurnView: NSView, NSTextViewDelegate {
         delegate?.turnViewDidRequestContinue(self)
     }
 
+    @objc private func replayTapped() {
+        delegate?.turnViewDidRequestReplayAudio(self)
+    }
+
     @objc private func deleteTapped() {
         delegate?.turnViewDidRequestDelete(self)
     }
@@ -638,6 +656,11 @@ final class TurnView: NSView, NSTextViewDelegate {
         regenButton.isHidden = editing || !(role == .assistant && isLastAssistant)
         forkButton.isHidden = editing || !(role == .assistant && canFork)
         continueButton.isHidden = editing || !(role == .assistant && isLastAssistant)
+        // Phase 8 deferred polish — replay button visible on every
+        // assistant turn (not just the trailing one), hidden during
+        // edit. Lets the user re-trigger TTS for any historic reply
+        // to debug attribution / voice assignment without regenerating.
+        replayButton.isHidden = editing || role != .assistant
         deleteButton.isHidden = editing
         saveButton.isHidden = !editing
         cancelButton.isHidden = !editing

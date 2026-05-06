@@ -590,6 +590,10 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         AppState.shared.continueGeneration()
     }
 
+    func turnViewDidRequestReplayAudio(_ view: TurnView) {
+        AppState.shared.speaker.replay(turnId: view.turnId)
+    }
+
     func turnViewDidRequestPreviousVariant(_ view: TurnView) {
         AppState.shared.selectPreviousVariant(turnId: view.turnId)
     }

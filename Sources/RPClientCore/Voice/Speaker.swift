@@ -481,17 +481,61 @@ final class Speaker {
             )
             return
         }
+        guard let chat = AppState.shared.currentChat else {
+            DebugLog.shared.write("speaker: skip stream-finished — no current chat")
+            return
+        }
+        speakAssistantLeaf(in: chat, source: "stream-finished")
+    }
+
+    /// Phase 8 deferred polish — replay a specific assistant turn's
+    /// audio without regenerating the reply text. Re-runs the
+    /// attribution + dispatch pipeline fresh each call (no cached
+    /// audio), so debug iterations like assigning a voice or tweaking
+    /// `chat.attributionMode` take effect on the next press. Bypasses
+    /// `voiceActive` (per-chat mute) because the user explicitly asked
+    /// for audio — but still honors `voiceEnabled` (no synth at all
+    /// when the subsystem is off).
+    func replay(turnId: UUID) {
+        guard voiceEnabled else {
+            DebugLog.shared.write("speaker: replay skipped — voiceEnabled=false")
+            return
+        }
+        guard let chat = AppState.shared.currentChat else {
+            DebugLog.shared.write("speaker: replay skipped — no current chat")
+            return
+        }
+        guard let turn = chat.turn(id: turnId), turn.role == .assistant else {
+            DebugLog.shared.write("speaker: replay skipped — turn \(turnId) not an assistant turn")
+            return
+        }
+        // Stop any in-flight playback so replay doesn't queue behind
+        // the previous batch. Mirrors what stream-started observers do.
+        stop()
+        speakTurn(turn, in: chat, source: "replay")
+    }
+
+    /// Shared body of `handleStreamFinished` and `replay(turnId:)`.
+    /// `source` is logged so the debug stream tells `replay` calls
+    /// apart from natural stream-finish events.
+    private func speakAssistantLeaf(in chat: Chat, source: String) {
         // §3.3b: speak the active leaf, not storage's `turns.last` — once
         // forks exist, the last-stored turn might be off-path while the
         // freshly streamed reply lives at the active leaf.
-        guard let chat = AppState.shared.currentChat,
-              let leafId = chat.activePath.last,
+        guard let leafId = chat.activePath.last,
               let last = chat.turn(id: leafId),
               last.role == .assistant else {
-            DebugLog.shared.write("speaker: skip stream-finished — no asst leaf")
+            DebugLog.shared.write("speaker: skip \(source) — no asst leaf")
             return
         }
-        DebugLog.shared.write("speaker: speak leaf=\(leafId) chars=\(last.text.count)")
+        speakTurn(last, in: chat, source: source)
+    }
+
+    /// Speak a specific turn. Both the natural stream-finished path
+    /// (via leaf resolution) and the explicit replay path land here.
+    /// Pure dispatch — no shouldSpeak gate; callers gate as appropriate.
+    private func speakTurn(_ last: Turn, in chat: Chat, source: String) {
+        DebugLog.shared.write("speaker: speak (\(source)) leaf=\(last.id) chars=\(last.text.count)")
         let plain = Speaker.plainText(last.text)
         guard !plain.isEmpty else { return }
 

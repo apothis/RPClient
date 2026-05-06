@@ -427,5 +427,85 @@ func speakerAttributionTests() -> TestSuite {
         try expectEqual(segs.first?.entityId, nil)
     }
 
+    // MARK: - Phase 8 deferred polish — carry-forward attribution
+
+    s.test("carry-forward: second quote with no nearby entity inherits from previous attributed quote") {
+        // The bug case from a real user reproduction: long turn, two
+        // Lyra quotes separated by an action beat (`*A dry, faint smile…*`)
+        // that doesn't name her. The 200-char `scopedLookback` window
+        // doesn't reach back to the original "Lyra rolls the wax seal"
+        // narration → second quote falls to narrator default. With
+        // carry-forward, the second quote inherits from the first's
+        // Lyra attribution.
+        let lyra = Entity(id: UUID(), name: "Lyra", type: .character)
+        // First quote: Lyra is named directly before, so it attributes.
+        // Then a long action beat (>200 chars) without naming Lyra so
+        // the second quote's lookback window doesn't reach back to her
+        // name. Carry-forward should fill that gap.
+        let padding = String(repeating: "Action beat narration about the wind and waves and tide and channel. ", count: 4)
+        let text = """
+        Lyra rolls the wax seal flat against the damp wood, tracing a new benchmark with deliberate strokes. \
+        "Fifty meters left before the channel straightens." \(padding)\
+        "We'll drop anchor by moonrise."
+        """
+        let segs = SpeakerAttribution.split(
+            text: text, entities: [lyra], mode: .heuristic, firstPersonEntityId: nil
+        )
+        // Both quotes should attribute to Lyra. Adjacent same-entity
+        // segments coalesce, so we count distinct attributed regions
+        // by walking the segments directly.
+        let lyraSegments = segs.filter { $0.entityId == lyra.id }
+        try expectGreaterThan(lyraSegments.count, 0)
+        let firstQuoteRange = text.range(of: "\"Fifty meters")!
+        let secondQuoteRange = text.range(of: "\"We'll drop anchor")!
+        // The substrings of both quotes should appear in some Lyra segment.
+        let lyraText = lyraSegments.map(\.text).joined()
+        try expectTrue(lyraText.contains("Fifty meters left"),
+                       "first quote not attributed to Lyra: \(segs.map { ($0.entityId == lyra.id ? "L" : "n") + ":" + $0.text.prefix(40) })")
+        try expectTrue(lyraText.contains("We'll drop anchor"),
+                       "second quote not carried forward to Lyra: \(segs.map { ($0.entityId == lyra.id ? "L" : "n") + ":" + $0.text.prefix(40) })")
+        _ = firstQuoteRange; _ = secondQuoteRange  // shut up Swift's unused-let warning
+    }
+
+    s.test("carry-forward: explicit attribution beats carry-forward") {
+        // If the second quote DOES have an entity in scope, that
+        // attribution wins — carry-forward is fallback only, not
+        // override. Two-character dialog must still attribute correctly.
+        let alice = Entity(id: UUID(), name: "Alice", type: .character)
+        let bob = Entity(id: UUID(), name: "Bob", type: .character)
+        let text = """
+        Alice spoke first. "Hello, Bob."
+        Bob waved. "Hi there."
+        """
+        let segs = SpeakerAttribution.split(
+            text: text, entities: [alice, bob], mode: .heuristic, firstPersonEntityId: nil
+        )
+        let aliceSegs = segs.filter { $0.entityId == alice.id }
+        let bobSegs = segs.filter { $0.entityId == bob.id }
+        try expectTrue(aliceSegs.map(\.text).joined().contains("Hello, Bob"))
+        try expectTrue(bobSegs.map(\.text).joined().contains("Hi there"),
+                       "Bob's quote should attribute to Bob via own lookback, not carry-forward Alice")
+    }
+
+    s.test("carry-forward: doesn't fire when no prior quote was attributed") {
+        // First quote unattributed (no entity in lookback at all) → no
+        // anchor for carry-forward → second quote also unattributed.
+        // Carry-forward is "carry the LAST KNOWN speaker", not "carry
+        // any nearby noun."
+        let lyra = Entity(id: UUID(), name: "Lyra", type: .character)
+        let text = """
+        Someone walked into the room. "Quiet, please."
+        Then someone else replied. "Sure thing."
+        """
+        let segs = SpeakerAttribution.split(
+            text: text, entities: [lyra], mode: .heuristic, firstPersonEntityId: nil
+        )
+        // No entity in scope ever → all narrator (entityId nil), and
+        // since they all share entityId, they coalesce into one big
+        // segment.
+        try expectEqual(segs.count, 1)
+        try expectNil(segs[0].entityId)
+    }
+
     return s
 }

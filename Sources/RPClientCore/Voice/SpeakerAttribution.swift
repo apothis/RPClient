@@ -108,6 +108,18 @@ enum SpeakerAttribution {
         var cursor = text.startIndex
         var inQuote = false
         var quoteOpener: Char = "\""
+        // Phase 8 deferred polish — carry-forward attribution. When a
+        // quote's full resolution chain (dialogue verb + most-recent
+        // mention) returns nil, fall back to the previous attributed
+        // quote's speaker. Common dialog convention: the same speaker
+        // delivers two consecutive lines separated by an action beat
+        // ("X said 'a.' She smiled. 'b.'") and only the first is
+        // explicitly named. Pre-fix, the second quote went to narrator
+        // because `scopedLookback`'s 200-char window misses the original
+        // attribution. Carry-forward only kicks in when explicit
+        // resolution would have returned nil — never overrides an
+        // explicit attribution.
+        var lastAttributedSpeaker: UUID? = nil
 
         // Find the next quote boundary from `cursor`. Returns (index, opener?)
         // where opener is the character we matched.
@@ -171,7 +183,7 @@ enum SpeakerAttribution {
                 // Pronoun subjects (she/he/they/…) attached to a dialogue
                 // verb intentionally fall through so the most-recent rule
                 // can do its best with the surrounding context.
-                let speaker: UUID? =
+                let resolved: UUID? =
                     speakerFromDialogueVerb(
                         afterQuoteAt: closeAfter,
                         in: text,
@@ -189,6 +201,13 @@ enum SpeakerAttribution {
                         needles: needles,
                         firstPersonEntityId: firstPersonEntityId
                     )
+                // Carry-forward only fills nil → it never overrides
+                // an explicit resolution. lastAttributedSpeaker stays
+                // nil until the first quote actually attributes.
+                let speaker = resolved ?? lastAttributedSpeaker
+                if speaker != nil {
+                    lastAttributedSpeaker = speaker
+                }
                 let quoted = String(text[cursor..<closeAfter])
                 appendSegment(&segments, text: quoted, entityId: speaker)
                 cursor = closeAfter
