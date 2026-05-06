@@ -30,6 +30,19 @@ struct SceneSummary: Codable, Equatable {
     var firstTurn: Int?
     var lastTurn: Int?
 
+    /// Phase 8 §4.2a — lazy per-speaker scene cache. PromptBuilder
+    /// populates `summariesBySpeaker[speaker]` on first read by that
+    /// speaker, summarising the scene's raw turns "as that character
+    /// would remember them." `text` stays as the narrator-view fallback
+    /// (used by solo chats and as the seed for the per-speaker pass).
+    /// Nil on legacy and freshly-cut scenes; entries appear lazily as
+    /// each speaker enters the room. No room-wide invalidation — if the
+    /// scene's turns change, the cache is just stale, the next summarizer
+    /// pass overwrites. Stored as `[UUID: String]` so the dictionary
+    /// keys round-trip cleanly through JSONEncoder's default strategy
+    /// (UUIDs serialise as strings; collisions impossible).
+    var summariesBySpeaker: [UUID: String]?
+
     /// Phase 7+ initializer — UUID-only.
     init(text: String, firstTurnId: UUID? = nil, lastTurnId: UUID? = nil) {
         self.text = text

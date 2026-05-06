@@ -181,6 +181,16 @@ struct Chat: Codable, Equatable, Identifiable {
     /// Solo / free-form chats (cast.count <= 1) ignore this field; the
     /// single speaker is always the only candidate.
     var speakerSelection: SpeakerSelectionMode
+    /// Phase 8 §4.2a — one-shot speaker override consumed by the next
+    /// assistant generation. Set by the input-bar speaker picker (§4.3)
+    /// when the user explicitly picks "make X speak next." Cleared via
+    /// `consumePendingSpeaker()` when the send path picks the speaker.
+    /// In `.manual` mode this is the primary input; in other modes it
+    /// can still override (so the user can punch in a one-off without
+    /// switching the chat's selection mode). Persisted across launches
+    /// so a queued pick survives a restart; if it goes stale (points
+    /// outside `cast`), `SpeakerPicker.next(in:)` ignores it.
+    var pendingSpeakerId: UUID?
 
     init(
         id: UUID = UUID(),
@@ -223,6 +233,7 @@ struct Chat: Codable, Equatable, Identifiable {
         self.activePath = []
         self.cast = []
         self.speakerSelection = .roundRobin
+        self.pendingSpeakerId = nil
     }
 
     init(from decoder: Decoder) throws {
@@ -304,6 +315,7 @@ struct Chat: Codable, Equatable, Identifiable {
             cast = decodedCast
         }
         speakerSelection = try c.decodeIfPresent(SpeakerSelectionMode.self, forKey: .speakerSelection) ?? .roundRobin
+        pendingSpeakerId = try c.decodeIfPresent(UUID.self, forKey: .pendingSpeakerId)
         schemaVersion = max(decodedVersion, 4)
         tokensSent = try c.decodeIfPresent(Int.self, forKey: .tokensSent) ?? 0
         tokensReceived = try c.decodeIfPresent(Int.self, forKey: .tokensReceived) ?? 0
@@ -463,6 +475,18 @@ struct Chat: Codable, Equatable, Identifiable {
                 }
             }
         }
+    }
+
+    /// Phase 8 §4.2a — read and clear `pendingSpeakerId` in one mutation,
+    /// so the send path doesn't accidentally re-use a one-shot pick on the
+    /// next generation. Returns the previous value (`nil` when nothing was
+    /// queued); callers feed it through `SpeakerPicker.next(in:)`'s
+    /// override path.
+    @discardableResult
+    mutating func consumePendingSpeaker() -> UUID? {
+        let v = pendingSpeakerId
+        pendingSpeakerId = nil
+        return v
     }
 
     /// Phase 8 §4.1 — multi-cast invariants. Runs at decode time after the

@@ -46,6 +46,7 @@ let suites: [TestSuite] = [
     retrievalEngineBranchingTests(),
     minimapLayoutTests(),
     phase8MigrationTests(),
+    speakerPickerTests(),
 ]
 
 exit(TestRunner.run(suites))
