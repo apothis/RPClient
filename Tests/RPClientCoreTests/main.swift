@@ -50,6 +50,7 @@ let suites: [TestSuite] = [
     promptBuilderGroupChatTests(),
     directorPickerTests(),
     phase9CharacterTests(),
+    characterCardExporterTests(),
 ]
 
 exit(TestRunner.run(suites))
