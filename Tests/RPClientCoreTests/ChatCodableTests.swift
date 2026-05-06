@@ -210,7 +210,10 @@ func chatCodableTests() -> TestSuite {
         try expectEqual(chat.entities[0].name, "Sarah")
         try expectEqual(chat.entities[0].type, .character)
         try expectEqual(chat.entities[0].facts.count, 2)
-        try expectEqual(chat.schemaVersion, 3)
+        // Phase 8 §4.1: schema bumped to v4. The pre-v3 dedup migration still
+        // runs on the entities array, then Phase 8's cast-seeding migration
+        // brings the chat to v4 in one decode pass.
+        try expectEqual(chat.schemaVersion, 4)
     }
 
     s.test("factExtractionPriorities migrates from comma-separated string") {

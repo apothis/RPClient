@@ -45,6 +45,7 @@ let suites: [TestSuite] = [
     chunkBranchingTests(),
     retrievalEngineBranchingTests(),
     minimapLayoutTests(),
+    phase8MigrationTests(),
 ]
 
 exit(TestRunner.run(suites))

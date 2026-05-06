@@ -71,6 +71,12 @@ struct Turn: Codable, Identifiable, Equatable {
     /// `Chat.switchBranch(to:)` to drill to the right leaf when descending.
     /// nil = no preference yet, descend via earliest child by `ts`.
     var activeChildId: UUID?
+    /// Phase 8 §4.1 — the cast member who spoke this turn. Nil for user
+    /// turns (always) and for assistant turns in solo / free-form chats
+    /// (where there is at most one possible speaker). Required to resolve
+    /// to a member of `Chat.cast` on multi-cast chats; enforced at decode
+    /// time by `Chat.validateGroupChat`.
+    var speakerId: UUID?
 
     init(
         id: UUID = UUID(),
@@ -86,6 +92,7 @@ struct Turn: Codable, Identifiable, Equatable {
         self.ts = ts
         self.parentId = nil
         self.activeChildId = nil
+        self.speakerId = nil
         // Assistant turns with seed text get a matching variant straight
         // away. Empty assistant placeholders start with `variants = []`;
         // the first stream token populates the seed variant via
@@ -100,7 +107,7 @@ struct Turn: Codable, Identifiable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, role, text, edited, ts, variants, activeVariant, parentId, activeChildId
+        case id, role, text, edited, ts, variants, activeVariant, parentId, activeChildId, speakerId
     }
 
     init(from decoder: Decoder) throws {
@@ -128,6 +135,7 @@ struct Turn: Codable, Identifiable, Equatable {
         }
         parentId = try c.decodeIfPresent(UUID.self, forKey: .parentId)
         activeChildId = try c.decodeIfPresent(UUID.self, forKey: .activeChildId)
+        speakerId = try c.decodeIfPresent(UUID.self, forKey: .speakerId)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -141,6 +149,7 @@ struct Turn: Codable, Identifiable, Equatable {
         try c.encode(activeVariant, forKey: .activeVariant)
         try c.encodeIfPresent(parentId, forKey: .parentId)
         try c.encodeIfPresent(activeChildId, forKey: .activeChildId)
+        try c.encodeIfPresent(speakerId, forKey: .speakerId)
     }
 
     // MARK: - Variant mutation

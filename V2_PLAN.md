@@ -110,7 +110,7 @@ The largest open item, and the natural follow-on to branching (group-chat retrie
 
 **Sub-step staging** (mirrors Phase 6 / 7's incremental shape):
 
-- **§4.1** — Storage + migration. `Chat.cast: [UUID]`, `Turn.speakerId: UUID?`, decode-time migration that promotes `characterId` → first entry of `cast`, validation that asst turns in a multi-speaker chat carry a `speakerId` resolving to a member of `cast`. Pure tests. ~1 day.
+- **§4.1** — Storage + migration ✅ shipped 2026-05-06. `Chat.cast: [UUID]`, `Chat.speakerSelection: SpeakerSelectionMode`, `Turn.speakerId: UUID?`, decode-time migration (schemaVersion v3→v4) that promotes `characterId` → first entry of `cast`, `Chat.validateGroupChat` enforcing no-duplicates / multi-cast assistant turns carry a resolvable `speakerId` / user turns never carry one. 15 new pure tests in `Phase8MigrationTests.swift` (567/567 passing).
 - **§4.2** — PromptBuilder per-speaker assembly. Wrap the existing builder so each speaker's generation pulls *their* card / persona / memory / scene summaries / voice. Round-robin selection logic (the simplest of the three). Tests cover prompt-structure correctness across 2- and 3-speaker chats. ~2-3 days.
 - **§4.3** — UI for cast management + speaker tagging. New "Cast" inspector pane (drag character cards in/out — re-uses the Library-window picker pattern). Speaker chip on each assistant turn (avatar + name + accent colour). Speaker picker in the input bar (auto / specific character / round-robin override). ~2 days.
 - **§4.4** — Director-LLM speaker selection (opt-in). Side-call that asks a small model "who should speak next?" given the chat tail; falls back to round-robin if the call fails or returns garbage. Per-chat toggle. ~1-2 days.

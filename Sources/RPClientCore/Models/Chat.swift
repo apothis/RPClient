@@ -9,6 +9,20 @@ enum CardPromptMode: String, Codable, Equatable {
     case merge
 }
 
+/// Phase 8 §3.1 — how the next speaker is chosen in a multi-cast chat.
+/// `.roundRobin` cycles through `Chat.cast` in declaration order; `.pooled`
+/// gives each cast member one turn before anyone repeats (resets on each user
+/// turn); `.manual` defers to a per-turn override; `.director` calls a small
+/// router LLM to pick a name (opt-in, lands in §4.4 — this case exists in
+/// the enum from §4.1 so on-disk state can hold it without a follow-up
+/// migration). Solo chats (`cast.count <= 1`) ignore this field entirely.
+enum SpeakerSelectionMode: String, Codable, Equatable {
+    case roundRobin
+    case pooled
+    case manual
+    case director
+}
+
 struct FactExtractionPriority: Codable, Equatable, Identifiable {
     let id: UUID
     var text: String
@@ -136,6 +150,20 @@ struct Chat: Codable, Equatable, Identifiable {
     /// renderable list from this path. Pre-Phase-7 chats decode as a spine
     /// derived from `turns`-in-order.
     var activePath: [UUID]
+    /// Phase 8 §4.1 — character IDs in this chat's cast. Empty on free-form
+    /// chats (no character bound) and on pre-Phase-8 chats whose
+    /// `characterId` was nil. Single-entry on legacy single-character chats
+    /// (decode-time migration promotes `characterId` into `cast[0]`). Order
+    /// is significant: round-robin selection cycles in this order, and the
+    /// input-bar speaker picker presents the cast in this order too.
+    /// Per-speaker render metadata (display name, voice, avatar) is looked
+    /// up from `AppState.characters[id]` at render time, so adding a member
+    /// is just a UUID append — no duplicated fields to drift.
+    var cast: [UUID]
+    /// Phase 8 §3.1 — speaker selection mode. Default `.roundRobin`.
+    /// Solo / free-form chats (cast.count <= 1) ignore this field; the
+    /// single speaker is always the only candidate.
+    var speakerSelection: SpeakerSelectionMode
 
     init(
         id: UUID = UUID(),
@@ -166,7 +194,7 @@ struct Chat: Codable, Equatable, Identifiable {
         self.lastExtractedTurn = 0
         self.factExtractionScanTurns = 0
         self.entities = []
-        self.schemaVersion = 3
+        self.schemaVersion = 4
         self.tokensSent = 0
         self.tokensReceived = 0
         self.characterId = nil
@@ -176,6 +204,8 @@ struct Chat: Codable, Equatable, Identifiable {
         self.voice = nil
         self.attributionMode = .heuristic
         self.activePath = []
+        self.cast = []
+        self.speakerSelection = .roundRobin
     }
 
     init(from decoder: Decoder) throws {
@@ -222,6 +252,8 @@ struct Chat: Codable, Equatable, Identifiable {
         factExtractionScanTurns = try c.decodeIfPresent(Int.self, forKey: .factExtractionScanTurns) ?? 0
         let decodedEntities = try c.decodeIfPresent([Entity].self, forKey: .entities) ?? []
         let decodedVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        let decodedCharacterId = try c.decodeIfPresent(UUID.self, forKey: .characterId)
+        let decodedCast = try c.decodeIfPresent([UUID].self, forKey: .cast) ?? []
         var seeded: [Entity]
         if decodedVersion < 2 && decodedEntities.isEmpty && !memory.isEmpty {
             // One-time migration: seed each parsed memory line as a one-fact
@@ -242,10 +274,20 @@ struct Chat: Codable, Equatable, Identifiable {
             seeded = Chat.dedupeMigratedEntities(seeded)
         }
         entities = seeded
-        schemaVersion = max(decodedVersion, 3)
+        // Phase 8 §4.1 — cast-seeding migration. v3 single-character chats
+        // promote `characterId` into `cast[0]`; freeform v3 chats stay with
+        // `cast = []`. Migration is idempotent — once a chat has been written
+        // back at v4 the explicit `cast` is trusted unchanged.
+        if decodedVersion < 4 && decodedCast.isEmpty, let cid = decodedCharacterId {
+            cast = [cid]
+        } else {
+            cast = decodedCast
+        }
+        speakerSelection = try c.decodeIfPresent(SpeakerSelectionMode.self, forKey: .speakerSelection) ?? .roundRobin
+        schemaVersion = max(decodedVersion, 4)
         tokensSent = try c.decodeIfPresent(Int.self, forKey: .tokensSent) ?? 0
         tokensReceived = try c.decodeIfPresent(Int.self, forKey: .tokensReceived) ?? 0
-        characterId = try c.decodeIfPresent(UUID.self, forKey: .characterId)
+        characterId = decodedCharacterId
         personaId = try c.decodeIfPresent(UUID.self, forKey: .personaId)
         systemPromptMode = try c.decodeIfPresent(CardPromptMode.self, forKey: .systemPromptMode) ?? .override
         serverId = try c.decodeIfPresent(UUID.self, forKey: .serverId)
@@ -281,6 +323,7 @@ struct Chat: Codable, Equatable, Identifiable {
             activePath = decodedPath ?? (turns.isEmpty ? [] : turns.map(\.id))
         }
         try Chat.validateBranching(turns: turns, activePath: activePath)
+        try Chat.validateGroupChat(cast: cast, turns: turns)
 
         // Phase 7 §3.2 — SceneSummary post-resolve. Legacy scenes stored
         // Int turn positions; resolve to UUIDs against the (now-built)
@@ -398,6 +441,59 @@ struct Chat: Codable, Equatable, Identifiable {
                         debugDescription: "activePath disconnected at index \(i): turn \(activePath[i])'s parent is \(String(describing: succParent)), expected \(activePath[i - 1])"
                     ))
                 }
+            }
+        }
+    }
+
+    /// Phase 8 §4.1 — multi-cast invariants. Runs at decode time after the
+    /// branching pass. Throws a `DecodingError.dataCorrupted` describing the
+    /// first violation. Tolerated cases (deliberate, exercised by tests):
+    /// - empty cast (free-form chat) — no constraints on turns.
+    /// - single-cast (legacy migrated chat) — assistant turns may carry nil
+    ///   speakerId for back-compat with pre-Phase-8 storage.
+    ///
+    /// Enforced cases:
+    /// - no duplicate UUIDs within `cast`.
+    /// - on multi-cast (`cast.count > 1`), every assistant turn must carry a
+    ///   non-nil `speakerId` resolving to a member of `cast`.
+    /// - user turns must NEVER carry a `speakerId` regardless of cast size
+    ///   (user-side persona is on `Chat.personaId`, not on the turn).
+    static func validateGroupChat(cast: [UUID], turns: [Turn]) throws {
+        if Set(cast).count != cast.count {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: [],
+                debugDescription: "duplicate UUID in cast: \(cast)"
+            ))
+        }
+
+        for t in turns {
+            if t.role == .user, t.speakerId != nil {
+                throw DecodingError.dataCorrupted(.init(
+                    codingPath: [],
+                    debugDescription: "user turn \(t.id) carries a non-nil speakerId; user-side persona belongs on Chat.personaId, not on the turn"
+                ))
+            }
+        }
+
+        guard cast.count > 1 else {
+            // Solo / free-form chats: no further checks. Assistant turns may
+            // carry nil speakerId (legacy migrated state).
+            return
+        }
+
+        let castSet = Set(cast)
+        for t in turns where t.role == .assistant {
+            guard let sid = t.speakerId else {
+                throw DecodingError.dataCorrupted(.init(
+                    codingPath: [],
+                    debugDescription: "assistant turn \(t.id) is missing a speakerId in a multi-cast chat (cast count \(cast.count))"
+                ))
+            }
+            if !castSet.contains(sid) {
+                throw DecodingError.dataCorrupted(.init(
+                    codingPath: [],
+                    debugDescription: "assistant turn \(t.id) has speakerId \(sid) not present in cast \(cast)"
+                ))
             }
         }
     }
