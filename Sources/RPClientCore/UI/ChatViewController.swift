@@ -265,9 +265,13 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         rebuildVoicePicker()
         rebuildAttributionPicker()
         guard let chat = AppState.shared.currentChat else {
+            DebugLog.shared.write("ui: rebuild — no current chat")
             removeEmptyState()
             return
         }
+        DebugLog.shared.write(
+            "ui: rebuild chat=\(chat.id) turns=\(chat.turns.count) activePath=\(chat.activePath.count)"
+        )
         // Phase 7 §3.3b — the renderable list is the active path, not the
         // storage `turns` array. Off-path siblings (created by fork) live in
         // `chat.turns` so a later branch switch can re-surface them, but
@@ -293,7 +297,11 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             // i.e., the parent has more than one child. Only meaningful for
             // non-root turns.
             if let pid = t.parentId {
-                tv.hasSiblings = chat.children(of: pid).count > 1
+                let count = chat.children(of: pid).count
+                tv.hasSiblings = count > 1
+                if count > 1 {
+                    DebugLog.shared.write("ui: glyph on i=\(i) (\(count) siblings)")
+                }
             }
             tv.translatesAutoresizingMaskIntoConstraints = false
             stackView.addArrangedSubview(tv)
@@ -364,6 +372,20 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             rebuild()
             return
         }
+        // Same count, different IDs = a fork swapped a turn in place (forkFrom
+        // truncates after the parent and pushes a new sibling, so the leaf
+        // index stays the same but the turn at that index is a fresh UUID).
+        // TurnView.turnId is `let`, so a stale match would route stream tokens
+        // through `lastView.turnId == lastTurn.id` checks that silently fail.
+        // Force a structural rebuild when ids drift.
+        for (i, t) in active.enumerated() where i < turnViews.count {
+            if turnViews[i].turnId != t.id {
+                DebugLog.shared.write("ui: rebuild — id mismatch at i=\(i)")
+                rebuild()
+                return
+            }
+        }
+        DebugLog.shared.write("ui: in-place update (active.count=\(active.count))")
         // Variant state can change without the turn count moving — regen now
         // adds a variant in place, paging changes the active index, etc.
         // Push the latest tuple to each view so the pager redraws (including
@@ -397,8 +419,14 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         guard let chat = AppState.shared.currentChat,
               let leafId = chat.activePath.last,
               let lastTurn = chat.turn(id: leafId),
-              let lastView = turnViews.last,
-              lastView.turnId == lastTurn.id else {
+              let lastView = turnViews.last else {
+            DebugLog.shared.write("ui: stream-token dropped — no chat / no leaf / no view")
+            return
+        }
+        guard lastView.turnId == lastTurn.id else {
+            DebugLog.shared.write(
+                "ui: stream-token dropped — leaf=\(leafId) lastView.turnId=\(lastView.turnId) (id mismatch)"
+            )
             return
         }
         lastView.setText(lastTurn.text)
@@ -411,6 +439,10 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     }
 
     @objc private func handleStreamFinished() {
+        let leafId = AppState.shared.currentChat?.activePath.last
+        DebugLog.shared.write(
+            "ui: stream-finished leaf=\(leafId.map { $0.uuidString } ?? "nil") views=\(turnViews.count)"
+        )
         AppState.shared.persistCurrent()
         inputBar.updateButtons()
         for tv in turnViews where tv.isStreaming {

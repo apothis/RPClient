@@ -147,8 +147,11 @@ final class AppState {
         self.characters = Storage.shared.listCharacters()
         self.personas = Storage.shared.listPersonas()
         self.registry = KoboldClientRegistry(settings: s)
-        self.speaker = Speaker(voiceEnabled: s.voiceEnabled)
+        self.speaker = Speaker(voiceEnabled: s.voiceEnabled, voiceActive: s.voiceActive)
         self.speaker.startObserving()
+        DebugLog.shared.write(
+            "boot: chats=\(self.chats.count) characters=\(self.characters.count) personas=\(self.personas.count) voiceEnabled=\(s.voiceEnabled) voiceActive=\(s.voiceActive)"
+        )
         // The Kokoro selector (§7.1l) is wired separately via
         // `installKokoroSpeechSelector(factory:)` so Core doesn't need to
         // import RPClientVoice — the executable supplies the factory.
@@ -719,7 +722,11 @@ final class AppState {
     /// so the post-switch chunker / retrieval invalidation has a single
     /// hook to attach to in future steps.
     func switchBranch(to turnId: UUID) {
-        guard !isStreaming else { return }
+        guard !isStreaming else {
+            DebugLog.shared.write("trigger: switchBranch refused (mid-stream)")
+            return
+        }
+        DebugLog.shared.write("trigger: switchBranch (turnId=\(turnId))")
         updateCurrent { c in
             c.switchBranch(to: turnId)
         }

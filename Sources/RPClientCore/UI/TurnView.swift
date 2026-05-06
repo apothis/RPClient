@@ -225,6 +225,16 @@ final class TurnView: NSView, NSTextViewDelegate {
             symbol: "arrow.triangle.branch",
             tooltip: "Switch branch — this turn has siblings"
         )
+        // Phase 7 §3.3b — branch glyph stands out more than the hover-toolbar
+        // icons because it's persistent (not hover-revealed). Accent tint + a
+        // larger point size makes it skim-readable without crowding the
+        // gutter. Tone down later if it feels loud.
+        branchGlyph.contentTintColor = .controlAccentColor
+        if let img = NSImage(systemSymbolName: "arrow.triangle.branch", accessibilityDescription: nil) {
+            branchGlyph.image = img.withSymbolConfiguration(
+                NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
+            ) ?? img
+        }
 
         super.init(frame: .zero)
         wantsLayer = true

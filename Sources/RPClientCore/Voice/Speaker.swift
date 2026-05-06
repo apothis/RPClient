@@ -310,6 +310,9 @@ final class Speaker {
     /// Flipping off while speech is live stops both engines so the toggle
     /// feels immediate.
     func setVoiceEnabled(_ enabled: Bool) {
+        if voiceEnabled != enabled {
+            DebugLog.shared.write("speaker: voiceEnabled \(voiceEnabled) → \(enabled)")
+        }
         if shouldSpeak && !enabled {
             stop()
         }
@@ -318,6 +321,9 @@ final class Speaker {
 
     /// Mirror `Settings.voiceActive` (the runtime gate) into the speaker.
     func setVoiceActive(_ active: Bool) {
+        if voiceActive != active {
+            DebugLog.shared.write("speaker: voiceActive \(voiceActive) → \(active)")
+        }
         if shouldSpeak && !active {
             stop()
         }
@@ -430,14 +436,23 @@ final class Speaker {
     }
 
     private func handleStreamFinished() {
-        guard shouldSpeak else { return }
+        guard shouldSpeak else {
+            DebugLog.shared.write(
+                "speaker: skip stream-finished — voiceEnabled=\(voiceEnabled) voiceActive=\(voiceActive)"
+            )
+            return
+        }
         // §3.3b: speak the active leaf, not storage's `turns.last` — once
         // forks exist, the last-stored turn might be off-path while the
         // freshly streamed reply lives at the active leaf.
         guard let chat = AppState.shared.currentChat,
               let leafId = chat.activePath.last,
               let last = chat.turn(id: leafId),
-              last.role == .assistant else { return }
+              last.role == .assistant else {
+            DebugLog.shared.write("speaker: skip stream-finished — no asst leaf")
+            return
+        }
+        DebugLog.shared.write("speaker: speak leaf=\(leafId) chars=\(last.text.count)")
         let plain = Speaker.plainText(last.text)
         guard !plain.isEmpty else { return }
 
