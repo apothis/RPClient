@@ -577,7 +577,25 @@ final class AppState {
     /// embedding model loaded; we capture the dimension and a best-effort name.
     /// Logged unconditionally so the user can confirm retrieval prerequisites
     /// are in place even if retrieval itself is disabled.
+    ///
+    /// Pre-flight gate (added 2026-05-06): defers the probe when the chat
+    /// pipeline is otherwise busy. The embeddings POST hits the same
+    /// koboldcpp instance as the chat-model generate, and on tight-VRAM
+    /// configurations a concurrent embed+generate has been correlated
+    /// with server crashes. Boot-time + post-recovery callers are quiet
+    /// (no other side-call in flight); the only risk is when the user
+    /// drives a stream right as we come back from down. Defer one tick.
     func refreshEmbeddingInfo() {
+        if isStreaming || isSummarizing || isExtracting || isRetrieving || isIndexing {
+            DebugLog.shared.write(
+                "embeddings: probe deferred (busy: stream=\(isStreaming) sum=\(isSummarizing) extr=\(isExtracting) retr=\(isRetrieving) idx=\(isIndexing))"
+            )
+            // Re-attempt on the next health tick — that's already gated
+            // on the same flags and will fire refreshEmbeddingInfo() if
+            // embeddingDim is still nil. No timer here; we rely on the
+            // 30s health-check loop to catch us back up.
+            return
+        }
         kobold.fetchEmbeddingInfo { [weak self] info in
             DispatchQueue.main.async {
                 guard let self = self else { return }
