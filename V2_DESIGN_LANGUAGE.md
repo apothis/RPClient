@@ -218,7 +218,32 @@ This list grows during the overhaul; don't fold corrections into Phase 9.
 
 ---
 
-## 11. Application contract for new surfaces
+## 11. Beyond Apple HIG — modern UX patterns we adopt
+
+Apple's HIG is the macOS platform contract. It's also conservative — designed to make any AppKit app feel "native" without committing to the design taste of any specific tool. The strongest modern productivity tools blend HIG correctness with web/design-system thinking: Linear, Things 3, Notion, Vercel/Geist, Figma, Stripe Dashboard, Raycast. RPClient pulls deliberately from each.
+
+What we borrow, and from where:
+
+- **Visual weight by importance (Linear).** Not every element of the interface carries equal visual weight. The parts central to the user's task stay in full color and weight; navigation, orientation, and chrome recede to `secondaryLabelColor` / regular weight. Creator window: field input is `labelColor` body; the field's hint text below it is `tertiaryLabelColor` `subheadline`; the tab strip at top is `secondaryLabelColor`. The eye knows what's the work and what's the wayfinding.
+- **Multi-modal action surfacing (Linear).** Every action in the app should be reachable through *all* of: a visible button, a keyboard shortcut, a context-menu item, and (eventually) a command palette. Different users build different muscle memory; the interface stays consistent across modes. Creator window: Save / Cancel both have keyboard shortcuts (`⌘S` / `Esc`); Generate / Refresh on the suggestions strip have shortcuts; tab switching has shortcuts (`⌘1`-`⌘7`). Cmd-K palette is deferred to the overhaul but the design space is reserved (no shortcut conflicts).
+- **Aggressive reduction (Vercel/Geist).** When in doubt, remove. The premium feel comes from consistency applied to a narrow palette, not from added decoration. RPClient already runs a narrow palette (system semantic colors only). Apply the same posture to controls: if a feature can be a single button instead of a button + helper-icon + tooltip, make it the single button.
+- **Monospace for technical / numeric content (Vercel/Geist).** Numbers that the user reads precisely (token counts, depth values, dates, version numbers, byte counts in the extensions viewer) use `NSFont.monospacedSystemFont(ofSize:, weight:)`. Numbers in prose stay in the body font. Mixing matters: tabular numerics (`numericFeatures` in CTFont attributes) for vertical alignment in tables; proportional in inline contexts.
+- **Hover-revealed drag handles (Notion).** List-row reorder UI appears on hover, not as a permanent column. The §3.2 alternateGreetings list editor uses a 16pt grip handle that fades in on row hover (120ms `linear`); the row itself is the click target for editing. Permanent grip columns clutter the row's leading edge for a feature used <5% of the time.
+- **Slash / inline commands (Notion / Cursor) — flagged for future.** Inline AI-assist as ghost text (Cursor / Copilot pattern, predict-and-accept) is an alternative shape to the §4.1 Suggestions strip. Strip wins for Phase 9 because it's deliberate and the author's focus stays in the field. Ghost text is more invasive and faster — flagged as a future-direction power-user mode, not in §5.3.
+- **Calm motion despite density (Linear).** Linear runs on the same restraint Apple HIG mandates — 100-220ms durations, ease-out, no springs. Confirms the §8 Motion budgets. Web tools that lean into Framer-style spring motion (Vercel marketing pages) feel wrong inside a productivity tool; the budget for character animation is the user's data, not the chrome.
+- **System-as-tokens (Tailwind / shadcn / Geist).** A design system is a set of named tokens, not a set of pixel values. The §3 spacing tokens, §2 typography names, §4 color names, §6 control sizes are *the* contract; raw values are an escape hatch for the rare exception. This is what makes future-overhaul work tractable: search for `lg` and find every section gap in the app.
+- **Power-user keyboard density (Raycast / Things).** Keyboard shortcuts cover everything reachable by mouse. The creator window's Identity / Persona / Greetings / Examples / System / Lorebook / Advanced tabs map to `⌘1` through `⌘7`. Save / Cancel / Generate / Refresh / new-greeting / remove-greeting all bound. Rule: if a button exists without a shortcut, the shortcut got forgotten — file it as a follow-up.
+- **Inline-editable list items (Notion / Linear).** Multi-row content (alternateGreetings, source URLs, group_only_greetings) is edited *in place*, not via "click row → opens edit sheet". The row IS the edit surface; clicking-out commits. Eliminates the modal-sheet-per-row friction.
+
+What we deliberately *don't* borrow:
+
+- **Notion's slash command for everything.** Heavy slash syntax inside a roleplay character description would interfere with NSFW prose where authors legitimately type `/scene-break` or other markup. Slash is for app-shaped content (issues, docs); creator fields are author-shaped content.
+- **Vercel-style pure-black / pure-white aggressive contrast.** Beautiful on web marketing; jarring on macOS where the system is gentler about extremes. Stick with `labelColor` / `tertiaryLabelColor` semantic grays.
+- **Material 3 / Material You's adaptive theming pulled from a single seed color.** macOS users expect their accent color to behave the way every other macOS app behaves. Don't reinvent.
+- **Spring physics, parallax, blur reveal motion (Framer / iOS marketing).** Off-platform. macOS motion is restrained translation + opacity.
+- **Command palette as the primary navigation (Raycast).** RPClient is a chat client; the chat list and library are visual-spatial, not text-search-driven. Cmd-K complements but doesn't replace the sidebar.
+
+## 12. Application contract for new surfaces
 
 Any new view added to RPClient from this point on must:
 
@@ -233,13 +258,27 @@ Reviewer expectation: the diff should be answerable in design-language-token ter
 
 ---
 
-## 12. References
+## 13. References
 
+**Apple — platform contract:**
 - [Designing for macOS — HIG](https://developer.apple.com/design/human-interface-guidelines/designing-for-macos).
 - [macOS Materials — HIG](https://developer.apple.com/design/human-interface-guidelines/foundations/materials/).
 - [Typography — HIG](https://developer.apple.com/design/human-interface-guidelines/foundations/typography/).
 - [Adopting Liquid Glass — Apple Developer Documentation](https://developer.apple.com/documentation/TechnologyOverviews/adopting-liquid-glass).
 - [WWDC25 Session 310 — Build an AppKit app with the new design](https://developer.apple.com/videos/play/wwdc2025/310/).
 - [WWDC25 Session notes (community)](https://wwdcnotes.com/documentation/wwdcnotes/wwdc25-310-build-an-appkit-app-with-the-new-design/).
+
+**Beyond Apple — modern UX references we draw from:**
+- [Linear — UI redesign rationale (visual weight, density, calm motion)](https://linear.app/now/how-we-redesigned-the-linear-ui).
+- [Linear — calmer interface for a product in motion](https://linear.app/now/behind-the-latest-design-refresh).
+- [The Elegant Design of Linear.app — Tela Blog](https://telablog.com/the-elegant-design-of-linear-app/).
+- [Geist — Vercel design system](https://vercel.com/geist/introduction).
+- [Geist Font — monospace + sans-serif from one family](https://vercel.com/font).
+- [Things 3 — typography hierarchy + dynamic type adoption](https://culturedcode.com/things/features/).
+- Notion (slash commands, inline editing, hover-revealed drag handles) — UX precedent without canonical doc.
+- Stripe Dashboard (numerical data styling, dense forms with disclosure) — UX precedent without canonical doc.
+- Raycast (keyboard-everywhere posture) — UX precedent without canonical doc.
+
+**Internal:**
 - [`V2_PLAN.md`](V2_PLAN.md) §8 — deferred UI overhaul (this doc is its foundation).
 - [`V2_PHASE9_CARD_CREATOR.md`](V2_PHASE9_CARD_CREATOR.md) — the first surface that fully applies this language.
