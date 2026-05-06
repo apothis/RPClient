@@ -117,6 +117,69 @@ func phase8MigrationTests() -> TestSuite {
         try expectEqual(again.schemaVersion, 4)
     }
 
+    // MARK: - characterId.didSet maintains the cast invariant
+
+    s.test("assigning characterId to a free-form chat seeds cast = [characterId]") {
+        var chat = Chat(title: "fresh")
+        try expectEqual(chat.cast, [])
+        let cid = UUID()
+        chat.characterId = cid
+        try expectEqual(chat.cast, [cid])
+    }
+
+    s.test("re-assigning the same characterId is idempotent — no duplicate in cast") {
+        var chat = Chat(title: "x")
+        let cid = UUID()
+        chat.characterId = cid
+        chat.characterId = cid
+        try expectEqual(chat.cast, [cid])
+    }
+
+    s.test("assigning a different characterId to a solo chat appends to cast") {
+        // A solo chat (cast == [A]) whose characterId gets re-pointed to B
+        // becomes a 2-cast chat. Solo→multi promotion happens implicitly;
+        // the user can prune via the Cast pane (§4.3) if unwanted.
+        var chat = Chat(title: "x")
+        let a = UUID(), b = UUID()
+        chat.characterId = a
+        chat.characterId = b
+        try expectEqual(chat.cast, [a, b])
+    }
+
+    s.test("assigning nil characterId leaves cast unchanged") {
+        var chat = Chat(title: "x")
+        let cid = UUID()
+        chat.characterId = cid
+        chat.characterId = nil
+        try expectEqual(chat.cast, [cid])
+    }
+
+    s.test("v4 chat with cast=[] and characterId set self-heals on decode") {
+        // The state a fresh new-chat path could write before the didSet
+        // observer was added: explicit schemaVersion 4, empty cast, but
+        // characterId is set. Decode normalises to cast = [characterId]
+        // so legacy bug-state files heal on next load.
+        let chatId = UUID()
+        let charId = UUID()
+        let json = """
+        {
+            "id": "\(chatId.uuidString)",
+            "title": "Bug-state",
+            "created": "\(nowStr)",
+            "modified": "\(nowStr)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced",
+            "turns": [],
+            "schemaVersion": 4,
+            "cast": [],
+            "characterId": "\(charId.uuidString)"
+        }
+        """
+        let chat = try decoder.decode(Chat.self, from: Data(json.utf8))
+        try expectEqual(chat.cast, [charId])
+        try expectEqual(chat.characterId, charId)
+    }
+
     // MARK: - Turn.speakerId — decode + round-trip
 
     s.test("Turn.speakerId decodes when present and is nil when absent") {

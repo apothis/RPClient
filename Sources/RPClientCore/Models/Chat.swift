@@ -120,7 +120,24 @@ struct Chat: Codable, Equatable, Identifiable {
     /// PromptBuilder reads the live `Character` out of `AppState.characters`
     /// at send time so edits to the card propagate without rewriting chats.
     /// Existing chats decode as nil and behave exactly as before.
-    var characterId: UUID?
+    ///
+    /// Phase 8 §4.1 — `didSet` maintains the invariant `characterId non-nil
+    /// implies characterId ∈ cast`, so any code path that assigns a
+    /// character to a chat (new-chat creation, "switch character" in the
+    /// Inspector) keeps `cast` in sync without each call site needing to
+    /// know about Phase 8. Property observers don't fire during
+    /// `init(from:)`, so the decode-time cast-seeding migration runs once
+    /// and this observer takes over for every subsequent assignment.
+    var characterId: UUID? {
+        didSet {
+            guard let cid = characterId else { return }
+            if cast.isEmpty {
+                cast = [cid]
+            } else if !cast.contains(cid) {
+                cast.append(cid)
+            }
+        }
+    }
     /// User-side persona for this chat (nil = anonymous — falls back to
     /// `Settings.userName`). Same indirection as `characterId`: the persona
     /// description lives on the `Persona`, not the chat.
@@ -274,11 +291,14 @@ struct Chat: Codable, Equatable, Identifiable {
             seeded = Chat.dedupeMigratedEntities(seeded)
         }
         entities = seeded
-        // Phase 8 §4.1 — cast-seeding migration. v3 single-character chats
-        // promote `characterId` into `cast[0]`; freeform v3 chats stay with
-        // `cast = []`. Migration is idempotent — once a chat has been written
-        // back at v4 the explicit `cast` is trusted unchanged.
-        if decodedVersion < 4 && decodedCast.isEmpty, let cid = decodedCharacterId {
+        // Phase 8 §4.1 — cast-seeding migration. Maintains the invariant
+        // `characterId non-nil implies characterId ∈ cast`. Triggers on any
+        // decoded chat where `cast` is empty AND `characterId` is set —
+        // that's the malformed state we want to fix regardless of stored
+        // version (v3 legacy chats, plus v4 chats written before the
+        // `characterId.didSet` observer was added). Idempotent: once cast
+        // has been seeded, the explicit decoded value is trusted.
+        if decodedCast.isEmpty, let cid = decodedCharacterId {
             cast = [cid]
         } else {
             cast = decodedCast
