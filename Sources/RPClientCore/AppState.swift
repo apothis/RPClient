@@ -253,7 +253,7 @@ final class AppState {
         c.characterId = character.id
         c.personaId = settings.defaultPersonaId
         if let greeting = AppState.makeGreetingTurn(character: character) {
-            c.turns = [greeting]
+            c.appendTurn(greeting)
         }
         c.worldInfo = AppState.mergedWorldInfo(existing: c.worldInfo, charBook: character.charBook)
         Storage.shared.saveChat(c)
@@ -607,8 +607,8 @@ final class AppState {
     func sendUserMessage(_ text: String) {
         guard !isStreaming, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         updateCurrent { c in
-            c.turns.append(Turn(role: .user, text: text))
-            c.turns.append(Turn(role: .assistant, text: ""))
+            c.appendTurn(Turn(role: .user, text: text))
+            c.appendTurn(Turn(role: .assistant, text: ""))
             // Pre-seed the assistant turn with one empty variant carrying
             // the upstream-context fingerprint. Done here (rather than on
             // first stream token) so a future user edit on any prior turn
@@ -655,7 +655,7 @@ final class AppState {
             // Append a fresh assistant turn and seed it with one empty,
             // fingerprint-stamped variant so the same staleness machinery
             // applies as in `sendUserMessage`.
-            c.turns.append(Turn(role: .assistant, text: ""))
+            c.appendTurn(Turn(role: .assistant, text: ""))
             let asstIdx = c.turns.count - 1
             let fp = Chat.makeContextFingerprint(c.turns[..<asstIdx])
             c.turns[asstIdx].addEmptyVariant(
@@ -665,6 +665,7 @@ final class AppState {
         }
         updateCurrent { ch in
             ch.turns = c.turns
+            ch.activePath = c.activePath
         }
         startStreaming()
     }

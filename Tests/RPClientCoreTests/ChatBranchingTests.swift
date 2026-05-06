@@ -406,6 +406,75 @@ func chatBranchingTests() -> TestSuite {
         }
     }
 
+    // MARK: - appendTurn (Phase 7 §3.3a — production-mutation helper)
+
+    s.test("appendTurn on an empty chat seeds the root and activePath") {
+        // Mirrors `AppState.newChat(withCharacter:)`'s greeting seed: the
+        // first turn becomes the root (parentId nil) and activePath is just
+        // its id.
+        var chat = Chat(title: "Fresh")
+        let greeting = Turn(role: .assistant, text: "Hi.")
+        chat.appendTurn(greeting)
+        try expectEqual(chat.turns.count, 1)
+        try expectEqual(chat.turns[0].parentId, nil)
+        try expectEqual(chat.activePath, [greeting.id])
+    }
+
+    s.test("appendTurn on a non-empty chat sets parentId to the active leaf") {
+        // Mirrors `AppState.sendUserMessage`: appending against an existing
+        // path makes the new turn a child of the current leaf.
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        chat.appendTurn(root)
+        let asst = Turn(role: .assistant, text: "")
+        chat.appendTurn(asst)
+        try expectEqual(chat.turns.count, 2)
+        try expectEqual(chat.turn(id: asst.id)?.parentId, root.id)
+        try expectEqual(chat.activePath, [root.id, asst.id])
+    }
+
+    s.test("appendTurn updates the previous leaf's activeChildId to the new turn") {
+        // `switchBranch(to:)` drills via activeChildId; on a freshly extended
+        // path that pointer should point at the just-appended turn so a later
+        // branch-switch-and-back lands on the leaf we just wrote.
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        chat.appendTurn(root)
+        let asst = Turn(role: .assistant, text: "reply")
+        chat.appendTurn(asst)
+        try expectEqual(chat.turn(id: root.id)?.activeChildId, asst.id)
+    }
+
+    s.test("appendTurn overwrites a pre-set parentId with the active leaf") {
+        // Defensive: callers pass freshly-constructed turns with parentId
+        // nil; if a stale parentId leaks through, the helper still produces
+        // a connected path rather than corrupting state.
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        chat.appendTurn(root)
+        var t = Turn(role: .assistant, text: "x")
+        t.parentId = UUID() // bogus
+        chat.appendTurn(t)
+        try expectEqual(chat.turn(id: t.id)?.parentId, root.id)
+    }
+
+    s.test("appendTurn after switchBranch extends the new branch, not the previous one") {
+        // After switching to branch B, appending should add a child of B's
+        // leaf, not inadvertently extend the abandoned branch A.
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        let a = makeAssistant(parentId: root.id, text: "A")
+        let b = makeAssistant(parentId: root.id, text: "B")
+        chat.turns = [root, a, b]
+        chat.activePath = [root.id, a.id]
+
+        chat.switchBranch(to: b.id)
+        let next = Turn(role: .user, text: "follow-up on B")
+        chat.appendTurn(next)
+        try expectEqual(chat.turn(id: next.id)?.parentId, b.id)
+        try expectEqual(chat.activePath, [root.id, b.id, next.id])
+    }
+
     // MARK: - Round-trip with explicit branching state
 
     s.test("round-trip preserves parentId, activeChildId, and activePath") {

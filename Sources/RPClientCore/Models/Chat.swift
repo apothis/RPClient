@@ -600,6 +600,31 @@ struct Chat: Codable, Equatable, Identifiable {
         }
     }
 
+    /// Append `turn` as a child of the current active leaf. Sets the new
+    /// turn's `parentId` to `activePath.last` (or `nil` when the chat is
+    /// empty — root case), records the choice on the previous leaf's
+    /// `activeChildId` so a later switch-away-and-back drills here, then
+    /// extends `turns` and `activePath` by one.
+    ///
+    /// The single mutation primitive used by every production "append a turn"
+    /// path (newChat seeding the greeting, sendUserMessage's user+assistant
+    /// pair, regenerate's user-trailing fallback). Replaces the pre-§3.3a
+    /// pattern of `c.turns.append(...)` which silently left `parentId` and
+    /// `activePath` stale, relying on the renderable-list fallbacks in
+    /// Chunker / RetrievalEngine to paper over the inconsistency. Forking
+    /// off the active leaf is the §3.3b primitive (`Chat.fork`) — different
+    /// shape, different file location.
+    mutating func appendTurn(_ turn: Turn) {
+        var t = turn
+        t.parentId = activePath.last
+        if let prevLeafId = activePath.last,
+           let idx = turns.firstIndex(where: { $0.id == prevLeafId }) {
+            turns[idx].activeChildId = t.id
+        }
+        turns.append(t)
+        activePath.append(t.id)
+    }
+
     /// Pick the next child to descend into when walking down from `turnId`.
     /// Honours `activeChildId` if set and pointing to an existing child;
     /// otherwise picks the earliest child by ts. Returns nil at a leaf.
