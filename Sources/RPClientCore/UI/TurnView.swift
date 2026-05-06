@@ -271,10 +271,19 @@ final class TurnView: NSView, NSTextViewDelegate {
     private let toolbarHeight: CGFloat = 22
     private let toolbarTopGap: CGFloat = 4
 
-    init(turn: Turn, character: Character? = nil) {
+    /// Phase 8 §4.3 — speaker name label below the avatar on multi-cast
+    /// chats. Nil on solo / free-form chats and on user turns. When set,
+    /// the avatar also gets a 2pt accent ring (deterministic per
+    /// `character.id`) so the chip reads at a glance even before the
+    /// label is parsed.
+    private var speakerNameLabel: NSTextField?
+    private let multiCast: Bool
+
+    init(turn: Turn, character: Character? = nil, multiCast: Bool = false) {
         self.turnId = turn.id
         self.role = turn.role
         self.rawText = turn.text
+        self.multiCast = multiCast
 
         copyButton = TurnView.makeIconButton(symbol: "doc.on.doc", tooltip: "Copy")
         editButton = TurnView.makeIconButton(symbol: "pencil", tooltip: "Edit")
@@ -321,8 +330,31 @@ final class TurnView: NSView, NSTextViewDelegate {
             if let character {
                 avatar.image = AvatarSource.shared.image(
                     forCharacter: character.id, name: character.name)
+                avatar.toolTip = character.name
             } else {
                 avatar.image = placeholderAvatar(initials: "✦")
+            }
+            // Phase 8 §4.3 — speaker chip. Multi-cast chats get a 3pt
+            // accent ring around the avatar (deterministic per character
+            // id) and a full-width name pill ABOVE the bubble, in the
+            // accent colour, so the speaker is identifiable at a glance
+            // without truncating long names. Below-avatar labels (the
+            // original design) topped out at the 40px gutter width and
+            // truncated names like "Captain Marin" to "Capt…", which
+            // didn't read as a speaker chip — it read as a layout bug.
+            if multiCast, let character {
+                let accent = SpeakerColor.accent(for: character.id)
+                avatar.layer?.borderColor = accent.cgColor
+                avatar.layer?.borderWidth = 3
+                let label = NSTextField(labelWithString: character.name)
+                label.font = Theme.font(11, weight: .semibold)
+                label.textColor = accent
+                label.alignment = .left
+                label.lineBreakMode = .byTruncatingTail
+                label.maximumNumberOfLines = 1
+                label.translatesAutoresizingMaskIntoConstraints = false
+                addSubview(label)
+                speakerNameLabel = label
             }
             addSubview(avatar)
         }
@@ -462,13 +494,20 @@ final class TurnView: NSView, NSTextViewDelegate {
                 branchGlyph.trailingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: -6)
             ])
         } else {
+            // Phase 8 §4.3 — speaker name label above the bubble (when
+            // multi-cast). The label sits in the same vertical track as
+            // the bubble's top edge, leading-aligned with the bubble, so
+            // it reads as a header for the message. Avatar slides down by
+            // labelGap to stay top-aligned with the bubble's header.
+            let labelGap: CGFloat = (speakerNameLabel != nil) ? 18 : 0
+
             NSLayoutConstraint.activate([
-                avatar.topAnchor.constraint(equalTo: topAnchor),
+                avatar.topAnchor.constraint(equalTo: topAnchor, constant: labelGap),
                 avatar.leadingAnchor.constraint(equalTo: leadingAnchor),
                 avatar.widthAnchor.constraint(equalToConstant: avatarSize),
                 avatar.heightAnchor.constraint(equalToConstant: avatarSize),
 
-                bubble.topAnchor.constraint(equalTo: topAnchor),
+                bubble.topAnchor.constraint(equalTo: topAnchor, constant: labelGap),
                 bubble.leadingAnchor.constraint(equalTo: leadingAnchor, constant: glyphCol),
                 bubble.trailingAnchor.constraint(equalTo: trailingAnchor),
 
@@ -482,12 +521,17 @@ final class TurnView: NSView, NSTextViewDelegate {
                 toolbar.heightAnchor.constraint(equalToConstant: toolbarHeight),
                 toolbar.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-                // Branch glyph sits below the avatar in the gutter column —
-                // the same vertical track as the avatar so it reads as a
-                // turn-level affordance rather than a bubble decoration.
                 branchGlyph.topAnchor.constraint(equalTo: avatar.bottomAnchor, constant: 6),
                 branchGlyph.centerXAnchor.constraint(equalTo: avatar.centerXAnchor)
             ])
+            if let nameLabel = speakerNameLabel {
+                NSLayoutConstraint.activate([
+                    nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 2),
+                    nameLabel.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
+                    nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: bubble.trailingAnchor),
+                    nameLabel.bottomAnchor.constraint(lessThanOrEqualTo: bubble.topAnchor, constant: -2)
+                ])
+            }
         }
     }
 

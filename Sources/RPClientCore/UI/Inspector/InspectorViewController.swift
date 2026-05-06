@@ -18,6 +18,7 @@ final class InspectorViewController: NSViewController {
     }
 
     private let segmented = NSSegmentedControl()
+    private let segmentedScroll = NSScrollView()
     private let container = NSView()
     private var panes: [NSViewController?] = []
     private var tabs: [Tab] = []
@@ -35,6 +36,7 @@ final class InspectorViewController: NSViewController {
             Tab(label: "Memory",       make: { MemoryPane() }),
             Tab(label: "Entities",     make: { EntitiesPane() }),
             Tab(label: "World",        make: { WorldInfoPane() }),
+            Tab(label: "Cast",         make: { CastPane() }),
             Tab(label: "Branches",     make: { BranchesPane() }),
             Tab(label: "Tree",         make: { TreePane() }),
             Tab(label: "Suggestions",  make: { SuggestionsPane() }),
@@ -57,17 +59,52 @@ final class InspectorViewController: NSViewController {
         segmented.target = self
         segmented.action = #selector(segmentChanged(_:))
         segmented.translatesAutoresizingMaskIntoConstraints = false
-        v.addSubview(segmented)
+
+        // Phase 8 §4.3 — wrap the segmented control in a horizontal scroll
+        // view so the inspector pane can shrink narrower than the
+        // segmented control's intrinsic width. Without this, adding the
+        // Cast tab pushed the intrinsic width past the pane's minimum
+        // and the user couldn't reclaim the space for the chat window.
+        segmentedScroll.translatesAutoresizingMaskIntoConstraints = false
+        segmentedScroll.hasHorizontalScroller = true
+        segmentedScroll.hasVerticalScroller = false
+        segmentedScroll.drawsBackground = false
+        segmentedScroll.borderType = .noBorder
+        segmentedScroll.documentView = segmented
+        // Persistent legacy-style scroller so the user sees "there are
+        // more tabs that direction" without having to discover the
+        // scroll affordance via trial-and-error. Overlay scrollers were
+        // invisible until scrolled, which made horizontal-scroll feel
+        // broken on the inspector's tab bar.
+        segmentedScroll.scrollerStyle = .legacy
+        segmentedScroll.autohidesScrollers = false
+        segmentedScroll.horizontalScroller?.controlSize = .small
+        v.addSubview(segmentedScroll)
 
         container.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(container)
 
-        NSLayoutConstraint.activate([
-            segmented.topAnchor.constraint(equalTo: v.topAnchor, constant: 6),
-            segmented.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 6),
-            segmented.trailingAnchor.constraint(lessThanOrEqualTo: v.trailingAnchor, constant: -6),
+        // Reserve enough vertical space for the segmented control plus
+        // the persistent legacy scroller below it (~15pt). Segmented
+        // control's natural height is ~23pt at .texturedSquare style.
+        let segHeight: CGFloat = 40
 
-            container.topAnchor.constraint(equalTo: segmented.bottomAnchor, constant: 6),
+        NSLayoutConstraint.activate([
+            segmentedScroll.topAnchor.constraint(equalTo: v.topAnchor, constant: 6),
+            segmentedScroll.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 6),
+            segmentedScroll.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -6),
+            segmentedScroll.heightAnchor.constraint(equalToConstant: segHeight),
+
+            // The segmented control sits inside the scroll view's content
+            // view; pinning top/leading/bottom keeps the row at the right
+            // height and the trailing edge floats to the segmented
+            // control's intrinsic width (so it scrolls horizontally when
+            // the pane is narrower than the full bar).
+            segmented.topAnchor.constraint(equalTo: segmentedScroll.contentView.topAnchor),
+            segmented.leadingAnchor.constraint(equalTo: segmentedScroll.contentView.leadingAnchor),
+            segmented.bottomAnchor.constraint(equalTo: segmentedScroll.contentView.bottomAnchor),
+
+            container.topAnchor.constraint(equalTo: segmentedScroll.bottomAnchor, constant: 6),
             container.leadingAnchor.constraint(equalTo: v.leadingAnchor),
             container.trailingAnchor.constraint(equalTo: v.trailingAnchor),
             container.bottomAnchor.constraint(equalTo: v.bottomAnchor)

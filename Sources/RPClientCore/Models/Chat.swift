@@ -355,6 +355,21 @@ struct Chat: Codable, Equatable, Identifiable {
             activePath = decodedPath ?? (turns.isEmpty ? [] : turns.map(\.id))
         }
         try Chat.validateBranching(turns: turns, activePath: activePath)
+        // Phase 8 §4.3 — promotion-gap heal. Solo→multi promotion (the
+        // user adds a 2nd cast member to a chat with a history) leaves
+        // the pre-promotion assistant turns carrying speakerId=nil,
+        // which validateGroupChat would otherwise reject when cast.count
+        // jumps to > 1. Stamp those legacy turns with characterId (or
+        // cast.first as fallback) — semantically correct, since they
+        // were spoken by the only character in the room at the time.
+        // Already-stamped turns are preserved.
+        if cast.count > 1, let primary = characterId ?? cast.first {
+            for i in turns.indices {
+                if turns[i].role == .assistant && turns[i].speakerId == nil {
+                    turns[i].speakerId = primary
+                }
+            }
+        }
         try Chat.validateGroupChat(cast: cast, turns: turns)
 
         // Phase 7 §3.2 — SceneSummary post-resolve. Legacy scenes stored
@@ -490,8 +505,11 @@ struct Chat: Codable, Equatable, Identifiable {
     }
 
     /// Phase 8 §4.1 — multi-cast invariants. Runs at decode time after the
-    /// branching pass. Throws a `DecodingError.dataCorrupted` describing the
-    /// first violation. Tolerated cases (deliberate, exercised by tests):
+    /// branching pass AND after the §4.3 promotion-gap heal (which stamps
+    /// nil speakerIds on multi-cast chats with characterId / cast.first
+    /// before validation runs). Throws a `DecodingError.dataCorrupted`
+    /// describing the first violation. Tolerated cases (deliberate,
+    /// exercised by tests):
     /// - empty cast (free-form chat) — no constraints on turns.
     /// - single-cast (legacy migrated chat) — assistant turns may carry nil
     ///   speakerId for back-compat with pre-Phase-8 storage.
@@ -499,7 +517,10 @@ struct Chat: Codable, Equatable, Identifiable {
     /// Enforced cases:
     /// - no duplicate UUIDs within `cast`.
     /// - on multi-cast (`cast.count > 1`), every assistant turn must carry a
-    ///   non-nil `speakerId` resolving to a member of `cast`.
+    ///   non-nil `speakerId` resolving to a member of `cast`. Nil
+    ///   speakerIds get healed at decode time so this throw is unreachable
+    ///   from `init(from:)`; direct callers (tests, in-memory mutation
+    ///   audits) still get the diagnostic.
     /// - user turns must NEVER carry a `speakerId` regardless of cast size
     ///   (user-side persona is on `Chat.personaId`, not on the turn).
     static func validateGroupChat(cast: [UUID], turns: [Turn]) throws {

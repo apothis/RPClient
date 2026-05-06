@@ -283,9 +283,23 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             removeEmptyState()
         }
         let lastAssistantIdx = active.lastIndex(where: { $0.role == .assistant })
-        let character = chat.characterId.flatMap { AppState.shared.character(id: $0) }
+        let chatCharacter = chat.characterId.flatMap { AppState.shared.character(id: $0) }
+        let isMultiCast = chat.cast.count > 1
         for (i, t) in active.enumerated() {
-            let tv = TurnView(turn: t, character: character)
+            // Phase 8 §4.3 — per-turn character resolution. Assistant
+            // turns with a speakerId resolve to that cast member's card;
+            // unresolved or nil falls back to the chat-level character
+            // so legacy single-character chats render exactly as today.
+            // User turns get nil (no speaker chip on user bubbles).
+            let character: Character? = {
+                guard t.role == .assistant else { return nil }
+                if let sid = t.speakerId,
+                   let resolved = AppState.shared.character(id: sid) {
+                    return resolved
+                }
+                return chatCharacter
+            }()
+            let tv = TurnView(turn: t, character: character, multiCast: isMultiCast)
             tv.delegate = self
             tv.isLastAssistant = (i == lastAssistantIdx)
             tv.setVariantState(

@@ -12,6 +12,14 @@ final class InputBar: NSView, NSTextViewDelegate {
     private let scrollView = NSScrollView()
     let textView = NSTextView()
     private let primaryButton = NSButton()
+    /// Phase 8 §4.3 — speaker picker. Hidden on solo / free-form chats
+    /// (cast.count <= 1) so it doesn't clutter the input pill. On
+    /// multi-cast chats, shows a compact symbol-button that opens a menu
+    /// of cast members + Auto-mode entries; selecting a member queues a
+    /// one-shot pendingSpeakerId for the next send, selecting an Auto
+    /// switches `chat.speakerSelection` and clears any pending pick.
+    private let speakerButton = NSPopUpButton()
+    private var speakerLeadingConstraint: NSLayoutConstraint?
 
     private enum PrimaryAction { case send, stop }
     private var primaryAction: PrimaryAction = .send
@@ -60,6 +68,31 @@ final class InputBar: NSView, NSTextViewDelegate {
         primaryButton.keyEquivalent = "\r"
         pill.addSubview(primaryButton)
 
+        speakerButton.translatesAutoresizingMaskIntoConstraints = false
+        speakerButton.bezelStyle = .rounded
+        speakerButton.isBordered = true
+        speakerButton.pullsDown = true
+        speakerButton.imagePosition = .imageLeading
+        speakerButton.font = Theme.font(12)
+        speakerButton.target = self
+        speakerButton.action = #selector(speakerMenuPicked(_:))
+        speakerButton.toolTip = "Pick next speaker"
+        speakerButton.isHidden = true
+        pill.addSubview(speakerButton)
+
+        // The speakerButton's leading constraint to scrollView varies with
+        // its visibility (collapsed when hidden) — held as ivars so
+        // updateSpeakerPicker can swap them.
+        let speakerToScroll = scrollView.leadingAnchor.constraint(
+            equalTo: speakerButton.trailingAnchor, constant: 6
+        )
+        speakerLeadingConstraint = speakerToScroll
+        let scrollNoSpeaker = scrollView.leadingAnchor.constraint(
+            equalTo: pill.leadingAnchor, constant: 14
+        )
+        scrollNoSpeaker.priority = NSLayoutConstraint.Priority(rawValue: 250)
+        speakerToScroll.priority = NSLayoutConstraint.Priority.required
+
         NSLayoutConstraint.activate([
             pill.topAnchor.constraint(equalTo: topAnchor, constant: 10),
             pill.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
@@ -68,9 +101,13 @@ final class InputBar: NSView, NSTextViewDelegate {
 
             scrollView.topAnchor.constraint(equalTo: pill.topAnchor, constant: 8),
             scrollView.bottomAnchor.constraint(equalTo: pill.bottomAnchor, constant: -8),
-            scrollView.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: 14),
+            scrollNoSpeaker,
             scrollView.trailingAnchor.constraint(equalTo: primaryButton.leadingAnchor, constant: -8),
             scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 22),
+
+            speakerButton.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: 8),
+            speakerButton.bottomAnchor.constraint(equalTo: pill.bottomAnchor, constant: -8),
+            speakerButton.heightAnchor.constraint(equalToConstant: 26),
 
             primaryButton.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -6),
             primaryButton.bottomAnchor.constraint(equalTo: pill.bottomAnchor, constant: -6),
@@ -87,7 +124,12 @@ final class InputBar: NSView, NSTextViewDelegate {
             name: AppNotification.statusChanged, object: nil)
         nc.addObserver(self, selector: #selector(handleFontChanged),
             name: AppNotification.fontChanged, object: nil)
+        nc.addObserver(self, selector: #selector(updateSpeakerPicker),
+            name: AppNotification.currentChatChanged, object: nil)
+        nc.addObserver(self, selector: #selector(updateSpeakerPicker),
+            name: AppNotification.chatUpdated, object: nil)
         updateButtons()
+        updateSpeakerPicker()
     }
 
     @objc private func handleFontChanged() {
@@ -160,6 +202,82 @@ final class InputBar: NSView, NSTextViewDelegate {
             && !AppState.shared.isExtracting {
             updateButtons()
         }
+    }
+
+    // MARK: - Speaker picker (Phase 8 §4.3)
+
+    @objc private func updateSpeakerPicker() {
+        guard let chat = AppState.shared.currentChat else {
+            speakerButton.isHidden = true
+            speakerLeadingConstraint?.isActive = false
+            return
+        }
+        let isMultiCast = chat.cast.count > 1
+        speakerButton.isHidden = !isMultiCast
+        speakerLeadingConstraint?.isActive = isMultiCast
+        if !isMultiCast { return }
+
+        let nextPick = SpeakerPicker.next(in: chat) ?? chat.cast.first
+        let nextName = nextPick.flatMap { AppState.shared.character(id: $0)?.name }
+            ?? "?"
+
+        let menu = NSMenu()
+        // First item is the menu's "title" for pulldown popups — set it to
+        // "Next: <name>" so the button face shows who's about to speak
+        // and a chevron makes it readable as a dropdown. Disabled so a
+        // pick on the title is a no-op.
+        let header = NSMenuItem(title: "Next: \(nextName)", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        menu.addItem(NSMenuItem.separator())
+
+        // Auto-mode entries. Picking switches `chat.speakerSelection`
+        // and clears any pending one-shot pick.
+        let modes: [(SpeakerSelectionMode, String)] = [
+            (.roundRobin, "Auto — round-robin"),
+            (.pooled,     "Auto — pooled"),
+            (.manual,     "Auto — manual"),
+            (.director,   "Auto — director (LLM, experimental)"),
+        ]
+        for (mode, title) in modes {
+            let item = NSMenuItem(title: title, action: #selector(speakerMenuPicked(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = mode.rawValue
+            item.state = (chat.speakerSelection == mode) ? .on : .off
+            menu.addItem(item)
+        }
+
+        menu.addItem(NSMenuItem.separator())
+        // Per-cast members. Picking sets a one-shot `pendingSpeakerId`.
+        for cid in chat.cast {
+            let name = AppState.shared.character(id: cid)?.name ?? "Unknown"
+            let label = (chat.pendingSpeakerId == cid) ? "✓ \(name) (one-shot)" : name
+            let item = NSMenuItem(title: label, action: #selector(speakerMenuPicked(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = cid.uuidString
+            menu.addItem(item)
+        }
+        speakerButton.menu = menu
+        // Pull-down popups treat item 0 as the title — ours is a disabled
+        // "Next: …" header which is fine to surface.
+        speakerButton.selectItem(at: 0)
+    }
+
+    @objc private func speakerMenuPicked(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String else { return }
+        if let mode = SpeakerSelectionMode(rawValue: raw) {
+            AppState.shared.updateCurrent { c in
+                c.speakerSelection = mode
+                c.pendingSpeakerId = nil
+            }
+        } else if let cid = UUID(uuidString: raw) {
+            AppState.shared.updateCurrent { c in
+                c.pendingSpeakerId = cid
+            }
+        }
+        // updateSpeakerPicker fires via chatUpdated; reset the popup
+        // selection so the menu header re-renders.
+        speakerButton.selectItem(at: 0)
     }
 
     // Enter sends; Shift+Enter inserts a newline.

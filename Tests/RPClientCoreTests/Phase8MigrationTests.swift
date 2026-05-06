@@ -154,6 +154,69 @@ func phase8MigrationTests() -> TestSuite {
         try expectEqual(chat.cast, [cid])
     }
 
+    s.test("v4 multi-cast chat with legacy nil speakerIds on assistant turns auto-stamps them on decode") {
+        // Reproduces the §4.3 promotion-gap bug: a chat that was solo
+        // (cast=[X]) gained a 2nd cast member, so old assistant turns
+        // (saved with speakerId=nil under the cast.count <= 1 tolerance)
+        // would otherwise trip validateGroupChat. Decode must auto-stamp
+        // the legacy turns with characterId (or cast.first) so the chat
+        // loads instead of being silently skipped.
+        let chatId = UUID()
+        let primary = UUID()
+        let secondary = UUID()
+        let userTurnId = UUID()
+        let asstLegacyId = UUID()
+        let asstNewId = UUID()
+        let json = """
+        {
+            "id": "\(chatId.uuidString)",
+            "title": "Promoted to group",
+            "created": "\(nowStr)",
+            "modified": "\(nowStr)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced",
+            "schemaVersion": 4,
+            "cast": ["\(primary.uuidString)", "\(secondary.uuidString)"],
+            "characterId": "\(primary.uuidString)",
+            "turns": [
+                {"id": "\(userTurnId.uuidString)", "role": "user", "text": "hi", "ts": "\(nowStr)", "edited": false},
+                {"id": "\(asstLegacyId.uuidString)", "role": "assistant", "text": "from solo days", "ts": "\(nowStr)", "edited": false},
+                {"id": "\(asstNewId.uuidString)", "role": "assistant", "text": "post-promotion", "ts": "\(nowStr)", "edited": false, "speakerId": "\(secondary.uuidString)"}
+            ]
+        }
+        """
+        let chat = try decoder.decode(Chat.self, from: Data(json.utf8))
+        // Legacy nil speakerId got stamped with characterId (the
+        // pre-promotion solo speaker — semantically correct: those turns
+        // were spoken by the only character in the room at the time).
+        try expectEqual(chat.turns[1].speakerId, primary)
+        // Already-stamped speakerIds are preserved.
+        try expectEqual(chat.turns[2].speakerId, secondary)
+    }
+
+    s.test("decode auto-stamp falls back to cast.first when characterId is nil") {
+        let chatId = UUID()
+        let a = UUID(), b = UUID()
+        let asstId = UUID()
+        let json = """
+        {
+            "id": "\(chatId.uuidString)",
+            "title": "No characterId",
+            "created": "\(nowStr)",
+            "modified": "\(nowStr)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced",
+            "schemaVersion": 4,
+            "cast": ["\(a.uuidString)", "\(b.uuidString)"],
+            "turns": [
+                {"id": "\(asstId.uuidString)", "role": "assistant", "text": "x", "ts": "\(nowStr)", "edited": false}
+            ]
+        }
+        """
+        let chat = try decoder.decode(Chat.self, from: Data(json.utf8))
+        try expectEqual(chat.turns[0].speakerId, a)
+    }
+
     s.test("v4 chat with cast=[] and characterId set self-heals on decode") {
         // The state a fresh new-chat path could write before the didSet
         // observer was added: explicit schemaVersion 4, empty cast, but
@@ -217,30 +280,13 @@ func phase8MigrationTests() -> TestSuite {
 
     // MARK: - Multi-cast validation invariants
 
-    s.test("v4 multi-cast chat throws when assistant turn has nil speakerId") {
-        let chatId = UUID()
-        let castA = UUID(), castB = UUID()
-        let userTurnId = UUID(), asstTurnId = UUID()
-        let json = """
-        {
-            "id": "\(chatId.uuidString)",
-            "title": "Group",
-            "created": "\(nowStr)",
-            "modified": "\(nowStr)",
-            "templateId": "gemma",
-            "samplerPresetId": "balanced",
-            "schemaVersion": 4,
-            "cast": ["\(castA.uuidString)", "\(castB.uuidString)"],
-            "turns": [
-                {"id": "\(userTurnId.uuidString)", "role": "user", "text": "hi", "ts": "\(nowStr)", "edited": false},
-                {"id": "\(asstTurnId.uuidString)", "role": "assistant", "text": "hello", "ts": "\(nowStr)", "edited": false}
-            ]
-        }
-        """
-        try expectThrows("expected decode to throw on missing speakerId in multi-cast") {
-            _ = try decoder.decode(Chat.self, from: Data(json.utf8))
-        }
-    }
+    // Note: a previous test here asserted decode threw on a multi-cast
+    // chat with nil speakerId on an assistant turn. That semantic was
+    // dropped in favour of the §4.3 promotion-gap heal — cast.count > 1
+    // chats with legacy nil speakerIds auto-stamp at decode time (see the
+    // "auto-stamps them on decode" test below), so the throw is no
+    // longer reachable. The dangling-speakerId case (set to a UUID
+    // not in cast) still throws — that's the next test.
 
     s.test("v4 chat throws when assistant turn speakerId is not in cast") {
         let chatId = UUID()
