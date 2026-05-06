@@ -1,6 +1,6 @@
 import AppKit
 
-final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDelegate, EmptyStateViewDelegate, NSMenuItemValidation {
+final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDelegate, EmptyStateViewDelegate, NSMenuItemValidation, NSPopoverDelegate {
     private let scrollView = NSScrollView()
     private let stackView = NSStackView()
     private let inputBar = InputBar()
@@ -295,14 +295,23 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             )
             // Branch glyph in the gutter when this turn has siblings —
             // i.e., the parent has more than one child. Only meaningful for
-            // non-root turns.
+            // non-root turns. Also push N/M position so the glyph can show
+            // "2/3" inline.
             if let pid = t.parentId {
-                let count = chat.children(of: pid).count
-                tv.hasSiblings = count > 1
-                if count > 1 {
-                    DebugLog.shared.write("ui: glyph on i=\(i) (\(count) siblings)")
+                let siblings = chat.children(of: pid)
+                tv.hasSiblings = siblings.count > 1
+                tv.siblingCount = siblings.count
+                tv.siblingIndex = (siblings.firstIndex(where: { $0.id == t.id }) ?? 0) + 1
+                if siblings.count > 1 {
+                    DebugLog.shared.write(
+                        "ui: glyph on i=\(i) (\(tv.siblingIndex)/\(siblings.count) siblings)"
+                    )
                 }
+                // Toolbar fork button is meaningful on every assistant turn
+                // with a parent (i.e., not the root greeting).
+                tv.canFork = (t.role == .assistant)
             }
+            tv.setBranchPopoverOpen(false)
             tv.translatesAutoresizingMaskIntoConstraints = false
             stackView.addArrangedSubview(tv)
             tv.widthAnchor.constraint(
@@ -399,7 +408,11 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
                 activeIsStale: chat.isVariantStale(turnId: t.id, variantIndex: t.activeVariant)
             )
             if let pid = t.parentId {
-                tv.hasSiblings = chat.children(of: pid).count > 1
+                let siblings = chat.children(of: pid)
+                tv.hasSiblings = siblings.count > 1
+                tv.siblingCount = siblings.count
+                tv.siblingIndex = (siblings.firstIndex(where: { $0.id == t.id }) ?? 0) + 1
+                tv.canFork = (t.role == .assistant)
             }
             // Paging changes which variant's text is mirrored on `text`; the
             // bubble needs to reflect that immediately.
@@ -555,6 +568,10 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         rebuild()
     }
 
+    func turnViewDidRequestForkFrom(_ view: TurnView) {
+        AppState.shared.forkFrom(turnId: view.turnId)
+    }
+
     func turnViewDidRequestContinue(_ view: TurnView) {
         AppState.shared.continueGeneration()
     }
@@ -581,6 +598,14 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         }
     }
 
+    // MARK: - NSPopoverDelegate
+
+    func popoverDidClose(_ notification: Notification) {
+        siblingPopoverAnchorView?.setBranchPopoverOpen(false)
+        siblingPopoverAnchorView = nil
+        siblingPopover = nil
+    }
+
     func turnViewDidRequestSiblingPopover(_ view: TurnView, anchor: NSView) {
         guard let chat = AppState.shared.currentChat,
               let turn = chat.turn(id: view.turnId),
@@ -591,11 +616,17 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     }
 
     private var siblingPopover: NSPopover?
+    /// The TurnView whose gutter glyph triggered the currently-open popover.
+    /// Held weakly so we can flip its glyph highlight off when the popover
+    /// closes (NSPopoverDelegate.popoverDidClose) without leaking when the
+    /// view is rebuilt out from under us.
+    private weak var siblingPopoverAnchorView: TurnView?
 
     private func presentSiblingPopover(siblings: [Turn], activeId: UUID, anchor: NSView) {
         siblingPopover?.close()
         let pop = NSPopover()
         pop.behavior = .transient
+        pop.delegate = self
         pop.contentViewController = SiblingPickerViewController(
             siblings: siblings,
             activeId: activeId,
@@ -606,6 +637,8 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             }
         )
         siblingPopover = pop
+        siblingPopoverAnchorView = anchor.enclosingTurnView()
+        siblingPopoverAnchorView?.setBranchPopoverOpen(true)
         pop.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxX)
     }
 
@@ -810,4 +843,18 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
 
 private final class FlippedClipView: NSClipView {
     override var isFlipped: Bool { true }
+}
+
+private extension NSView {
+    /// Walk up the superview chain until we hit a TurnView (or run out).
+    /// Used by the sibling-popover routing so we can pin glyph highlight
+    /// to the right TurnView regardless of which inner element fired.
+    func enclosingTurnView() -> TurnView? {
+        var v: NSView? = self
+        while let cur = v {
+            if let tv = cur as? TurnView { return tv }
+            v = cur.superview
+        }
+        return nil
+    }
 }

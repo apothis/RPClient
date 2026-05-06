@@ -539,12 +539,21 @@ final class AppState {
     }
 
     private func healthCheckTick() {
-        guard !isStreaming, !isSummarizing, !isExtracting, !isRetrieving, !isIndexing else { return }
+        guard !isStreaming, !isSummarizing, !isExtracting, !isRetrieving, !isIndexing else {
+            DebugLog.shared.write(
+                "health: tick skipped (busy: stream=\(isStreaming) sum=\(isSummarizing) extr=\(isExtracting) retr=\(isRetrieving) idx=\(isIndexing))"
+            )
+            return
+        }
+        let startedAt = Date()
+        DebugLog.shared.write("health: tick → GET /api/v1/model (\(kobold.baseURL.absoluteString))")
         kobold.fetchModel { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self else { return }
+                let ms = Int(Date().timeIntervalSince(startedAt) * 1000)
                 switch result {
                 case .success(let name):
+                    DebugLog.shared.write("health: tick ok in \(ms)ms model=\(name)")
                     if self.modelName != name {
                         self.modelName = name
                         self.detectedTemplateId = Templates.detect(forModelName: name)
@@ -557,6 +566,7 @@ final class AppState {
                         self.refreshEmbeddingInfo()
                     }
                 case .failure(let err):
+                    DebugLog.shared.write("health: tick FAILED in \(ms)ms — \(err)")
                     self.markServerReachable(false, error: "\(err)")
                 }
             }

@@ -19,6 +19,12 @@ protocol TurnViewDelegate: AnyObject {
     /// popover anchored at `anchor` listing sibling branches, letting the
     /// user pick one to switch to (`AppState.switchBranch`).
     func turnViewDidRequestSiblingPopover(_ view: TurnView, anchor: NSView)
+    /// Phase 7 §3.3+ — toolbar branch-fork button clicked. Equivalent to
+    /// Cmd-B: creates a new sibling under this turn's parent and streams
+    /// into it. Surfaced on every assistant turn that has a parent (i.e.
+    /// not the root), so users don't have to think about which turn the
+    /// keyboard shortcut targets.
+    func turnViewDidRequestForkFrom(_ view: TurnView)
 }
 
 private final class FocusAwareTextView: NSTextView {
@@ -73,6 +79,10 @@ final class TurnView: NSView, NSTextViewDelegate {
     private let copyButton: NSButton
     private let editButton: NSButton
     private let regenButton: NSButton
+    /// Phase 7 §3.3+ — explicit "fork from this reply" toolbar button.
+    /// Hover-revealed alongside regen on every assistant turn that has a
+    /// parent (i.e., not the root greeting). Fires the same path as Cmd-B.
+    private let forkButton: NSButton
     private let continueButton: NSButton
     private let deleteButton: NSButton
     private let saveButton: NSButton
@@ -129,6 +139,61 @@ final class TurnView: NSView, NSTextViewDelegate {
         didSet {
             guard oldValue != hasSiblings else { return }
             branchGlyph.isHidden = !hasSiblings
+            updateBranchGlyphLabel()
+        }
+    }
+
+    /// Total siblings (parent's child count, including this one). Used to
+    /// render the inline "N/M" label on the gutter glyph so the user
+    /// knows there are alternatives without having to open the popover.
+    /// Set by ChatViewController.
+    var siblingCount: Int = 1 {
+        didSet { updateBranchGlyphLabel() }
+    }
+
+    /// 1-based index of this turn within its parent's children (sorted by
+    /// ts). Drives the "N" in "N/M".
+    var siblingIndex: Int = 1 {
+        didSet { updateBranchGlyphLabel() }
+    }
+
+    /// Phase 7 §3.3+ — toolbar fork button only makes sense on assistant
+    /// turns that have a parent (the root greeting can't be forked from).
+    /// Set by ChatViewController during rebuild.
+    var canFork: Bool = false {
+        didSet {
+            guard oldValue != canFork else { return }
+            updateToolbarForEditState()
+        }
+    }
+
+    private func updateBranchGlyphLabel() {
+        guard hasSiblings, siblingCount > 1 else {
+            branchGlyph.title = ""
+            branchGlyph.imagePosition = .imageOnly
+            return
+        }
+        branchGlyph.title = " \(siblingIndex)/\(siblingCount)"
+        branchGlyph.imagePosition = .imageLeading
+        branchGlyph.font = Theme.font(11, weight: .medium)
+    }
+
+    /// Toggle the gutter glyph's "selected" appearance — set true while
+    /// the sibling popover is open so the user has a clear visual anchor
+    /// back to where they clicked. ChatViewController flips this on
+    /// present and back off when the popover closes.
+    func setBranchPopoverOpen(_ open: Bool) {
+        // controlAccentColor when open (matches the active sibling row in
+        // the popover); slightly faded accent when closed (the default
+        // "this turn has alternatives" signal).
+        if open {
+            branchGlyph.contentTintColor = .controlAccentColor
+            branchGlyph.layer?.backgroundColor = NSColor.controlAccentColor
+                .withAlphaComponent(0.18).cgColor
+            branchGlyph.layer?.cornerRadius = 4
+        } else {
+            branchGlyph.contentTintColor = .controlAccentColor
+            branchGlyph.layer?.backgroundColor = NSColor.clear.cgColor
         }
     }
 
@@ -214,6 +279,7 @@ final class TurnView: NSView, NSTextViewDelegate {
         copyButton = TurnView.makeIconButton(symbol: "doc.on.doc", tooltip: "Copy")
         editButton = TurnView.makeIconButton(symbol: "pencil", tooltip: "Edit")
         regenButton = TurnView.makeIconButton(symbol: "arrow.clockwise", tooltip: "Regenerate")
+        forkButton = TurnView.makeIconButton(symbol: "arrow.triangle.branch", tooltip: "Fork branch (⌘B)")
         continueButton = TurnView.makeIconButton(symbol: "arrow.forward", tooltip: "Continue")
         deleteButton = TurnView.makeIconButton(symbol: "trash", tooltip: "Delete")
         saveButton = TurnView.makeIconButton(symbol: "checkmark", tooltip: "Save (⌘↵)")
@@ -292,6 +358,7 @@ final class TurnView: NSView, NSTextViewDelegate {
         copyButton.target = self;     copyButton.action     = #selector(copyTapped)
         editButton.target = self;     editButton.action     = #selector(editTapped)
         regenButton.target = self;    regenButton.action    = #selector(regenTapped)
+        forkButton.target = self;     forkButton.action     = #selector(forkTapped)
         continueButton.target = self; continueButton.action = #selector(continueTapped)
         deleteButton.target = self;   deleteButton.action   = #selector(deleteTapped)
         saveButton.target = self;     saveButton.action     = #selector(saveTapped)
@@ -301,6 +368,7 @@ final class TurnView: NSView, NSTextViewDelegate {
         discardVariantButton.target = self; discardVariantButton.action = #selector(discardVariantTapped)
         branchGlyph.target = self; branchGlyph.action = #selector(branchGlyphTapped)
         branchGlyph.isHidden = true
+        branchGlyph.wantsLayer = true
         branchGlyph.translatesAutoresizingMaskIntoConstraints = false
         addSubview(branchGlyph)
 
@@ -309,6 +377,10 @@ final class TurnView: NSView, NSTextViewDelegate {
 
         // Initially hidden — non-last-assistant doesn't show regen/continue.
         regenButton.isHidden = !(role == .assistant)
+        // Fork button shows on every assistant turn (not just trailing) so
+        // the user can fork from any reply via the UI. Final visibility is
+        // gated in `updateToolbarForEditState` once parentId is known.
+        forkButton.isHidden = !(role == .assistant)
         continueButton.isHidden = !(role == .assistant)
         saveButton.isHidden = true
         cancelButton.isHidden = true
@@ -333,7 +405,7 @@ final class TurnView: NSView, NSTextViewDelegate {
         toolbar.alphaValue = 0
         for b in [prevVariantButton as NSView, variantLabel, nextVariantButton,
                   discardVariantButton,
-                  copyButton, editButton, regenButton, continueButton, deleteButton,
+                  copyButton, editButton, regenButton, forkButton, continueButton, deleteButton,
                   saveButton, cancelButton] {
             toolbar.addArrangedSubview(b)
         }
@@ -454,6 +526,10 @@ final class TurnView: NSView, NSTextViewDelegate {
         delegate?.turnViewDidRequestRegen(self)
     }
 
+    @objc private func forkTapped() {
+        delegate?.turnViewDidRequestForkFrom(self)
+    }
+
     @objc private func continueTapped() {
         delegate?.turnViewDidRequestContinue(self)
     }
@@ -503,6 +579,7 @@ final class TurnView: NSView, NSTextViewDelegate {
         copyButton.isHidden = editing
         editButton.isHidden = editing
         regenButton.isHidden = editing || !(role == .assistant && isLastAssistant)
+        forkButton.isHidden = editing || !(role == .assistant && canFork)
         continueButton.isHidden = editing || !(role == .assistant && isLastAssistant)
         deleteButton.isHidden = editing
         saveButton.isHidden = !editing
