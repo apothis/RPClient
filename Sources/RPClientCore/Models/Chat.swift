@@ -587,6 +587,17 @@ struct Chat: Codable, Equatable, Identifiable {
             leaf = chosenChild
         }
         activePath = fullPath
+
+        // 4. Clamp summarizedThrough to the new path's length so
+        //    PromptBuilder.verbatimTurns doesn't slice past the end. Phase 7
+        //    §3.2.D — per-branch rolling-summary state is correct long-term
+        //    but a separate refactor; for now, accept that switching to a
+        //    shorter branch loses the high-water mark for "how far we'd
+        //    summarised the previous branch." Next summarizer cycle on the
+        //    new branch will naturally re-establish it.
+        if summarizedThrough > activePath.count {
+            summarizedThrough = activePath.count
+        }
     }
 
     /// Pick the next child to descend into when walking down from `turnId`.

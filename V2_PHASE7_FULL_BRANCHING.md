@@ -389,7 +389,7 @@ Global keyboard shortcut. Forks the parent of the currently focused turn (if any
 
 **Effort:** ~1 day. Most of it is the helper API + migration tests; the type additions are a few lines.
 
-### §3.2 — Memory subsystem migration
+### §3.2 — Memory subsystem migration ✅ shipped 2026-05-06
 
 **In:** `SceneSummary.firstTurnId`/`lastTurnId`, `Chunk.firstTurnId`/`lastTurnId`, `VectorStore.invalidate(turnIds:)` + `clamp(toTurnIdsPresent:)`, `Chunker.chunks(for:)` walks `activeTurns`, `RetrievalEngine.preFilter(chat:summarizedThrough:)`, `AppState.maybeBreakScene` ID conversion. Two-pass legacy decoding for both SceneSummary and Chunk. Migration of persisted `<chatId>.vec.json` files (lazy on first load post-upgrade).
 

@@ -259,7 +259,47 @@ func chatBranchingTests() -> TestSuite {
         try expectEqual(chat.turn(id: root.id)?.activeChildId, b.id)
     }
 
-    s.test("switchBranch(to:) is a no-op when target id doesn't exist") {
+    // MARK: - summarizedThrough clamp on branch switch (Phase 7 §3.2.D)
+
+    s.test("switchBranch(to:) clamps summarizedThrough to the new path's length when shorter") {
+        // Long path A summarized through turn 5; switch to short path B
+        // (length 3) — summarizedThrough must clamp to 3 so
+        // PromptBuilder.verbatimTurns doesn't try to slice past the end.
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        let a1 = makeAssistant(parentId: root.id, text: "A1")
+        let a2 = makeUser(parentId: a1.id, text: "A2")
+        let a3 = makeAssistant(parentId: a2.id, text: "A3")
+        let a4 = makeUser(parentId: a3.id, text: "A4")
+        let a5 = makeAssistant(parentId: a4.id, text: "A5")
+        let b1 = makeAssistant(parentId: root.id, text: "B1")
+        let b2 = makeUser(parentId: b1.id, text: "B2")
+        chat.turns = [root, a1, a2, a3, a4, a5, b1, b2]
+        chat.activePath = [root.id, a1.id, a2.id, a3.id, a4.id, a5.id]
+        chat.summarizedThrough = 5
+
+        chat.switchBranch(to: b1.id)
+        try expectEqual(chat.activePath, [root.id, b1.id, b2.id])
+        try expectEqual(chat.summarizedThrough, 3, "clamped to the new path length")
+    }
+
+    s.test("switchBranch(to:) leaves summarizedThrough alone when new path is longer") {
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        let a1 = makeAssistant(parentId: root.id, text: "A1")
+        let b1 = makeAssistant(parentId: root.id, text: "B1")
+        let b2 = makeUser(parentId: b1.id, text: "B2")
+        let b3 = makeAssistant(parentId: b2.id, text: "B3")
+        chat.turns = [root, a1, b1, b2, b3]
+        chat.activePath = [root.id, a1.id]
+        chat.summarizedThrough = 1
+
+        chat.switchBranch(to: b1.id)
+        try expectEqual(chat.activePath, [root.id, b1.id, b2.id, b3.id])
+        try expectEqual(chat.summarizedThrough, 1, "no clamp needed; new path is longer")
+    }
+
+    s.test("switchBranch(to:) on a turn already on the path is a no-op") {
         var chat = Chat(title: "Test")
         let root = Turn(role: .user, text: "root")
         chat.turns = [root]

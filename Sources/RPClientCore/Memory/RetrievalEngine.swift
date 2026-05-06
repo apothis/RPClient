@@ -234,6 +234,11 @@ final class RetrievalEngine {
     ///     catching up to the user's actual most-recent message. Hard rule:
     ///     never inject content that's already verbatim in the prompt.
     /// Public so tests can exercise the rules without mocking the embed call.
+    ///
+    /// Pre-Phase-7 signature, kept for legacy callers (existing tests).
+    /// New code should use `excludePredicate(chat:summarizedThrough:recencyExclusion:)`
+    /// — branch-aware, resolves chunk endpoints via `chat.activePosition(of:)`
+    /// so off-branch chunks aren't caught by the recency / verbatim filter.
     static func excludePredicate(
         turnsCount: Int,
         summarizedThrough: Int,
@@ -244,6 +249,49 @@ final class RetrievalEngine {
         return { chunk in
             chunk.lastTurnIdx >= recencyCutoff
                 || chunk.lastTurnIdx >= verbatimCutoff
+        }
+    }
+
+    /// Phase 7 §3.2.C — branch-aware exclude predicate. Resolves each
+    /// chunk's `lastTurnId` against the chat's current active path; chunks
+    /// whose endpoint is off-branch (UUID set but doesn't resolve) escape
+    /// the recency/verbatim filter and remain retrievable by similarity.
+    /// Cross-branch memory is exactly what retrieval is for.
+    ///
+    /// Legacy chunks (nil UUIDs) fall back to the Int snapshot so the
+    /// filter still applies during the migration window.
+    static func excludePredicate(
+        chat: Chat,
+        summarizedThrough: Int,
+        recencyExclusion: Int
+    ) -> (Chunk) -> Bool {
+        // Same fallback rule as Chunker / renderableScenes: in-memory chats
+        // bypass the decode-time spine migration and arrive with empty
+        // activePath; treat them as a spine over chat.turns.
+        let pathCount = chat.activePath.isEmpty && !chat.turns.isEmpty
+            ? chat.turns.count
+            : chat.activePath.count
+        let recencyCutoff = pathCount - recencyExclusion
+        let verbatimCutoff = summarizedThrough
+        return { chunk in
+            // Resolve the chunk's last endpoint to a position on the
+            // current active path. Three cases:
+            //   1. Phase 7+ chunk with on-branch endpoint → resolve via UUID,
+            //      apply the recency / verbatim filter.
+            //   2. Phase 7+ chunk with off-branch endpoint → UUID present
+            //      but doesn't resolve; return false (don't exclude — let
+            //      cosine similarity decide).
+            //   3. Legacy chunk (nil UUIDs) → fall back to the Int snapshot
+            //      so the filter still applies during the migration window.
+            let lastPos: Int?
+            if let id = chunk.lastTurnId {
+                lastPos = chat.activePosition(of: id)
+                if lastPos == nil { return false } // off-branch
+            } else {
+                lastPos = chunk.lastTurnIdx
+            }
+            guard let last = lastPos else { return false }
+            return last >= recencyCutoff || last >= verbatimCutoff
         }
     }
 
@@ -275,7 +323,7 @@ final class RetrievalEngine {
                     return
                 }
                 let predicate = RetrievalEngine.excludePredicate(
-                    turnsCount: chat.turns.count,
+                    chat: chat,
                     summarizedThrough: chat.summarizedThrough,
                     recencyExclusion: settings.recencyExclusion
                 )

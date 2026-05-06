@@ -43,6 +43,7 @@ let suites: [TestSuite] = [
     chatBranchingTests(),
     sceneSummaryMigrationTests(),
     chunkBranchingTests(),
+    retrievalEngineBranchingTests(),
 ]
 
 exit(TestRunner.run(suites))
