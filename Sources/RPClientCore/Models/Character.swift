@@ -50,6 +50,31 @@ struct Character: Codable, Equatable, Identifiable {
     /// (`agnai/voice`, `risuai`, RPClient's own `rpclient`).
     var extensions: [String: JSONValue]?
 
+    // MARK: - Phase 9 §5.2b — v3 opt-in additions
+
+    /// V3 spec field. Replaces `{{char}}` if non-nil; falls back to `name`.
+    /// Useful when an in-fiction nickname differs from the card's index name.
+    var nickname: String?
+
+    /// V3 spec field. Greetings used only on group-chat seeding (§4 cast-add
+    /// path). Empty array on solo cards.
+    var groupOnlyGreetings: [String]
+
+    /// V3 spec field. Provenance: URLs or external IDs. Read-only on import,
+    /// append-only on edit per the spec.
+    var source: [String]
+
+    /// V3 spec field. Language-keyed creator notes (ISO 639-1 keys); the `en`
+    /// entry is expected to mirror `creatorNotes` when both are populated.
+    var creatorNotesMultilingual: [String: String]?
+
+    /// V3 spec field. Application-set; user is not expected to edit.
+    var creationDate: Date?
+
+    /// V3 spec field. Updated on export. Application-set; user is not expected
+    /// to edit.
+    var modificationDate: Date?
+
     init(
         id: UUID = UUID(),
         name: String = "",
@@ -67,7 +92,13 @@ struct Character: Codable, Equatable, Identifiable {
         created: Date = Date(),
         messageExample: String = "",
         creatorNotes: String? = nil,
-        extensions: [String: JSONValue]? = nil
+        extensions: [String: JSONValue]? = nil,
+        nickname: String? = nil,
+        groupOnlyGreetings: [String] = [],
+        source: [String] = [],
+        creatorNotesMultilingual: [String: String]? = nil,
+        creationDate: Date? = nil,
+        modificationDate: Date? = nil
     ) {
         self.id = id
         self.name = name
@@ -86,6 +117,12 @@ struct Character: Codable, Equatable, Identifiable {
         self.messageExample = messageExample
         self.creatorNotes = creatorNotes
         self.extensions = extensions
+        self.nickname = nickname
+        self.groupOnlyGreetings = groupOnlyGreetings
+        self.source = source
+        self.creatorNotesMultilingual = creatorNotesMultilingual
+        self.creationDate = creationDate
+        self.modificationDate = modificationDate
     }
 
     init(from decoder: Decoder) throws {
@@ -107,5 +144,11 @@ struct Character: Codable, Equatable, Identifiable {
         messageExample = try c.decodeIfPresent(String.self, forKey: .messageExample) ?? ""
         creatorNotes = try c.decodeIfPresent(String.self, forKey: .creatorNotes)
         extensions = try c.decodeIfPresent([String: JSONValue].self, forKey: .extensions)
+        nickname = try c.decodeIfPresent(String.self, forKey: .nickname)
+        groupOnlyGreetings = try c.decodeIfPresent([String].self, forKey: .groupOnlyGreetings) ?? []
+        source = try c.decodeIfPresent([String].self, forKey: .source) ?? []
+        creatorNotesMultilingual = try c.decodeIfPresent([String: String].self, forKey: .creatorNotesMultilingual)
+        creationDate = try c.decodeIfPresent(Date.self, forKey: .creationDate)
+        modificationDate = try c.decodeIfPresent(Date.self, forKey: .modificationDate)
     }
 }

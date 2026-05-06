@@ -171,6 +171,91 @@ func phase9CharacterTests() -> TestSuite {
         try expectTrue(c.extensions == nil)
     }
 
+    // MARK: - Character v3 opt-in additions (§5.2b)
+
+    s.test("Character defaults v3 opt-in fields to nil/empty") {
+        let c = Character(name: "Test")
+        try expectTrue(c.nickname == nil)
+        try expectEqual(c.groupOnlyGreetings, [])
+        try expectEqual(c.source, [])
+        try expectTrue(c.creatorNotesMultilingual == nil)
+        try expectTrue(c.creationDate == nil)
+        try expectTrue(c.modificationDate == nil)
+    }
+
+    s.test("Character init carries v3 fields verbatim") {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let c = Character(
+            name: "Marin",
+            nickname: "Captain",
+            groupOnlyGreetings: ["Greetings, crew.", "Welcome aboard."],
+            source: ["https://chub.ai/characters/foo/marin", "char-id-12345"],
+            creatorNotesMultilingual: [
+                "en": "NSFW; dom-leaning",
+                "ja": "アダルト向け",
+            ],
+            creationDate: now,
+            modificationDate: now
+        )
+        try expectEqual(c.nickname, "Captain")
+        try expectEqual(c.groupOnlyGreetings.count, 2)
+        try expectEqual(c.groupOnlyGreetings[0], "Greetings, crew.")
+        try expectEqual(c.source.count, 2)
+        try expectEqual(c.source[1], "char-id-12345")
+        try expectEqual(c.creatorNotesMultilingual?["en"], "NSFW; dom-leaning")
+        try expectEqual(c.creatorNotesMultilingual?["ja"], "アダルト向け")
+        try expectEqual(c.creationDate, now)
+        try expectEqual(c.modificationDate, now)
+    }
+
+    s.test("Character Codable round-trips v3 opt-in fields") {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let original = Character(
+            name: "Marin",
+            nickname: "Captain",
+            groupOnlyGreetings: ["Hello, crew."],
+            source: ["https://example.com/marin"],
+            creatorNotesMultilingual: ["en": "test"],
+            creationDate: now,
+            modificationDate: now
+        )
+        let encoded = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(Character.self, from: encoded)
+        try expectEqual(decoded.nickname, original.nickname)
+        try expectEqual(decoded.groupOnlyGreetings, original.groupOnlyGreetings)
+        try expectEqual(decoded.source, original.source)
+        try expectEqual(decoded.creatorNotesMultilingual, original.creatorNotesMultilingual)
+        try expectEqual(decoded.creationDate, original.creationDate)
+        try expectEqual(decoded.modificationDate, original.modificationDate)
+    }
+
+    s.test("Character v3 fields decode missing-as-default from legacy JSON") {
+        // Pre-Phase-9 records won't have any v3 fields. They must decode
+        // cleanly with sensible defaults so loading old characters doesn't
+        // break.
+        let legacy = """
+        {
+            "id": "11111111-2222-3333-4444-555555555555",
+            "name": "Legacy",
+            "description": "",
+            "personality": "",
+            "scenario": "",
+            "firstMessage": "",
+            "alternateGreetings": [],
+            "tags": [],
+            "charBook": [],
+            "created": 0
+        }
+        """.data(using: .utf8)!
+        let c = try JSONDecoder().decode(Character.self, from: legacy)
+        try expectTrue(c.nickname == nil)
+        try expectEqual(c.groupOnlyGreetings, [])
+        try expectEqual(c.source, [])
+        try expectTrue(c.creatorNotesMultilingual == nil)
+        try expectTrue(c.creationDate == nil)
+        try expectTrue(c.modificationDate == nil)
+    }
+
     s.test("Character extensions preserves unknown app-namespaced keys on round-trip") {
         let ext: [String: JSONValue] = [
             "agnai/voice": .object(["service": .string("elevenlabs")]),
