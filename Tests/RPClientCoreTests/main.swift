@@ -49,6 +49,7 @@ let suites: [TestSuite] = [
     speakerPickerTests(),
     promptBuilderGroupChatTests(),
     directorPickerTests(),
+    phase9CharacterTests(),
 ]
 
 exit(TestRunner.run(suites))

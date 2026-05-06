@@ -29,6 +29,27 @@ struct Character: Codable, Equatable, Identifiable {
     var charBook: [WorldInfoEntry]
     var created: Date
 
+    // MARK: - Phase 9 §5.2a — v2-mappable additions
+
+    /// V2/V3 spec field. Restored as first-class — pre-Phase-9 v1 imports
+    /// folded `mes_example` into `description` with an `Example dialogue:\n`
+    /// prefix; that path is removed in §5.2c. Round-trips to `data.mes_example`
+    /// on v2/v3 export.
+    var messageExample: String
+
+    /// V2 spec field. Display-only — never reaches the prompt. NSFW authors
+    /// use this for content rating, trigger warnings, and kink list (chub.ai
+    /// convention). Round-trips to `data.creator_notes`.
+    var creatorNotes: String?
+
+    /// V2 + V3 passthrough for arbitrary application-specific data. The spec
+    /// mandates editors preserve unknown keys verbatim; this slot is the
+    /// vehicle. Includes the community `depth_prompt` convention (surfaced
+    /// as a first-class control in the creator UI but stored here for
+    /// spec-compliance) and namespaced sub-blobs from other clients
+    /// (`agnai/voice`, `risuai`, RPClient's own `rpclient`).
+    var extensions: [String: JSONValue]?
+
     init(
         id: UUID = UUID(),
         name: String = "",
@@ -43,7 +64,10 @@ struct Character: Codable, Equatable, Identifiable {
         creator: String? = nil,
         characterVersion: String? = nil,
         charBook: [WorldInfoEntry] = [],
-        created: Date = Date()
+        created: Date = Date(),
+        messageExample: String = "",
+        creatorNotes: String? = nil,
+        extensions: [String: JSONValue]? = nil
     ) {
         self.id = id
         self.name = name
@@ -59,6 +83,9 @@ struct Character: Codable, Equatable, Identifiable {
         self.characterVersion = characterVersion
         self.charBook = charBook
         self.created = created
+        self.messageExample = messageExample
+        self.creatorNotes = creatorNotes
+        self.extensions = extensions
     }
 
     init(from decoder: Decoder) throws {
@@ -77,5 +104,8 @@ struct Character: Codable, Equatable, Identifiable {
         characterVersion = try c.decodeIfPresent(String.self, forKey: .characterVersion)
         charBook = try c.decodeIfPresent([WorldInfoEntry].self, forKey: .charBook) ?? []
         created = try c.decodeIfPresent(Date.self, forKey: .created) ?? Date()
+        messageExample = try c.decodeIfPresent(String.self, forKey: .messageExample) ?? ""
+        creatorNotes = try c.decodeIfPresent(String.self, forKey: .creatorNotes)
+        extensions = try c.decodeIfPresent([String: JSONValue].self, forKey: .extensions)
     }
 }
