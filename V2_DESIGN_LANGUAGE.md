@@ -253,8 +253,18 @@ Any new view added to RPClient from this point on must:
 - Use SF Symbols (no custom glyphs).
 - Earn every permanently-visible control (or relegate to hover / disclosure).
 - Pick one control size family per view (mini-medium *or* large-xl, not mixed).
+- Bind every visible button to a keyboard shortcut (multi-modal action surfacing, §11).
+- Use monospace for technical / numeric content; body for prose (§11).
 
 Reviewer expectation: the diff should be answerable in design-language-token terms. "Section gap is `lg`" beats "section gap is 24pt". If the answer requires a magic number, the magic number is wrong.
+
+### 12.1 Posture toward existing app code
+
+The current app's `Theme.swift` (the `uiFontOffset`-driven font helper) and the existing inspector panes are **not** the contract. They're catalogued in §10 as anti-patterns to be migrated during the future UI overhaul. New surfaces don't extend them.
+
+In code: new views import `DesignTokens.swift` (Phase 9 §5.3a — the in-code embodiment of this doc), not `Theme.swift`. The two coexist during the migration window; the migration plan lives in V2_UI_OVERHAUL.md when that lands. Don't grow `Theme.swift`; let it shrink.
+
+The creator window is the proving ground for this contract. If the design language can't make the creator window feel right, the contract is wrong — but the existing chat header / inspector panes / settings forms are not what we measure against.
 
 ---
 
