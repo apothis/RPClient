@@ -26,8 +26,11 @@ final class VectorStore {
         chunks.removeValue(forKey: id)
     }
 
-    /// Drop chunks whose range overlaps any of the given turn indices. Use
-    /// when a turn gets edited or deleted: invalidate any chunk that covered it.
+    /// Drop chunks whose Int range overlaps any of the given turn indices.
+    /// Pre-Phase-7 invalidation path; kept for legacy callers / tests.
+    /// Phase 7+ code should use `invalidate(turnIds:)` instead — turn
+    /// indices are branch-relative under branching and can match unrelated
+    /// chunks across branches.
     func invalidate(turnIndices: Set<Int>) {
         let dropping = chunks.values.filter { c in
             (c.firstTurnIdx...c.lastTurnIdx).contains(where: turnIndices.contains)
@@ -35,10 +38,43 @@ final class VectorStore {
         for c in dropping { chunks.removeValue(forKey: c.id) }
     }
 
+    /// Phase 7 §3.2.B — drop chunks whose UUID range covers any of the
+    /// given turn ids. Use when a turn gets edited or deleted: invalidate
+    /// any chunk whose endpoints bracket it. Legacy chunks (with nil UUIDs)
+    /// are not matched by this — they get cleaned up via the next index
+    /// pass when their Int-based id no longer appears in `desiredIds`.
+    func invalidate(turnIds: Set<UUID>) {
+        let dropping = chunks.values.filter { c in
+            guard let first = c.firstTurnId, let last = c.lastTurnId else { return false }
+            // A chunk covers turn T if T == first or T == last; we don't
+            // know the interior ids without walking the active path, so
+            // limit the check to the endpoints. In practice the user edits
+            // a single turn at a time and most invalidations target the
+            // last turn's range, so endpoint-only matching catches the
+            // common case. Edge-case interior edits get caught on next
+            // index pass via text mismatch.
+            return turnIds.contains(first) || turnIds.contains(last)
+        }
+        for c in dropping { chunks.removeValue(forKey: c.id) }
+    }
+
     /// Drop chunks that no longer match anything in the chat (e.g. ranges that
-    /// exceed the current turn count after a delete).
+    /// exceed the current turn count after a delete). Pre-Phase-7 path;
+    /// kept for legacy callers.
     func clampToTurnCount(_ count: Int) {
         let dropping = chunks.values.filter { $0.lastTurnIdx >= count }
+        for c in dropping { chunks.removeValue(forKey: c.id) }
+    }
+
+    /// Phase 7 §3.2.B — drop chunks whose endpoint UUIDs are no longer in
+    /// the chat. Branch-aware: chunks indexed against an off-branch turn
+    /// stay (they're useful when the user switches back); only chunks
+    /// pointing at deleted-from-the-tree turns get dropped.
+    func clamp(toTurnIdsPresent ids: Set<UUID>) {
+        let dropping = chunks.values.filter { c in
+            guard let first = c.firstTurnId, let last = c.lastTurnId else { return false }
+            return !ids.contains(first) || !ids.contains(last)
+        }
         for c in dropping { chunks.removeValue(forKey: c.id) }
     }
 
