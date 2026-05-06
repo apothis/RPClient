@@ -79,6 +79,14 @@ struct Settings: Codable, Equatable {
     /// through to whatever the §7.1l selector picks.
     var defaultVoice: VoicePreference?
 
+    /// Server preference for the Card Creator window's AI-assist side-calls
+    /// (Phase 9 §3.1). Defaults to the active chat's server, then to
+    /// `defaultServerId`. Persisted so the creator opens with the same
+    /// choice next time. Routed separately from `.summarizer` because card
+    /// generation produces prose that small SFW-tuned summarizer models
+    /// will sanitize or refuse — see Phase 9 §4.4.
+    var cardCreatorServerId: UUID?
+
     /// Temporary façade preserving the pre-Phase-4 single-server API. Reads
     /// the default profile's baseURL; setter mutates the default profile's
     /// URL in place. Removed in 4b once AppState routes through the registry.
@@ -204,6 +212,7 @@ struct Settings: Codable, Equatable {
         defaultPersonaId = try c.decodeIfPresent(UUID.self, forKey: .defaultPersonaId)
         voiceModelPath = try c.decodeIfPresent(String.self, forKey: .voiceModelPath)
         defaultVoice = try c.decodeIfPresent(VoicePreference.self, forKey: .defaultVoice)
+        cardCreatorServerId = try c.decodeIfPresent(UUID.self, forKey: .cardCreatorServerId)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -217,6 +226,7 @@ struct Settings: Codable, Equatable {
         case priorityTopicLibrary, qwenThinkingEnabled, defaultPersonaId
         case voiceModelPath
         case defaultVoice
+        case cardCreatorServerId
     }
 
     func encode(to encoder: Encoder) throws {
@@ -242,5 +252,6 @@ struct Settings: Codable, Equatable {
         try c.encodeIfPresent(defaultPersonaId, forKey: .defaultPersonaId)
         try c.encodeIfPresent(voiceModelPath, forKey: .voiceModelPath)
         try c.encodeIfPresent(defaultVoice, forKey: .defaultVoice)
+        try c.encodeIfPresent(cardCreatorServerId, forKey: .cardCreatorServerId)
     }
 }

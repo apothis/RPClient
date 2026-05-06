@@ -7,6 +7,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWC: SettingsWindowController?
     private var factEvalWC: FactExtractorEvalWindow?
     private var libraryWC: LibraryWindowController?
+    private var cardCreatorWCs: [CardCreatorWindowController] = []
     private var helpWC: HelpWindowController?
 
     public override init() {
@@ -105,6 +106,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             action: #selector(newChatWithCharacter),
             keyEquivalent: "N"))
         fileMenu.addItem(NSMenuItem.separator())
+        // Phase 9 §5.3a — Card Creator entry point. Full menu treatment
+        // (Edit Card…, Import & Edit Card…, plus Library integration) lands
+        // in §5.3d.
+        fileMenu.addItem(NSMenuItem(
+            title: "New Character…",
+            action: #selector(showCardCreator),
+            keyEquivalent: ""))
         fileMenu.addItem(NSMenuItem(
             title: "Import Character…",
             action: #selector(importCharacter),
@@ -280,6 +288,21 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = String(describing: error)
             alert.addButton(withTitle: "OK")
             alert.runModal()
+        }
+    }
+
+    @objc private func showCardCreator() {
+        let wc = CardCreatorWindowController()
+        cardCreatorWCs.append(wc)
+        wc.showWindow(nil)
+        wc.window?.makeKeyAndOrderFront(nil)
+        // Drop the reference when the window closes so the controller deinits.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: wc.window,
+            queue: .main
+        ) { [weak self, weak wc] _ in
+            self?.cardCreatorWCs.removeAll { $0 === wc }
         }
     }
 
