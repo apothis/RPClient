@@ -1,13 +1,14 @@
 import Foundation
 
-/// Importer for SillyTavern character card v2 (`chara_card_v2`). Accepts both
-/// `.png` (avatar PNG with a base64-encoded JSON payload in a `tEXt` chunk
-/// keyed `chara`) and `.json` (Tavern V2 export, same JSON shape but no
-/// avatar). Rejects v1 cards with a clear error — the v1 schema is a
-/// flatter, looser shape that doesn't carry `system_prompt`,
-/// `post_history_instructions`, or `character_book`, and converting on the
-/// fly papers over too much. Users hit that error rarely enough that
-/// surfacing it is the right call (V2_PLAN §4.6).
+/// Importer for SillyTavern character cards. Accepts:
+///   • v2 (`chara_card_v2`): JSON-in-`chara`-tEXt-chunk PNG, or `.json`.
+///   • v3 (`chara_card_v3`): JSON-in-`ccv3`-tEXt-chunk PNG (preferred), or
+///     `.json`, or v3 envelope inside the `chara` chunk (the v2-reader
+///     backfill convention).
+///   • v1 / Pygmalion / KoboldAI Lite (flat top-level fields, no `data` block):
+///     mapped onto the v2 fields with `mes_example` going first-class to
+///     `Character.messageExample` (Phase 9 §5.2c — pre-Phase-9 imports
+///     squashed it into `description`; that path is gone).
 ///
 /// Output shape: `(Character, avatarPNG: Data?)`. The caller (AppState /
 /// File-menu handler) is responsible for running `Storage.normalizeAvatarData`
@@ -63,12 +64,32 @@ enum CharacterCardImporter {
         } catch PNGTextChunks.ParseError.notAPNG {
             throw ImportError.notAPNG
         }
-        guard let chara = chunks.first(where: { $0.keyword == "chara" }) else {
+        // Phase 9 §5.2c — prefer the v3 `ccv3` chunk. Fall back to `chara`
+        // (covers v2 cards and v3 cards using the v2-reader backfill).
+        let payload = chunks.first(where: { $0.keyword == "ccv3" })
+            ?? chunks.first(where: { $0.keyword == "chara" })
+        guard let payload = payload else {
             throw ImportError.missingCharaChunk
         }
-        let json = try base64DecodeStrict(chara.text)
+        let json = try base64DecodeStrict(payload.text)
         let character = try decodeAndMap(json)
         return Result(character: character, avatarPNG: data)
+    }
+
+    // MARK: - Legacy v1-squash detection (Phase 9 §5.2c)
+
+    /// Detect the literal `\n\nExample dialogue:\n` separator that Phase 9
+    /// pre-§5.2c v1 imports inserted into `description`. Used by the §3.5
+    /// "Restore example dialogue" affordance in the creator window and by
+    /// the importer's diagnostic log path. The check is deliberately strict
+    /// (requires the blank-line + `Example dialogue:` + newline shape)
+    /// because authors write the loose phrase "Example dialogue:" in prose
+    /// often enough that a fuzzier match would false-positive. Keep
+    /// conservative.
+    static let legacyExamplePrefix = "\n\nExample dialogue:\n"
+
+    static func containsLegacyExamplePrefix(_ text: String) -> Bool {
+        text.contains(legacyExamplePrefix)
     }
 
     static func importJSONData(_ data: Data) throws -> Result {
@@ -141,13 +162,25 @@ enum CharacterCardImporter {
         let personality: String?
         let scenario: String?
         let first_mes: String?
+        let mes_example: String?
         let alternate_greetings: [String]?
         let system_prompt: String?
         let post_history_instructions: String?
+        let creator_notes: String?
         let tags: [String]?
         let creator: String?
         let character_version: String?
         let character_book: CharacterBook?
+        // V2 + V3 spec passthrough — preserved verbatim (§5.2c).
+        let extensions: [String: JSONValue]?
+        // V3-only fields (§5.2b/§5.2c).
+        let nickname: String?
+        let group_only_greetings: [String]?
+        let source: [String]?
+        let creator_notes_multilingual: [String: String]?
+        let creation_date: Double?
+        let modification_date: Double?
+        let assets: [JSONValue]?
     }
 
     private struct CharacterBook: Decodable {
@@ -178,14 +211,17 @@ enum CharacterCardImporter {
         } catch {
             throw ImportError.invalidJSON(String(describing: error))
         }
-        // v2 cards have a spec="chara_card_v2" + data block. v1 / Pygmalion
-        // cards skip the envelope entirely and put fields at the top level.
-        // Anything else (future spec, malformed) gets rejected — but we lean
-        // toward acceptance: a missing spec with v1 fields populated is
-        // assumed to be v1 even if the file doesn't say so explicitly,
-        // matching kobold's loose import policy.
+        // v2 / v3 cards have a spec + data block. v1 / Pygmalion cards skip
+        // the envelope entirely and put fields at the top level. Anything
+        // else (future spec, malformed) gets rejected — but we lean toward
+        // acceptance: a missing spec with v1 fields populated is assumed to
+        // be v1 even if the file doesn't say so explicitly, matching kobold's
+        // loose import policy.
         if envelope.spec == "chara_card_v2", let cardData = envelope.data {
-            return try mapV2(cardData)
+            return try mapV2OrV3(cardData, isV3: false)
+        }
+        if envelope.spec == "chara_card_v3", let cardData = envelope.data {
+            return try mapV2OrV3(cardData, isV3: true)
         }
         if let spec = envelope.spec, spec != "chara_card_v1", !spec.isEmpty {
             throw ImportError.unsupportedSpec(spec)
@@ -193,16 +229,26 @@ enum CharacterCardImporter {
         return try mapV1(envelope)
     }
 
-    /// Build a `Character` from a v2 `data` block.
-    private static func mapV2(_ d: CardData) throws -> Character {
+    /// Build a `Character` from a v2 or v3 `data` block. v3-only fields are
+    /// only populated when `isV3` is true (a v2 envelope with stray v3 keys
+    /// gets the v3 fields ignored to keep the v2 contract honest).
+    private static func mapV2OrV3(_ d: CardData, isV3: Bool) throws -> Character {
         guard let name = d.name?.trimmingCharacters(in: .whitespacesAndNewlines),
               !name.isEmpty else {
             throw ImportError.missingName
         }
+        let merged = mergeExtensions(d.extensions, assets: isV3 ? d.assets : nil)
+        let description = d.description ?? ""
+        if containsLegacyExamplePrefix(description) {
+            DebugLog.shared.write(
+                "importer: ⚠ legacy v1-squash separator detected in description "
+                + "(consider re-importing the original card to restore mes_example)"
+            )
+        }
         return Character(
             id: UUID(),
             name: name,
-            description: d.description ?? "",
+            description: description,
             personality: d.personality ?? "",
             scenario: d.scenario ?? "",
             firstMessage: d.first_mes ?? "",
@@ -213,29 +259,53 @@ enum CharacterCardImporter {
             creator: nonEmpty(d.creator),
             characterVersion: nonEmpty(d.character_version),
             charBook: mapCharBook(d.character_book),
-            created: Date()
+            created: Date(),
+            messageExample: d.mes_example ?? "",
+            creatorNotes: nonEmpty(d.creator_notes),
+            extensions: merged,
+            nickname: isV3 ? nonEmpty(d.nickname) : nil,
+            groupOnlyGreetings: isV3 ? (d.group_only_greetings ?? []) : [],
+            source: isV3 ? (d.source ?? []) : [],
+            creatorNotesMultilingual: isV3 ? d.creator_notes_multilingual : nil,
+            creationDate: isV3 ? d.creation_date.map { Date(timeIntervalSince1970: $0) } : nil,
+            modificationDate: isV3 ? d.modification_date.map { Date(timeIntervalSince1970: $0) } : nil
         )
+    }
+
+    /// Merge the source `extensions` blob with the v3 `assets[]` array if
+    /// present, parking assets under `rpclient/assets_passthrough` so a
+    /// re-export can restore them losslessly. Source extensions win over
+    /// any pre-existing passthrough key from a previous round-trip — the
+    /// live `data.assets` is authoritative.
+    private static func mergeExtensions(
+        _ source: [String: JSONValue]?,
+        assets: [JSONValue]?
+    ) -> [String: JSONValue]? {
+        var out: [String: JSONValue] = source ?? [:]
+        if let assets = assets, !assets.isEmpty {
+            out["rpclient/assets_passthrough"] = .array(assets)
+        }
+        return out.isEmpty ? nil : out
     }
 
     /// Build a `Character` from a flat v1 / Pygmalion envelope. v1 cards
     /// don't carry `system_prompt`, `post_history_instructions`,
     /// `alternate_greetings`, or a `character_book`, so those land empty —
-    /// the user can fill them in later via the (future) editor. `mes_example`
-    /// from v1 is folded into the description with a separator since
-    /// `Character` has no dedicated example-dialogue field; this matches
-    /// what ST does when it converts a v1 card to v2 internally.
+    /// the user can fill them in later via the creator. Phase 9 §5.2c:
+    /// `mes_example` lands first-class in `Character.messageExample` (rather
+    /// than being squashed into `description` as pre-§5.2c imports did).
     private static func mapV1(_ env: CardEnvelope) throws -> Character {
         guard let rawName = env.name?.trimmingCharacters(in: .whitespacesAndNewlines),
               !rawName.isEmpty else {
             throw ImportError.missingName
         }
-        let baseDescription = env.description ?? ""
-        let example = env.mes_example?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let description: String = {
-            guard !example.isEmpty else { return baseDescription }
-            let separator = baseDescription.isEmpty ? "" : "\n\n"
-            return baseDescription + separator + "Example dialogue:\n" + example
-        }()
+        let description = env.description ?? ""
+        if containsLegacyExamplePrefix(description) {
+            DebugLog.shared.write(
+                "importer: ⚠ legacy v1-squash separator detected in v1 description "
+                + "(re-export from source tooling may help)"
+            )
+        }
         return Character(
             id: UUID(),
             name: rawName,
@@ -250,7 +320,8 @@ enum CharacterCardImporter {
             creator: nonEmpty(env.creator),
             characterVersion: nonEmpty(env.character_version),
             charBook: [],
-            created: Date()
+            created: Date(),
+            messageExample: env.mes_example ?? ""
         )
     }
 
