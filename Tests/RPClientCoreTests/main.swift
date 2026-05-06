@@ -51,6 +51,7 @@ let suites: [TestSuite] = [
     directorPickerTests(),
     phase9CharacterTests(),
     characterCardExporterTests(),
+    phase9RoundtripTests(),
 ]
 
 exit(TestRunner.run(suites))
