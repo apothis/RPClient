@@ -200,6 +200,12 @@ These are *recommendations carried with the card*, not authoritative. RPClient h
 
 ## 3. Creator window
 
+### 3.0 Design language alignment
+
+The Card Creator is the first surface that fully applies the [`V2_DESIGN_LANGUAGE.md`](V2_DESIGN_LANGUAGE.md) system — typography scale, 8pt spacing tokens (`xs` / `sm` / `md` / `lg` / `xl`), semantic colors, SF Symbols 6, Liquid Glass material via `NSSplitViewController` for any sidebar-shaped sub-surface, motion budgets (180ms tab swap, 160ms suggestions-strip reveal). Every concrete spacing / typography / color reference in §3.1 onward uses tokens from that doc; magic numbers are bugs.
+
+The reason this matters: per [`V2_PLAN.md`](V2_PLAN.md) §8, the rest of the app needs a UI overhaul against this same language eventually. Phase 9's creator window is the **gold-standard reference implementation** that V2_UI_OVERHAUL.md will build on — so the application contract in §11 of the design language doc is binding here, not aspirational. Reviewers should be able to answer "why this gap?" with a token name (`lg`), not a pixel measurement.
+
 ### 3.1 Window shape
 
 `CharacterCreatorWindowController : NSWindowController`. Single window, tabbed via `NSTabView`. The unified create / edit / import-and-edit surface — the same window handles all three flows; only the seeding of the initial draft differs.
