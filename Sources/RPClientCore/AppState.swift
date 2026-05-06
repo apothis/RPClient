@@ -643,38 +643,90 @@ final class AppState {
 
     func sendUserMessage(_ text: String) {
         guard !isStreaming, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        // Phase 1 — append the user turn synchronously so it shows up in
+        // the chat immediately. The assistant slot is appended in phase 2
+        // after speaker resolution (which may be async for `.director`).
         updateCurrent { c in
             c.appendTurn(Turn(role: .user, text: text))
-            // Phase 8 §4.2c — pick the next speaker for multi-cast chats
-            // and stamp the empty assistant slot with their id BEFORE
-            // appending. validateGroupChat enforces a non-nil speakerId
-            // on every assistant turn in cast.count > 1 chats; round-trip
-            // through Storage.saveChat would throw otherwise. Solo /
-            // free-form chats leave speakerId nil (the validation
-            // tolerates it for cast.count <= 1).
-            var asst = Turn(role: .assistant, text: "")
-            if c.cast.count > 1 {
-                asst.speakerId = SpeakerPicker.next(in: c) ?? c.cast.first
-                _ = c.consumePendingSpeaker()
-            }
-            c.appendTurn(asst)
-            // Pre-seed the assistant turn with one empty variant carrying
-            // the upstream-context fingerprint. Done here (rather than on
-            // first stream token) so a future user edit on any prior turn
-            // can be detected as having invalidated this variant.
-            let asstIdx = c.turns.count - 1
-            let fp = Chat.makeContextFingerprint(c.turns[..<asstIdx])
-            c.turns[asstIdx].addEmptyVariant(
-                samplerPresetId: c.samplerPresetId,
-                contextFingerprint: fp
-            )
             if c.title == "New Chat" {
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 c.title = String(trimmed.prefix(40))
             }
         }
         DebugLog.shared.write("trigger: send (userTextChars=\(text.count))")
-        startStreaming(freshUserTurn: true)
+        // Phase 2 — resolve the speaker (sync for round-robin / pooled /
+        // manual; async LLM side-call for .director with a timeout
+        // fallback to round-robin), then append the assistant slot and
+        // start streaming.
+        resolveNextSpeaker { [weak self] picked in
+            guard let self = self else { return }
+            self.appendAssistantSlotAndStream(speakerId: picked, freshUserTurn: true)
+        }
+    }
+
+    /// Phase 8 §4.4 — async speaker resolution. Sync-fast path for
+    /// non-director modes (and solo chats); fires `DirectorPicker.next`
+    /// for `.director`, falling back to the sync picker on any failure.
+    /// Completion always runs on the main queue. The returned id may be
+    /// nil for solo / free-form chats — callers stamp speakerId only
+    /// when cast.count > 1.
+    private func resolveNextSpeaker(completion: @escaping (UUID?) -> Void) {
+        guard let chat = currentChat else { completion(nil); return }
+        if chat.cast.count <= 1 {
+            completion(nil)
+            return
+        }
+        let syncFallback: () -> UUID? = { [weak self] in
+            guard let chat = self?.currentChat else { return nil }
+            return SpeakerPicker.next(in: chat) ?? chat.cast.first
+        }
+        guard chat.speakerSelection == .director else {
+            completion(syncFallback())
+            return
+        }
+        let cast = chat.cast.compactMap { character(id: $0) }
+        let kobold = sideCallClient(.summarizer)
+        let ctx = effectiveContext
+        DirectorPicker.next(
+            chat: chat,
+            cast: cast,
+            kobold: kobold,
+            effectiveCtx: ctx
+        ) { [weak self] picked in
+            DispatchQueue.main.async {
+                if let p = picked {
+                    completion(p)
+                } else {
+                    completion(self.flatMap { _ in syncFallback() })
+                }
+            }
+        }
+    }
+
+    /// Phase 8 §4.4 — phase-2 of the send/regen pipeline. Appends the
+    /// empty assistant turn with the resolved `speakerId` (multi-cast)
+    /// or nil (solo / free-form), seeds its first variant with an
+    /// upstream-context fingerprint, and kicks off streaming. Lifted
+    /// out of `sendUserMessage` so the regenerate fallback path can
+    /// share it.
+    private func appendAssistantSlotAndStream(speakerId: UUID?, freshUserTurn: Bool) {
+        updateCurrent { c in
+            var asst = Turn(role: .assistant, text: "")
+            if c.cast.count > 1 {
+                // Phase 8 §4.2c invariant — every assistant turn in a
+                // multi-cast chat must carry a non-nil speakerId.
+                asst.speakerId = speakerId ?? SpeakerPicker.next(in: c) ?? c.cast.first
+                _ = c.consumePendingSpeaker()
+            }
+            c.appendTurn(asst)
+            let asstIdx = c.turns.count - 1
+            let fp = Chat.makeContextFingerprint(c.turns[..<asstIdx])
+            c.turns[asstIdx].addEmptyVariant(
+                samplerPresetId: c.samplerPresetId,
+                contextFingerprint: fp
+            )
+        }
+        startStreaming(freshUserTurn: freshUserTurn)
     }
 
     /// Default cap on `Turn.variants.count`. Per-chat / per-app exposure of
@@ -708,26 +760,20 @@ final class AppState {
                 )
             }
         } else {
-            // Active path ends on a user turn (or empty) — append a fresh
-            // assistant turn and seed it with one empty, fingerprint-stamped
-            // variant so the same staleness machinery applies as in
-            // `sendUserMessage`. Phase 8 §4.2c — stamp speakerId on
-            // multi-cast chats so the validateGroupChat invariant survives
-            // the next save.
-            var asst = Turn(role: .assistant, text: "")
-            if c.cast.count > 1 {
-                asst.speakerId = SpeakerPicker.next(in: c) ?? c.cast.first
-                _ = c.consumePendingSpeaker()
+            // Active path ends on a user turn (or empty) — defer to the
+            // async resolver so .director mode gets its LLM side-call,
+            // then append the fresh assistant slot via the shared
+            // helper. Other modes resolve synchronously and proceed
+            // without a perceptible delay. Mirrors sendUserMessage's
+            // phase-1/phase-2 split.
+            updateCurrent { ch in
+                ch.turns = c.turns
+                ch.activePath = c.activePath
             }
-            c.appendTurn(asst)
-            let fp = Chat.makeContextFingerprint(c.activeTurns.dropLast())
-            if let asstId = c.activePath.last,
-               let idx = c.turns.firstIndex(where: { $0.id == asstId }) {
-                c.turns[idx].addEmptyVariant(
-                    samplerPresetId: c.samplerPresetId,
-                    contextFingerprint: fp
-                )
+            resolveNextSpeaker { [weak self] picked in
+                self?.appendAssistantSlotAndStream(speakerId: picked, freshUserTurn: false)
             }
+            return
         }
         updateCurrent { ch in
             ch.turns = c.turns

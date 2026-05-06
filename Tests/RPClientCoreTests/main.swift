@@ -48,6 +48,7 @@ let suites: [TestSuite] = [
     phase8MigrationTests(),
     speakerPickerTests(),
     promptBuilderGroupChatTests(),
+    directorPickerTests(),
 ]
 
 exit(TestRunner.run(suites))

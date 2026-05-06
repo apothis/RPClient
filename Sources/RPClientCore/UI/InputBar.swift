@@ -217,16 +217,26 @@ final class InputBar: NSView, NSTextViewDelegate {
         speakerLeadingConstraint?.isActive = isMultiCast
         if !isMultiCast { return }
 
-        let nextPick = SpeakerPicker.next(in: chat) ?? chat.cast.first
-        let nextName = nextPick.flatMap { AppState.shared.character(id: $0)?.name }
-            ?? "?"
+        // Director mode picks asynchronously per-send; the sync picker
+        // returns nil so we can't show a deterministic "Next: <name>"
+        // ahead of time. Show the mode label instead so the user knows
+        // the LLM router is active. Other modes show the actual next
+        // pick (or the queued one-shot via pendingSpeakerId).
+        let headerTitle: String
+        if chat.speakerSelection == .director && chat.pendingSpeakerId == nil {
+            headerTitle = "Next: director will pick"
+        } else {
+            let nextPick = SpeakerPicker.next(in: chat) ?? chat.cast.first
+            let nextName = nextPick.flatMap { AppState.shared.character(id: $0)?.name }
+                ?? "?"
+            headerTitle = "Next: \(nextName)"
+        }
 
         let menu = NSMenu()
-        // First item is the menu's "title" for pulldown popups — set it to
-        // "Next: <name>" so the button face shows who's about to speak
-        // and a chevron makes it readable as a dropdown. Disabled so a
-        // pick on the title is a no-op.
-        let header = NSMenuItem(title: "Next: \(nextName)", action: nil, keyEquivalent: "")
+        // First item is the menu's "title" for pulldown popups — set it
+        // to the resolved header so the button face is informative even
+        // when collapsed. Disabled so a pick on the title is a no-op.
+        let header = NSMenuItem(title: headerTitle, action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
         menu.addItem(NSMenuItem.separator())
