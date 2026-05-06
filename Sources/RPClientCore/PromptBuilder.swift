@@ -102,17 +102,47 @@ struct PromptBuilder {
     /// weight can't out-pull the recent verbatim turns. See MEMORY_AUDIT
     /// §4.3-D and the 2026-05-03 empirical failure where the v3-shipped
     /// reframing alone wasn't enough.
+    ///
+    /// Phase 7 §3.2 — branch-aware position resolution. Scenes with
+    /// `firstTurnId`/`lastTurnId` are resolved against the current
+    /// `activePath`; scenes whose lastTurnId is off-branch are dropped
+    /// entirely (they describe a path the user isn't reading right now).
+    /// The returned scenes have `firstTurn`/`lastTurn` Int fields populated
+    /// with the branch-resolved positions so `SceneSummaryFormatter` can
+    /// render "turns N–M" headers without needing chat access. **Output is
+    /// render-cache, not persistence-bound** — never feed this back into
+    /// `chat.sceneSummaries` or encode it.
     static func renderableScenes(chat: Chat, staleAge: Int = SceneSummaryFormatter.defaultStalenessThreshold) -> [SceneSummary] {
-        let head = chat.turns.count
-        return chat.sceneSummaries.map { scene in
+        // Phase 7 §3.2 — `head` is the active path's length. Fall back to
+        // turns.count when activePath is empty but turns isn't (in-memory
+        // chats built via the Chat() initializer + direct turns mutation
+        // bypass the decode-time spine migration; production paths get
+        // proper activePath maintenance in §3.3).
+        let head = chat.activePath.isEmpty && !chat.turns.isEmpty
+            ? chat.turns.count
+            : chat.activePath.count
+        return chat.sceneSummaries.compactMap { scene -> SceneSummary? in
+            let firstPos = scene.firstTurnPosition(in: chat)
+            let lastPos = scene.lastTurnPosition(in: chat)
+            // Off-branch scenes don't render. UUID resolution missed and there
+            // was no legacy Int fallback — this scene was indexed against a
+            // branch that's no longer on the path.
+            if scene.firstTurnId != nil && firstPos == nil && lastPos == nil {
+                return nil
+            }
             let isStale: Bool = {
-                guard let last = scene.lastTurn else { return true }
+                guard let last = lastPos else { return true }
                 return (head - last - 1) > staleAge
             }()
-            guard isStale else { return scene }
-            var compressed = scene
-            compressed.text = SceneSummaryFormatter.compact(scene.text)
-            return compressed
+            var rendered = scene
+            // Write resolved positions into the legacy Int fields so the
+            // formatter (which doesn't take a chat) can render headers.
+            rendered.firstTurn = firstPos
+            rendered.lastTurn = lastPos
+            if isStale {
+                rendered.text = SceneSummaryFormatter.compact(scene.text)
+            }
+            return rendered
         }
     }
 

@@ -218,7 +218,11 @@ let firstTurnId = c.activePath[safe: firstIdx]
 let lastTurnId = c.activePath[safe: lastIdx]
 ```
 
-`summarizedThrough: Int` becomes **derived, not persisted.** Today it's a single counter on `Chat` that doesn't know about branches — switching from a long branch to a short branch and back would either lose the value (if clamped) or read out of bounds (if not). The right model: derive it from `chat.sceneSummaries.last?.lastTurnId` resolved against the current active path. If the latest scene summary's `lastTurnId` is on the active path at position N, then `summarizedThrough = N + 1` (next unsummarized turn). If not on the active path (latest summary is from a different branch), walk backwards through `sceneSummaries` to the most-recent one whose `lastTurnId` IS on the current path. If none, `summarizedThrough = 0`. Naturally per-branch by construction; nothing to clamp on branch switch. Drop the persisted `Chat.summarizedThrough` field entirely and replace with a computed property `Chat.summarizedThrough(forActivePath:)`. Migration: ignore the legacy persisted value on decode.
+`summarizedThrough: Int` — **revised during §3.2 implementation 2026-05-06.** Original spec said "drop and derive from `sceneSummaries.last?.lastTurnId`". That doesn't work: scene summaries only get appended on explicit scene breaks; between breaks, the rolling summary (`chat.summary`) advances per summarizer-cycle and `summarizedThrough` advances with it. Deriving only from frozen scene summaries would lose all between-scene-break state.
+
+The right scope for §3.2: keep `summarizedThrough: Int` as path-relative position; **clamp to `activePath.count` in `switchBranch(to:)`** so a branch switch from a long path to a shorter one doesn't leave the value out-of-bounds. The rolling summary text (`chat.summary`) stays single-valued and inherently goes stale on branch switch — it summarises whatever path was active when it was last written, not the current one. The Summarizer will gradually self-correct as the user takes more turns on the new branch.
+
+Per-branch rolling summary (`chat.summary` becomes per-leaf) is the correct long-term answer and is flagged as future work — it's a separate, larger refactor that would touch the Summarizer / PromptBuilder / SummaryPane and isn't in §3.2 scope. The clamping approach is minimum-viable correctness for "branch switch doesn't crash or read out of bounds."
 
 ### 3.3 Chunker / Chunk / VectorStore
 
@@ -483,7 +487,7 @@ All five originally-open questions resolved (signed off 2026-05-06). Recorded he
 1. **`Turn.activeChildId` is persisted.** One UUID per Turn; descend-to-leaf is deterministic across sessions. Better UX than re-deriving "most recent child" on every load (loses stickiness when the user switches branches across sessions and expects to land where they left off).
 2. **Cmd-B forks the focused turn's parent** — creates a sibling of the focused turn. Matches the gutter glyph + Branches pane semantics ("alternative to this turn"). Disabled on the root turn (no parent to fork from).
 3. **Off-path chunks remain retrievable.** Cross-branch memory is exactly what retrieval is for — a sufficiently-similar past chunk should surface even if it lives on a branch the user isn't currently reading. Pre-filter only excludes by recency, and recency only applies when the chunk's endpoint is on the current path.
-4. **`summarizedThrough` becomes derived, not persisted** — see §3.2 for the algorithm. Per-branch by construction; nothing to clamp on branch switch.
+4. **`summarizedThrough` stays as Int, clamped to `activePath.count` on branch switch** — original spec ("derive from sceneSummaries") didn't work because between-scene-break advancement is tracked by the int counter, not by frozen scene summaries. Per-branch rolling-summary state (`chat.summary` per leaf) is correct long-term but a separate refactor; clamping is minimum-viable for §3.2. See §3.2 for the revised algorithm.
 5. **Migration is lazy** (per chat on first open). Fast app launch, no work for chats the user never re-opens. Re-save eagerly after migration so we don't carry mixed-shape data on disk indefinitely.
 
 ## 9. Out-of-scope items to revisit later

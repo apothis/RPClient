@@ -1098,13 +1098,21 @@ final class AppState {
             // [previous-scene.lastTurn + 1 .. summarizedThrough - 1] inclusive.
             // summarizedThrough is exclusive (first not-yet-summarised turn),
             // so subtract 1 for the inclusive lastTurn.
-            let prevLast = c.sceneSummaries.last?.lastTurn ?? -1
-            let firstTurn = max(0, prevLast + 1)
-            let lastTurn = max(firstTurn, c.summarizedThrough - 1)
+            //
+            // Phase 7 §3.2 — resolve range to UUIDs against the active path.
+            // The previous scene's lastTurnId may be off-branch (we forked
+            // after a scene break), in which case we treat its position as
+            // -1 and start fresh from the path origin.
+            let prevLastId = c.sceneSummaries.last?.lastTurnId
+            let prevLastIdx = prevLastId.flatMap { c.activePosition(of: $0) } ?? -1
+            let firstIdx = max(0, prevLastIdx + 1)
+            let lastIdx = max(firstIdx, c.summarizedThrough - 1)
+            let firstTurnId = c.activePath.indices.contains(firstIdx) ? c.activePath[firstIdx] : nil
+            let lastTurnId = c.activePath.indices.contains(lastIdx) ? c.activePath[lastIdx] : nil
             c.sceneSummaries.append(SceneSummary(
                 text: trimmed,
-                firstTurn: firstTurn,
-                lastTurn: lastTurn
+                firstTurnId: firstTurnId,
+                lastTurnId: lastTurnId
             ))
             c.summary = ""
         }

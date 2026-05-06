@@ -41,6 +41,7 @@ let suites: [TestSuite] = [
     voicePickerSourceTests(),
     speakerAttributionTests(),
     chatBranchingTests(),
+    sceneSummaryMigrationTests(),
 ]
 
 exit(TestRunner.run(suites))

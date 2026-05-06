@@ -281,6 +281,25 @@ struct Chat: Codable, Equatable, Identifiable {
             activePath = decodedPath ?? (turns.isEmpty ? [] : turns.map(\.id))
         }
         try Chat.validateBranching(turns: turns, activePath: activePath)
+
+        // Phase 7 §3.2 — SceneSummary post-resolve. Legacy scenes stored
+        // Int turn positions; resolve to UUIDs against the (now-built)
+        // activePath so subsequent reads go through the branch-aware
+        // `firstTurnPosition(in:)`/`lastTurnPosition(in:)` helpers. Out-of-
+        // bounds Ints stay unresolved (UUID nil) — readers fall back to the
+        // Int snapshot.
+        for i in sceneSummaries.indices {
+            if sceneSummaries[i].firstTurnId == nil,
+               let firstIdx = sceneSummaries[i].firstTurn,
+               activePath.indices.contains(firstIdx) {
+                sceneSummaries[i].firstTurnId = activePath[firstIdx]
+            }
+            if sceneSummaries[i].lastTurnId == nil,
+               let lastIdx = sceneSummaries[i].lastTurn,
+               activePath.indices.contains(lastIdx) {
+                sceneSummaries[i].lastTurnId = activePath[lastIdx]
+            }
+        }
     }
 
     /// Phase 7 §3.1 — runs at decode time after migration. Throws a

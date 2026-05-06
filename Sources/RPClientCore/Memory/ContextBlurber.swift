@@ -88,8 +88,13 @@ enum ContextBlurber {
         for (i, scene) in chat.sceneSummaries.enumerated() {
             let body = scene.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !body.isEmpty else { continue }
+            // Phase 7 §3.2 — resolve positions against the current active
+            // path. Off-branch scenes (UUID set but doesn't resolve)
+            // render without the "turns N–M" suffix rather than being
+            // dropped — this is debug context, useful even when stale.
             let header: String
-            if let first = scene.firstTurn, let last = scene.lastTurn {
+            if let first = scene.firstTurnPosition(in: chat),
+               let last = scene.lastTurnPosition(in: chat) {
                 header = "Earlier arc \(i + 1) (turns \(first)–\(last)):"
             } else {
                 header = "Earlier arc \(i + 1):"

@@ -36,9 +36,13 @@ func chatCodableTests() -> TestSuite {
         chat.tailReinforceMemory = true
         chat.lastExtractedTurn = 7
         chat.factExtractionScanTurns = 12
+        // Phase 7 §3.2: SceneSummary positions are UUID-based now. The
+        // legacy Int fields still decode but get resolved via activePath
+        // post-pass, which would mutate the round-tripped value. Build with
+        // UUIDs to keep the round-trip equality check clean.
         chat.sceneSummaries = [
-            SceneSummary(text: "s1", firstTurn: 0, lastTurn: 4),
-            SceneSummary(text: "s2", firstTurn: 5, lastTurn: 9),
+            SceneSummary(text: "s1", firstTurnId: u.id, lastTurnId: a.id),
+            SceneSummary(text: "s2"),
         ]
         chat.factExtractionPriorities = [
             FactExtractionPriority(text: "names", enabled: true),
