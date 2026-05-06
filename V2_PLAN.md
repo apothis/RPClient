@@ -2,7 +2,7 @@
 
 Forward plan for the V2 surface area listed in [`PLAN.md`](PLAN.md) §10. The MVP and the Memory V2 subsystem (Steps A–D, see [`MEMORY_V2_PLAN.md`](MEMORY_V2_PLAN.md)) shipped 2026-05-03. This doc covers everything outside the memory subsystem; memory polish is deferred per the user's directive and tracked in [`NEXT_STAGES.md`](NEXT_STAGES.md) §A.
 
-**Status snapshot (2026-05-06).** Phases 1–6 shipped on `v2-plan` (V5 Lorebook, V1 Swipes, V3 Cards + V4 Personas, V8 Multi-server, V10 Avatars, V6 Per-character voices). **Phase 7 (V2 Full branching) underway — §3.1 + §3.2 + §3.3 + §3.4 + §3.5 (visual tree minimap) shipped.** Only optional §3.6 (variant-collapse) remains and is deferred-by-default. 551/551 tests pass; 32 commits ahead of origin. Phase 8 (V9 Group chats) and the heuristic-refinement research item are queued.
+**Status snapshot (2026-05-06).** Phases 1–7 shipped on `v2-plan` (V5 Lorebook, V1 Swipes, V3 Cards + V4 Personas, V8 Multi-server, V10 Avatars, V6 Per-character voices, V2 Full branching). **Phase 7's optional §3.6 (variant-collapse) is deferred indefinitely** — variants and branches are conceptually distinct but functionally fine; collapsing is a pure refactor with no user-visible payoff and a non-trivial migration. Pick it up only when a downstream feature actually needs unified tree semantics. **Phase 8 (V9 Group chats) is the next major chunk of work** and the natural follow-on to branching (group-chat retries are a tree-shaped operation). 551/551 tests pass; 32 commits ahead of origin. The heuristic-refinement research item (§6) remains queued.
 
 ---
 
@@ -11,7 +11,7 @@ Forward plan for the V2 surface area listed in [`PLAN.md`](PLAN.md) §10. The MV
 | # | V2 item | Status | Pointer |
 |---|---|---|---|
 | V1 | Swipes (alt continuations) | ✅ shipped 2026-05-04 | §2.2 — commits `764b41f` → `54fca62` |
-| V2 | Branching (turn tree) | 🚧 mostly done (§3.1–§3.5 shipped 2026-05-06; only optional §3.6 remains) | §3 + [`V2_PHASE7_FULL_BRANCHING.md`](V2_PHASE7_FULL_BRANCHING.md) |
+| V2 | Branching (turn tree) | ✅ shipped 2026-05-06 (§3.1–§3.5; optional §3.6 deferred indefinitely) | §3 + [`V2_PHASE7_FULL_BRANCHING.md`](V2_PHASE7_FULL_BRANCHING.md) |
 | V3 | SillyTavern v2 character cards | ✅ shipped 2026-05-04 | §2.3 — commits `dd102db` → `342791c` |
 | V4 | Personas (user side) | ✅ shipped 2026-05-04 | §2.3 (paired with V3) |
 | V5 | Lorebook editor UI | ✅ shipped 2026-05-04 | §2.1 — commits `076f548` → `dacb4fc` |
@@ -69,7 +69,7 @@ Largest phase to date — shipped as ~30 commits across §7.1 (engine swap), §7
 
 ---
 
-## 3. Phase 7 — V2 Full branching 🚧 mostly done (§3.1–§3.5 shipped 2026-05-06; only optional §3.6 remains)
+## 3. Phase 7 — V2 Full branching ✅ shipped 2026-05-06 (§3.1–§3.5; optional §3.6 deferred indefinitely)
 
 Treat as its own design doc — the data-model swap is small but the `turnIndex: Int` → `turnId: UUID` migration through the memory subsystem (`SceneSummary`, `Chunker`, `VectorStore`, `RetrievalEngine`, `MemoryManager`) is the bulk of the work. Plan author's earlier warning still applies: not picking this up casually.
 
@@ -96,18 +96,36 @@ Treat as its own design doc — the data-model swap is small but the `turnIndex:
 
 ---
 
-## 4. Phase 8 — V9 Group chats ⏳ future
+## 4. Phase 8 — V9 Group chats ⏳ next
 
-The largest open item. Multiple AI characters in one chat, each with their own persona / system prompt. Has its own design doc (TBD). Open questions:
+The largest open item, and the natural follow-on to branching (group-chat retries are a tree-shaped operation). Multiple AI characters share one chat, each with their own card / persona / system prompt / voice / avatar. Turns are tagged by speaker; the user steers who speaks next or lets the system decide.
 
-- **Speaker selection.** Round-robin? Director-LLM picks? User picks each turn?
-- **Per-speaker prompt assembly.** Each AI gets its own system/memory block when generating, but sees the others' messages as user input? Or all assistant?
-- **Token cost.** Linear in number of speakers per turn for the director-pick model.
-- **UI.** Each turn tagged with speaker name + colour + avatar. Speaker picker in input bar.
+**Settle-before-coding decisions** (drafted, sign off in the kickoff session before §4.1 starts):
 
-Benefits from Phase 7 (branching) being in place — group-chat retries are a natural fit for tree-structured history. Otherwise mostly orthogonal; the entity store + per-character voices already do half the work, and the orchestration layer is new.
+1. **Speaker selection.** Three plausible models — *round-robin*, *user-picks-each-turn*, *director-LLM-picks*. Lean: ship round-robin as the default with a per-chat override + a "let the model decide" toggle that swaps in the director path. Director adds N+1 generations per user turn (one to pick speaker, one to speak), which is fine for small models / fast servers and painful otherwise — make it opt-in.
+2. **Per-speaker prompt assembly.** When character A generates, do B's prior turns appear as `assistant` (chat history) or `user` (input from outside)? Both have failure modes; `assistant` is more honest about the conversation shape, `user` keeps each character's voice cleaner. Lean: `assistant` with the speaker name prepended in-text (`Sarah: ...`); A/B test against `user` per model if quality regresses.
+3. **Memory routing.** Each speaker has their own `system_prompt` (from their card) + their own scene summaries (per-speaker, since "what Sarah remembers" ≠ "what Anna remembers"). Entities are shared (everyone in the room knows the same world facts). Rolling summary is per-speaker.
+4. **Storage shape.** Add `Chat.cast: [UUID]` (character ids in the room). Add `Turn.speakerId: UUID?` (nil for the user turn and legacy single-speaker chats; required for group-chat assistant turns). Migrate existing chats: legacy `Chat.characterId` becomes the only entry in `cast` if present.
+5. **Retries via branching.** Regenerating a speaker's reply forks (Phase 7 behaviour) — preserves the alternative without losing the original's downstream context. No new mechanism needed; we just use `forkFrom` with the focused turn's id.
 
-**Effort: 1 day design + 1-2 weeks build.**
+**Sub-step staging** (mirrors Phase 6 / 7's incremental shape):
+
+- **§4.1** — Storage + migration. `Chat.cast: [UUID]`, `Turn.speakerId: UUID?`, decode-time migration that promotes `characterId` → first entry of `cast`, validation that asst turns in a multi-speaker chat carry a `speakerId` resolving to a member of `cast`. Pure tests. ~1 day.
+- **§4.2** — PromptBuilder per-speaker assembly. Wrap the existing builder so each speaker's generation pulls *their* card / persona / memory / scene summaries / voice. Round-robin selection logic (the simplest of the three). Tests cover prompt-structure correctness across 2- and 3-speaker chats. ~2-3 days.
+- **§4.3** — UI for cast management + speaker tagging. New "Cast" inspector pane (drag character cards in/out — re-uses the Library-window picker pattern). Speaker chip on each assistant turn (avatar + name + accent colour). Speaker picker in the input bar (auto / specific character / round-robin override). ~2 days.
+- **§4.4** — Director-LLM speaker selection (opt-in). Side-call that asks a small model "who should speak next?" given the chat tail; falls back to round-robin if the call fails or returns garbage. Per-chat toggle. ~1-2 days.
+- **§4.5** — Polish + smoke. Speaker-aware Branches pane / Tree minimap glyph (so you can see who said what at a glance in the minimap). Voice routing already works via Phase 6, but verify TTS still attributes correctly when speakers alternate. ~1 day.
+
+**Out of scope for Phase 8:**
+
+- Cross-speaker memory synthesis ("everyone in the room agrees about X"). Research-shaped; not a Phase 8 problem.
+- Inviting the user themselves as a multi-persona participant. Out of scope.
+- Real-time speaker turn-taking like a chat room with typing indicators. Stays in turn-by-turn mode — same UX shape as today.
+- Sharing chats across servers / federation. Way out of scope.
+
+**Design doc:** drafted in the kickoff session as `V2_PHASE8_GROUP_CHATS.md` (mirroring how Phase 7 spawned `V2_PHASE7_FULL_BRANCHING.md` for the prior-art survey + per-sub-step contracts).
+
+**Effort:** 1 day design + ~1.5 weeks build, broken across §4.1 → §4.5 commits.
 
 ---
 
