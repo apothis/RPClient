@@ -40,6 +40,7 @@ let suites: [TestSuite] = [
     chatSettingsVoiceTests(),
     voicePickerSourceTests(),
     speakerAttributionTests(),
+    chatBranchingTests(),
 ]
 
 exit(TestRunner.run(suites))

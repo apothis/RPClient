@@ -21,10 +21,15 @@ func chatCodableTests() -> TestSuite {
         var chat = Chat(title: "Saved")
         chat.created = stamp
         chat.modified = stamp
-        chat.turns = [
-            Turn(role: .user, text: "hi", ts: stamp),
-            Turn(role: .assistant, text: "ok", ts: stamp),
-        ]
+        // Phase 7 §3.1: turns now carry parentId + activePath. The decode
+        // path patches a spine when these are absent (legacy migration), so
+        // the round-trip equality check requires building the chat in its
+        // post-migration shape: parents wired, activePath populated.
+        var u = Turn(role: .user, text: "hi", ts: stamp)
+        var a = Turn(role: .assistant, text: "ok", ts: stamp)
+        a.parentId = u.id
+        chat.turns = [u, a]
+        chat.activePath = [u.id, a.id]
         chat.memory = "facts"
         chat.summary = "rolling"
         chat.summarizedThrough = 3

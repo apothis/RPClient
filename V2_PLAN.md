@@ -83,7 +83,7 @@ Treat as its own design doc — the data-model swap is small but the `turnIndex:
 
 **Sub-step staging** (mirroring Phase 6's incremental shape):
 
-- **§3.1** — Data model: `parentId` + `activePath`, migration of existing chats to a spine tree. No UI change. Tests-first; ~1 day.
+- **§3.1** — Data model: `parentId` + `activePath`, migration of existing chats to a spine tree. No UI change. Tests-first; ~1 day. **Shipped 2026-05-06** (TDD; 21 new tests in `ChatBranchingTests`; lazy spine-migration in `Chat.init(from:)` covers both legacy on-disk chats and the in-memory round-trip case; cycle detection + connected-path + single-root validation throws `DecodingError` on bad shapes; `switchBranch(to:)` drills to deepest descendant via `activeChildId` per Open WebUI's pattern. 498/498 green.)
 - **§3.2** — Memory subsystem: `turnIndex` → `turnId` through `SceneSummary`, `Chunker`, `VectorStore`, `RetrievalEngine`, `MemoryManager`. Migration tests. ~2-3 days. *Load-bearing; ugly.*
 - **§3.3** — Fork-on-regen for non-trailing turns. Sibling glyph in the gutter. Cmd-B action. ~1-2 days.
 - **§3.4** — Branches sidebar pane (list view). ~1 day.

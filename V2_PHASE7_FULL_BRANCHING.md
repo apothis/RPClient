@@ -365,7 +365,7 @@ Global keyboard shortcut. Forks the parent of the currently focused turn (if any
 
 ## 6. Sub-step contracts
 
-### §3.1 — Data model + path helpers
+### §3.1 — Data model + path helpers ✅ shipped 2026-05-06
 
 **In:** `Turn.parentId: UUID?`, `Turn.activeChildId: UUID?`, `Chat.activePath: [UUID]`. Migration in `Chat.init(from:)`. Helpers `Chat.activeTurns`, `turn(id:)`, `activePosition(of:)`, `children(of:)`, `switchBranch(to:)`, plus internal turn-by-id index. Validation in decode.
 

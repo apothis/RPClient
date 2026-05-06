@@ -63,6 +63,15 @@ struct Turn: Codable, Identifiable, Equatable {
     /// Index into `variants`. 0 when `variants` is empty.
     var activeVariant: Int
 
+    /// Phase 7 §3.1 — parent turn in the chat's tree. nil on the root turn
+    /// only. Pre-Phase-7 chats decode with this nil; `Chat.init(from:)`
+    /// fills in spine-tree parents during the migration pass.
+    var parentId: UUID?
+    /// Phase 7 §3.1 — the most-recently-active child of this turn, used by
+    /// `Chat.switchBranch(to:)` to drill to the right leaf when descending.
+    /// nil = no preference yet, descend via earliest child by `ts`.
+    var activeChildId: UUID?
+
     init(
         id: UUID = UUID(),
         role: TurnRole,
@@ -75,6 +84,8 @@ struct Turn: Codable, Identifiable, Equatable {
         self.text = text
         self.edited = edited
         self.ts = ts
+        self.parentId = nil
+        self.activeChildId = nil
         // Assistant turns with seed text get a matching variant straight
         // away. Empty assistant placeholders start with `variants = []`;
         // the first stream token populates the seed variant via
@@ -89,7 +100,7 @@ struct Turn: Codable, Identifiable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, role, text, edited, ts, variants, activeVariant
+        case id, role, text, edited, ts, variants, activeVariant, parentId, activeChildId
     }
 
     init(from decoder: Decoder) throws {
@@ -115,6 +126,8 @@ struct Turn: Codable, Identifiable, Equatable {
                 activeVariant = max(0, min(decodedActive, decodedVariants.count - 1))
             }
         }
+        parentId = try c.decodeIfPresent(UUID.self, forKey: .parentId)
+        activeChildId = try c.decodeIfPresent(UUID.self, forKey: .activeChildId)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -126,6 +139,8 @@ struct Turn: Codable, Identifiable, Equatable {
         try c.encode(ts, forKey: .ts)
         try c.encode(variants, forKey: .variants)
         try c.encode(activeVariant, forKey: .activeVariant)
+        try c.encodeIfPresent(parentId, forKey: .parentId)
+        try c.encodeIfPresent(activeChildId, forKey: .activeChildId)
     }
 
     // MARK: - Variant mutation

@@ -130,6 +130,12 @@ struct Chat: Codable, Equatable, Identifiable {
     /// model is producing `Sage: "…"` style output. UI for picking lands in
     /// §7.5d; pre-§7.3 chats decode as `.heuristic`.
     var attributionMode: AttributionMode
+    /// Phase 7 §3.1 — ordered list of turn IDs from root to active leaf.
+    /// `Chat.turns` stays as the storage of *all* turns ever created in
+    /// this chat (including off-path branches); `activeTurns` derives the
+    /// renderable list from this path. Pre-Phase-7 chats decode as a spine
+    /// derived from `turns`-in-order.
+    var activePath: [UUID]
 
     init(
         id: UUID = UUID(),
@@ -169,6 +175,7 @@ struct Chat: Codable, Equatable, Identifiable {
         self.serverId = nil
         self.voice = nil
         self.attributionMode = .heuristic
+        self.activePath = []
     }
 
     init(from decoder: Decoder) throws {
@@ -244,6 +251,136 @@ struct Chat: Codable, Equatable, Identifiable {
         serverId = try c.decodeIfPresent(UUID.self, forKey: .serverId)
         voice = try c.decodeIfPresent(VoicePreference.self, forKey: .voice)
         attributionMode = try c.decodeIfPresent(AttributionMode.self, forKey: .attributionMode) ?? .heuristic
+
+        // Phase 7 §3.1 — branching migration + validation. Two cases:
+        //
+        //  (a) **Legacy.** Decoded chat has turns but zero `parentId` set on
+        //      any of them. Treat as a flat pre-Phase-7 chat regardless of
+        //      whether `activePath` is missing/empty — patch parentIds into a
+        //      spine and derive activePath from turn order. Catches both the
+        //      on-disk legacy shape and the in-memory case where existing
+        //      callers built a chat the old way (initializer + `chat.turns =
+        //      [...]`) and we round-tripped through encode/decode.
+        //
+        //  (b) **Phase 7+.** At least one turn has parentId set. Trust the
+        //      decoded `activePath` (or default to empty for an empty turns
+        //      array), then run validation.
+        let decodedPath = try c.decodeIfPresent([UUID].self, forKey: .activePath)
+        let hasAnyParents = turns.contains { $0.parentId != nil }
+        let pathExplicitlyPopulated = !(decodedPath ?? []).isEmpty
+        if !turns.isEmpty && !hasAnyParents && !pathExplicitlyPopulated {
+            // Legacy on-disk shape OR an in-memory chat built via the old
+            // initializer + `chat.turns = [...]` pattern that round-tripped
+            // through encode/decode. Patch a spine and ignore any empty
+            // activePath that came along for the ride.
+            for i in turns.indices {
+                turns[i].parentId = i > 0 ? turns[i - 1].id : nil
+            }
+            activePath = turns.map(\.id)
+        } else {
+            activePath = decodedPath ?? (turns.isEmpty ? [] : turns.map(\.id))
+        }
+        try Chat.validateBranching(turns: turns, activePath: activePath)
+    }
+
+    /// Phase 7 §3.1 — runs at decode time after migration. Throws a
+    /// `DecodingError` describing the first violation found. Defensive
+    /// rules per V2_PHASE7_FULL_BRANCHING.md §2.2:
+    /// - Every non-nil parentId points to a turn that exists.
+    /// - Exactly one root (parentId == nil) when turns is non-empty.
+    /// - activePath is connected: each successor's parentId == predecessor.
+    /// - First activePath entry is the root.
+    /// - No cycles in the parentId chain (parent walk terminates within
+    ///   turns.count steps from any turn).
+    static func validateBranching(turns: [Turn], activePath: [UUID]) throws {
+        guard !turns.isEmpty else {
+            if !activePath.isEmpty {
+                throw DecodingError.dataCorrupted(.init(
+                    codingPath: [],
+                    debugDescription: "activePath has \(activePath.count) entries but turns is empty"
+                ))
+            }
+            return
+        }
+
+        let idsArray = turns.map(\.id)
+        let ids = Set(idsArray)
+        if ids.count != turns.count {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: [],
+                debugDescription: "duplicate turn IDs in turns array"
+            ))
+        }
+
+        var rootCount = 0
+        for t in turns {
+            if let pid = t.parentId {
+                if !ids.contains(pid) {
+                    throw DecodingError.dataCorrupted(.init(
+                        codingPath: [],
+                        debugDescription: "turn \(t.id) has parentId \(pid) that doesn't exist in turns"
+                    ))
+                }
+            } else {
+                rootCount += 1
+            }
+        }
+        if rootCount != 1 {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: [],
+                debugDescription: "expected exactly one root turn (parentId == nil), found \(rootCount)"
+            ))
+        }
+
+        // Cycle detection: from each turn, walk parentId until nil. If the
+        // walk exceeds turns.count, the chain has a cycle. (Both Open WebUI
+        // and LibreChat ship explicit cycle guards — cheap, prevents infinite
+        // loops in switchBranch / children resolution.)
+        let parentByID: [UUID: UUID?] = Dictionary(uniqueKeysWithValues: turns.map { ($0.id, $0.parentId) })
+        for t in turns {
+            var cur: UUID? = t.parentId
+            var steps = 0
+            while let p = cur {
+                steps += 1
+                if steps > turns.count {
+                    throw DecodingError.dataCorrupted(.init(
+                        codingPath: [],
+                        debugDescription: "parentId cycle detected starting from turn \(t.id)"
+                    ))
+                }
+                cur = parentByID[p] ?? nil
+            }
+        }
+
+        // activePath must be connected from the root.
+        if !activePath.isEmpty {
+            for id in activePath {
+                if !ids.contains(id) {
+                    throw DecodingError.dataCorrupted(.init(
+                        codingPath: [],
+                        debugDescription: "activePath references unknown turn id \(id)"
+                    ))
+                }
+            }
+            let parentsByID: [UUID: UUID?] = Dictionary(uniqueKeysWithValues: turns.map { ($0.id, $0.parentId) })
+            // First entry must be a root (parentId nil).
+            if (parentsByID[activePath[0]] ?? nil) != nil {
+                throw DecodingError.dataCorrupted(.init(
+                    codingPath: [],
+                    debugDescription: "activePath[0] is not a root turn (parentId != nil)"
+                ))
+            }
+            // Each consecutive pair must satisfy successor.parentId == predecessor.
+            for i in 1..<activePath.count {
+                let succParent = parentsByID[activePath[i]] ?? nil
+                if succParent != activePath[i - 1] {
+                    throw DecodingError.dataCorrupted(.init(
+                        codingPath: [],
+                        debugDescription: "activePath disconnected at index \(i): turn \(activePath[i])'s parent is \(String(describing: succParent)), expected \(activePath[i - 1])"
+                    ))
+                }
+            }
+        }
     }
 
     /// Best-effort parse of a `memory` string (one fact per line) into entities.
@@ -347,6 +484,103 @@ struct Chat: Codable, Equatable, Identifiable {
         }
         let live = Chat.makeContextFingerprint(turns[..<turnIndex])
         return recorded != live
+    }
+
+    // MARK: - Phase 7 §3.1 — branching helper API
+
+    /// Renderable in-order list of turns following the active path. Use this
+    /// everywhere the old `chat.turns` was treated as "the visible chat";
+    /// `chat.turns` itself stays as the storage of *all* turns including
+    /// off-path branches. Stale activePath entries (pointing to a deleted
+    /// turn) are silently dropped — decode-time validation prevents the
+    /// case in persisted state, but in-memory mutation can produce
+    /// transient invalids.
+    var activeTurns: [Turn] {
+        activePath.compactMap { id in turns.first(where: { $0.id == id }) }
+    }
+
+    /// Lookup a turn by id. O(n) walk; chats are typically small (<500 turns)
+    /// so a derived index isn't worth the staleness risk on a value type.
+    func turn(id: UUID) -> Turn? {
+        turns.first(where: { $0.id == id })
+    }
+
+    /// Position of `turnId` along `activePath`, or nil if not on the current
+    /// path. The replacement for "turn index" in the new branching world.
+    func activePosition(of turnId: UUID) -> Int? {
+        activePath.firstIndex(of: turnId)
+    }
+
+    /// All turns whose `parentId` matches `turnId`. Sorted by `ts` so the
+    /// iteration order is deterministic (creation order under normal
+    /// generation). Used by the gutter glyph (siblings popover), Branches
+    /// pane, and switchBranch's drill-down.
+    func children(of turnId: UUID) -> [Turn] {
+        turns.filter { $0.parentId == turnId }.sorted { $0.ts < $1.ts }
+    }
+
+    /// Switch the active branch to the path that ends at `turnId`'s subtree
+    /// leaf. Walks parentId chain up from `turnId` to find the path-from-root,
+    /// then drills back down via `activeChildId` (or earliest child by ts if
+    /// `activeChildId` is unset) until reaching a leaf. Updates each
+    /// ancestor's `activeChildId` so subsequent loads land here.
+    ///
+    /// Drill-to-deepest-descendant matches Open WebUI's `Messages.svelte:179`
+    /// behaviour — switching to a sibling that has descendants takes you to
+    /// that subtree's leaf, not to the sibling itself. Avoids the user
+    /// having to drill manually.
+    ///
+    /// No-op if `turnId` is not in `turns`.
+    mutating func switchBranch(to turnId: UUID) {
+        guard turns.contains(where: { $0.id == turnId }) else { return }
+
+        // 1. Walk parents from turnId up to root, collecting the path.
+        var pathToRoot: [UUID] = []
+        var cur: UUID? = turnId
+        var safety = turns.count + 1
+        while let id = cur {
+            pathToRoot.append(id)
+            safety -= 1
+            if safety < 0 { return } // defensive — should be impossible after decode validation
+            cur = turns.first(where: { $0.id == id })?.parentId
+        }
+        let pathFromRoot = Array(pathToRoot.reversed())
+
+        // 2. Update each ancestor's activeChildId to record the choice.
+        //    pathFromRoot[i] is the parent of pathFromRoot[i+1].
+        for i in 0..<(pathFromRoot.count - 1) {
+            let parent = pathFromRoot[i]
+            let child = pathFromRoot[i + 1]
+            if let idx = turns.firstIndex(where: { $0.id == parent }) {
+                turns[idx].activeChildId = child
+            }
+        }
+
+        // 3. Drill down from turnId via activeChildId (or earliest by ts).
+        var fullPath = pathFromRoot
+        var leaf = turnId
+        while let chosenChild = nextChildToDescend(from: leaf) {
+            fullPath.append(chosenChild)
+            // Record the descent choice on the parent so it sticks.
+            if let idx = turns.firstIndex(where: { $0.id == leaf }) {
+                turns[idx].activeChildId = chosenChild
+            }
+            leaf = chosenChild
+        }
+        activePath = fullPath
+    }
+
+    /// Pick the next child to descend into when walking down from `turnId`.
+    /// Honours `activeChildId` if set and pointing to an existing child;
+    /// otherwise picks the earliest child by ts. Returns nil at a leaf.
+    private func nextChildToDescend(from turnId: UUID) -> UUID? {
+        let kids = children(of: turnId)
+        guard !kids.isEmpty else { return nil }
+        if let recorded = turn(id: turnId)?.activeChildId,
+           kids.contains(where: { $0.id == recorded }) {
+            return recorded
+        }
+        return kids.first?.id
     }
 
     /// Collapse legacy bracket-prefixed entity rows into their typed twins.
