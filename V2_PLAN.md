@@ -79,19 +79,20 @@ Treat as its own design doc — the data-model swap is small but the `turnIndex:
 2. **Variants vs branches — keep variants for now; collapse later.** Phase 7 ships with `Turn.variants` intact. Branching adds parent/child between Turns; swipes stay within a Turn. Collapsing variants → first-class branch siblings (the conceptually-clean answer the original plan hints at) is a bigger migration with re-bound ◀ ▶ semantics — lands as an optional later sub-step once the branching model is proven.
 3. **Memory subsystem — `turnIndex: Int` → `turnId: UUID` (load-bearing).** `SceneSummary.firstTurn/lastTurn: Int?` → `firstTurnId/lastTurnId: UUID?`. Same for `MemoryChunk.firstTurnIdx/lastTurnIdx`. `RetrievalEngine`'s "within N turns of the end" recency math translates to active-path positions resolved at query time. Invasive (~5 files), but unavoidable — without it, switching branch invalidates every scene summary and every retrieval cache. Migration: legacy `Int?` indices map to `activePath[idx]` (the spine tree gives an unambiguous mapping).
 4. **Regen semantics — fork is always sibling-add, never destructive.** Regen on the trailing assistant turn → appends a variant (today's behaviour, preserved). Regen on a non-trailing turn → forks a new child Turn off the parent, switches `activePath` to the new branch. Chat-storage-on-disk grows monotonically — branches don't get GC'd automatically; add a "prune dead branches" action later.
-5. **UI — gutter indicator + Branches sidebar pane; defer the minimap.** Per-turn gutter glyph (▷) when the turn has siblings, click to switch. Cmd-B = fork from current. Branches inspector pane lists every branch with first-line preview. A true visual-tree minimap is more expressive but expensive — gutter + list is enough for MVP and can be evaluated against actual usage before investing in graphics.
+5. **UI — gutter indicator + Branches sidebar pane (list); visual minimap added in §3.5.** Per-turn gutter glyph (▷) when the turn has siblings, click to switch. Cmd-B = fork from current. Branches inspector pane lists every branch with first-line preview. Visual minimap (graph view) follows the list view as §3.5 — chat trees are small enough that a custom AppKit layered layout is feasible (~200 LOC), with Open WebUI's `Overview/Flow.svelte` as the reference for the visual + interaction language.
 
 **Sub-step staging** (mirroring Phase 6's incremental shape):
 
 - **§3.1** — Data model: `parentId` + `activePath`, migration of existing chats to a spine tree. No UI change. Tests-first; ~1 day.
 - **§3.2** — Memory subsystem: `turnIndex` → `turnId` through `SceneSummary`, `Chunker`, `VectorStore`, `RetrievalEngine`, `MemoryManager`. Migration tests. ~2-3 days. *Load-bearing; ugly.*
 - **§3.3** — Fork-on-regen for non-trailing turns. Sibling glyph in the gutter. Cmd-B action. ~1-2 days.
-- **§3.4** — Branches sidebar pane. ~1 day.
-- **§3.5** (optional, deferred-by-default) — Collapse variants into branches.
+- **§3.4** — Branches sidebar pane (list view). ~1 day.
+- **§3.5** — Visual tree minimap (custom AppKit layered layout, Open WebUI as reference). ~3-4 days.
+- **§3.6** (optional, deferred-by-default) — Collapse variants into branches.
 
-§3.1 + §3.2 are the unglamorous half — most of the risk lives there. §3.3 onward is where users see value. Full design — schema, migration strategy, per-sub-step contracts, eval points — lands in `V2_PHASE7_FULL_BRANCHING.md` (next).
+§3.1 + §3.2 are the unglamorous half — most of the risk lives there. §3.3 onward is where users see value. Full design — schema, migration strategy, per-sub-step contracts, decisions taken, prior-art survey (SillyTavern, KoboldAI, Open WebUI, LibreChat, Loom, plus academic refs) — lands in [`V2_PHASE7_FULL_BRANCHING.md`](V2_PHASE7_FULL_BRANCHING.md).
 
-**Effort: ~1 week+ implementation after design doc.**
+**Effort: ~10 days implementation after design doc.**
 
 ---
 
