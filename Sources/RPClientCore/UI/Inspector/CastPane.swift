@@ -211,6 +211,7 @@ final class CastPane: NSViewController {
     @objc private func addCharacterPicked() {
         guard let item = addButton.selectedItem,
               let cid = item.representedObject as? UUID else { return }
+        let character = AppState.shared.character(id: cid)
         AppState.shared.updateCurrent { c in
             // Phase 8 §4.3 — solo→multi promotion-gap heal. If this add
             // takes cast.count from 1 to 2 (or higher), the validateGroupChat
@@ -238,6 +239,15 @@ final class CastPane: NSViewController {
             // characterId.didSet invariant in reverse.
             if c.characterId == nil {
                 c.characterId = cid
+            }
+            // Phase 8 §4.5 — auto-create a stub entity for the added
+            // character so the user can assign a voice to it via the
+            // Entities pane immediately, without waiting for the fact
+            // extractor to fire + accepting a suggestion. No-op if an
+            // entity already matches the character's name (extractor-
+            // created or hand-curated).
+            if let character {
+                c.ensureCharacterEntity(character)
             }
         }
         // Reset the popup to the "+ Add character…" placeholder.

@@ -191,12 +191,22 @@ private final class MinimapCanvas: NSView {
             ctx.strokePath()
         }
 
+        // Phase 8 §4.5 — speaker tinting only applies on multi-cast
+        // chats. Resolved once per draw rather than per-box.
+        let isMultiCast = chat.cast.count > 1
+
         // Boxes.
         for t in chat.turns {
             guard let p = position(forTurnId: t.id) else { continue }
+            let speakerAccent: NSColor? = {
+                guard isMultiCast, t.role == .assistant,
+                      let sid = t.speakerId else { return nil }
+                return SpeakerColor.accent(for: sid)
+            }()
             drawBox(in: ctx, at: p, turn: t,
                     isActiveLeaf: t.id == activeLeafId,
-                    isOnActivePath: activePathSet.contains(t.id))
+                    isOnActivePath: activePathSet.contains(t.id),
+                    speakerAccent: speakerAccent)
         }
     }
 
@@ -207,7 +217,8 @@ private final class MinimapCanvas: NSView {
     }
 
     private func drawBox(in ctx: CGContext, at center: CGPoint, turn: Turn,
-                         isActiveLeaf: Bool, isOnActivePath: Bool) {
+                         isActiveLeaf: Bool, isOnActivePath: Bool,
+                         speakerAccent: NSColor?) {
         let rect = NSRect(x: center.x - boxWidth / 2,
                           y: center.y - boxHeight / 2,
                           width: boxWidth, height: boxHeight)
@@ -228,6 +239,29 @@ private final class MinimapCanvas: NSView {
         (isOnActivePath ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
         path.lineWidth = isActiveLeaf ? 1.5 : 1.0
         path.stroke()
+
+        // Phase 8 §4.5 — speaker tint strip on the left edge for
+        // multi-cast assistant turns. Compositional with the existing
+        // active-path styling: doesn't replace any colour, just adds a
+        // 3pt vertical bar so each speaker's track is visible at a
+        // glance scrolling the minimap. Skipped when speakerAccent is
+        // nil (solo chats, user turns, or unattributed multi-cast turns).
+        if let accent = speakerAccent {
+            let stripWidth: CGFloat = 3
+            let stripRect = NSRect(
+                x: rect.minX,
+                y: rect.minY,
+                width: stripWidth,
+                height: rect.height
+            )
+            let stripPath = NSBezierPath(
+                roundedRect: stripRect,
+                xRadius: stripWidth / 2,
+                yRadius: stripWidth / 2
+            )
+            accent.setFill()
+            stripPath.fill()
+        }
 
         // Label: role glyph + first-line preview, truncated to ~24 chars.
         let glyph = turn.role == .user ? "👤" : "✦"

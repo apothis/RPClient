@@ -492,6 +492,37 @@ struct Chat: Codable, Equatable, Identifiable {
         }
     }
 
+    /// Phase 8 §4.5 — auto-create a stub `Entity` for `character` if no
+    /// matching entity already exists. Idempotent: multiple calls with
+    /// the same character produce one entity. Existing entities (from
+    /// the extractor's suggestion path or hand-curated) take priority,
+    /// so this never overwrites user state.
+    ///
+    /// The point: entity-name-matched voice routing (Phase 6 §7.3 +
+    /// Phase 8 §4.5) needs an entity to exist before the user can
+    /// assign a voice. Pre-§4.5, that entity was only created when the
+    /// fact extractor fired AND the user accepted a suggestion — a
+    /// multi-step manual loop. Auto-creating on cast-bind (newChat
+    /// withCharacter / CastPane add) closes the gap so voices can be
+    /// assigned the moment the character enters the room.
+    ///
+    /// `pinnedByUser = true` because this is intentional user action
+    /// (they bound a card to a chat / added it to the cast), not an
+    /// extractor guess. Pinning protects the entity from auto-merge /
+    /// auto-evict policies later.
+    mutating func ensureCharacterEntity(_ character: Character) {
+        let trimmed = character.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if Speaker.matchCharacterToEntity(characterName: character.name, entities: entities) != nil {
+            return
+        }
+        entities.append(Entity(
+            name: trimmed,
+            type: .character,
+            pinnedByUser: true
+        ))
+    }
+
     /// Phase 8 §4.2a — read and clear `pendingSpeakerId` in one mutation,
     /// so the send path doesn't accidentally re-use a one-shot pick on the
     /// next generation. Returns the previous value (`nil` when nothing was

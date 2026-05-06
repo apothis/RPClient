@@ -398,6 +398,45 @@ final class Speaker {
         )
     }
 
+    /// Phase 8 §4.5 — per-turn first-person entity resolution. For
+    /// multi-cast assistant turns (`turn.speakerId != nil`), uses the
+    /// speaker's character name to match an entity (so each cast member
+    /// gets attributed as the "I" of their own turn). Falls back to
+    /// `chat.characterId` for solo / free-form chats. Returns nil when
+    /// no entity matches the speaker (caller treats as "no first-person
+    /// hint" and entity attribution operates without it).
+    ///
+    /// Pulled out of `resolveFirstPersonEntityId` so the test path can
+    /// exercise it without an AppState — `characters` is passed in
+    /// rather than read from `AppState.shared`.
+    static func resolveSpeakerEntityId(turn: Turn, chat: Chat, characters: [Character]) -> UUID? {
+        guard turn.role == .assistant else { return nil }
+        let speakerCharacterId: UUID? = turn.speakerId ?? chat.characterId
+        guard let cid = speakerCharacterId,
+              let character = characters.first(where: { $0.id == cid }) else {
+            return nil
+        }
+        return matchCharacterToEntity(
+            characterName: character.name,
+            entities: chat.entities
+        )
+    }
+
+    /// Phase 8 §4.5 — per-turn voice baseline. Resolves the speaker's
+    /// matched entity (via `resolveSpeakerEntityId`) and returns its
+    /// `voice` if set. Used as the segment-default voice in
+    /// `handleStreamFinished` so each cast member's narration uses
+    /// their own voice (instead of every speaker falling through to
+    /// `chat.voice`). Returns nil when no entity matches or the
+    /// matched entity has no voice — caller falls back to chat default.
+    static func resolveSpeakerVoice(turn: Turn, chat: Chat, characters: [Character]) -> VoicePreference? {
+        guard let entId = resolveSpeakerEntityId(turn: turn, chat: chat, characters: characters),
+              let entity = chat.entities.first(where: { $0.id == entId }) else {
+            return nil
+        }
+        return entity.voice
+    }
+
     /// Two-pass match between a character card name and the chat's entity
     /// rows.
     /// 1. Exact case-insensitive match against entity name or alias.
@@ -456,19 +495,56 @@ final class Speaker {
         let plain = Speaker.plainText(last.text)
         guard !plain.isEmpty else { return }
 
-        // Resolve the chat-default voice once — used for narrator segments
-        // (entityId == nil) and for any matched entity that didn't pick
-        // a voice of its own.
+        // Phase 8 §4.5 — per-turn voice baseline. Multi-cast chats
+        // resolve the active speaker's matched entity and use its
+        // `voice` for unattributed segments (narration), so each cast
+        // member's prose reads in their own voice instead of every
+        // speaker falling through to chat.voice. Solo / free-form
+        // chats unchanged: speakerId is nil → resolver falls through
+        // to chat.characterId → same matched-entity voice as before
+        // (or nil → chatDefault below).
+        let characters = AppState.shared.characters
+        let speakerVoice = Speaker.resolveSpeakerVoice(
+            turn: last, chat: chat, characters: characters
+        )
         let chatDefault = chat.voice ?? AppState.shared.settings.defaultVoice
-        let chatDefaultOptions = SpeakOptions(preference: chatDefault)
+        let segmentDefault = speakerVoice ?? chatDefault
+        let segmentDefaultOptions = SpeakOptions(preference: segmentDefault)
 
-        // First-person hint: in RP, the model usually speaks AS the chat's
-        // character — the "I" in narration is that character. Resolve the
-        // character card → its name → the entity matching that name, and
-        // pass that entity id as the first-person speaker. Falls back to
-        // nil (older heuristic behaviour) if any link in the chain is
-        // missing.
-        let firstPersonEntityId = resolveFirstPersonEntityId(in: chat)
+        // First-person hint: in RP, the model usually speaks AS the
+        // active speaker — the "I" in narration is that character.
+        // Phase 8 §4.5 — resolved per-turn so multi-cast attributes
+        // first-person to whoever spoke this turn, not always the chat's
+        // primary character. Falls back to chat.characterId for solo.
+        let firstPersonEntityId = Speaker.resolveSpeakerEntityId(
+            turn: last, chat: chat, characters: characters
+        )
+        // Phase 8 §4.5 diagnostic — surface the per-turn voice
+        // resolution path so when a user reports "wrong voice fired,"
+        // the log tells us which character/entity were matched + which
+        // voice was picked. Cheap; one line per stream-finish.
+        let speakerCharName: String = {
+            guard let sid = last.speakerId,
+                  let c = characters.first(where: { $0.id == sid }) else {
+                return "nil"
+            }
+            return c.name
+        }()
+        let firstPersonName: String = {
+            guard let fpid = firstPersonEntityId,
+                  let e = chat.entities.first(where: { $0.id == fpid }) else {
+                return "nil"
+            }
+            return e.name
+        }()
+        DebugLog.shared.write("""
+            speaker: voice-resolve \
+            speakerId=\(last.speakerId?.uuidString.prefix(8) ?? "nil") (\(speakerCharName)) \
+            firstPersonEnt=\(firstPersonEntityId?.uuidString.prefix(8) ?? "nil") (\(firstPersonName)) \
+            speakerVoice=\(speakerVoice?.voiceIdentifier.voiceId ?? "nil") \
+            chatDefault=\(chatDefault?.voiceIdentifier.voiceId ?? "nil") \
+            usingDefault=\(segmentDefault?.voiceIdentifier.voiceId ?? "nil")
+            """)
 
         let attributedSegments = SpeakerAttribution.split(
             text: plain,
@@ -477,15 +553,25 @@ final class Speaker {
             firstPersonEntityId: firstPersonEntityId
         )
 
-        let segments: [(text: String, options: SpeakOptions)] = attributedSegments.map { seg in
+        let segments: [(text: String, options: SpeakOptions)] = attributedSegments.enumerated().map { (idx, seg) in
             let options: SpeakOptions
+            let pickedSource: String
             if let id = seg.entityId,
                let entity = chat.entities.first(where: { $0.id == id }),
                let voice = entity.voice {
                 options = SpeakOptions(preference: voice)
+                pickedSource = "ent[\(entity.name)]"
+            } else if let id = seg.entityId,
+                      let entity = chat.entities.first(where: { $0.id == id }) {
+                options = segmentDefaultOptions
+                pickedSource = "ent[\(entity.name)] (no voice → default)"
             } else {
-                options = chatDefaultOptions
+                options = segmentDefaultOptions
+                pickedSource = "narrator (default)"
             }
+            DebugLog.shared.write(
+                "speaker: seg[\(idx)] chars=\(seg.text.count) → voice=\(options.voice?.voiceId ?? "nil") via \(pickedSource)"
+            )
             return (seg.text, options)
         }
 

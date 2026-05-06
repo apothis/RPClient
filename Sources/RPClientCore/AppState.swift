@@ -261,6 +261,10 @@ final class AppState {
         c.title = character.name
         c.characterId = character.id
         c.personaId = settings.defaultPersonaId
+        // Phase 8 §4.5 — auto-create a stub entity for the bound
+        // character so voice routing has somewhere to land without the
+        // user waiting for the fact extractor + accepting a suggestion.
+        c.ensureCharacterEntity(character)
         if let greeting = AppState.makeGreetingTurn(character: character) {
             c.appendTurn(greeting)
         }

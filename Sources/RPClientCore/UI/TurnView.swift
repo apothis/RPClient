@@ -279,6 +279,14 @@ final class TurnView: NSView, NSTextViewDelegate {
     private var speakerNameLabel: NSTextField?
     private let multiCast: Bool
 
+    /// Phase 8 §4.3 — vertical space reserved above the bubble for the
+    /// speaker name pill. Zero when no speaker label is shown
+    /// (solo / free-form chats and user turns). Read by both the
+    /// constraint installer (offsets bubble + avatar by this) AND
+    /// `recomputeHeight()` (adds it to total height so the bubble's
+    /// content area isn't squeezed and the toolbar doesn't clip).
+    private var speakerLabelHeight: CGFloat { speakerNameLabel != nil ? 18 : 0 }
+
     init(turn: Turn, character: Character? = nil, multiCast: Bool = false) {
         self.turnId = turn.id
         self.role = turn.role
@@ -497,9 +505,14 @@ final class TurnView: NSView, NSTextViewDelegate {
             // Phase 8 §4.3 — speaker name label above the bubble (when
             // multi-cast). The label sits in the same vertical track as
             // the bubble's top edge, leading-aligned with the bubble, so
-            // it reads as a header for the message. Avatar slides down by
-            // labelGap to stay top-aligned with the bubble's header.
-            let labelGap: CGFloat = (speakerNameLabel != nil) ? 18 : 0
+            // it reads as a header for the message. Avatar slides down
+            // by `speakerLabelHeight` to stay top-aligned with the
+            // bubble's header. recomputeHeight reads the same ivar so
+            // the TurnView's outer height includes this offset — the
+            // first version of this code computed the offset locally
+            // and forgot to plumb it into the height calc, which clipped
+            // the toolbar + made the textView scroll instead of expand.
+            let labelGap = speakerLabelHeight
 
             NSLayoutConstraint.activate([
                 avatar.topAnchor.constraint(equalTo: topAnchor, constant: labelGap),
@@ -776,7 +789,12 @@ final class TurnView: NSView, NSTextViewDelegate {
             textH = 24
         }
         let bubbleH: CGFloat = role == .user ? textH + bubblePadY * 2 : textH
-        let h = bubbleH + toolbarTopGap + toolbarHeight
+        // Phase 8 §4.3 — `speakerLabelHeight` is the gap reserved above
+        // the bubble for the multi-cast speaker name pill (zero on solo
+        // chats / user turns). Without adding it here, the bubble's
+        // content area is squeezed and the textView scrolls instead of
+        // expanding to fit the reply.
+        let h = speakerLabelHeight + bubbleH + toolbarTopGap + toolbarHeight
         if heightConstraint == nil {
             heightConstraint = heightAnchor.constraint(equalToConstant: h)
             heightConstraint?.isActive = true

@@ -540,6 +540,157 @@ func speakerTests() -> TestSuite {
         try expectEqual(opts.pitch, 0.8)
     }
 
+    // MARK: - Phase 8 §4.5 — speaker-aware voice resolution
+
+    func makeVoice(_ id: String) -> VoicePreference {
+        VoicePreference(
+            voiceIdentifier: VoiceIdentifier(engine: .kokoro, voiceId: id),
+            rate: 1.0, pitch: 1.0
+        )
+    }
+
+    s.test("resolveSpeakerEntityId solo chat: falls back to chat.characterId match") {
+        let annaChar = Character(id: UUID(), name: "Anna")
+        let annaEnt = Entity(name: "Anna", type: .character)
+        var chat = Chat(title: "solo")
+        chat.characterId = annaChar.id
+        chat.entities = [annaEnt]
+        var asst = Turn(role: .assistant, text: "x")
+        // No speakerId → solo path uses chat.characterId.
+        let id = Speaker.resolveSpeakerEntityId(turn: asst, chat: chat, characters: [annaChar])
+        try expectEqual(id, annaEnt.id)
+    }
+
+    s.test("resolveSpeakerEntityId multi-cast: uses turn.speakerId's character → entity match") {
+        let anna = Character(id: UUID(), name: "Anna")
+        let sarah = Character(id: UUID(), name: "Sarah")
+        let annaEnt = Entity(name: "Anna", type: .character)
+        let sarahEnt = Entity(name: "Sarah", type: .character)
+        var chat = Chat(title: "group")
+        chat.cast = [anna.id, sarah.id]
+        chat.characterId = anna.id  // legacy / primary
+        chat.entities = [annaEnt, sarahEnt]
+        var asst = Turn(role: .assistant, text: "x")
+        asst.speakerId = sarah.id  // Sarah spoke this turn
+        let id = Speaker.resolveSpeakerEntityId(turn: asst, chat: chat, characters: [anna, sarah])
+        try expectEqual(id, sarahEnt.id, "expected Sarah's entity, not Anna's (chat.characterId)")
+    }
+
+    s.test("resolveSpeakerEntityId returns nil when speaker's name doesn't match any entity") {
+        let lila = Character(id: UUID(), name: "Lila")
+        let anna = Character(id: UUID(), name: "Anna")
+        let annaEnt = Entity(name: "Anna", type: .character)
+        var chat = Chat(title: "x")
+        chat.cast = [anna.id, lila.id]
+        chat.characterId = anna.id
+        chat.entities = [annaEnt]  // no Lila entity
+        var asst = Turn(role: .assistant, text: "x")
+        asst.speakerId = lila.id
+        let id = Speaker.resolveSpeakerEntityId(turn: asst, chat: chat, characters: [anna, lila])
+        try expectNil(id)
+    }
+
+    s.test("resolveSpeakerVoice multi-cast: returns the speaker's matched-entity voice") {
+        let anna = Character(id: UUID(), name: "Anna")
+        let sarah = Character(id: UUID(), name: "Sarah")
+        let sarahVoice = makeVoice("af_sarah")
+        let annaEnt = Entity(name: "Anna", type: .character)
+        var sarahEnt = Entity(name: "Sarah", type: .character)
+        sarahEnt.voice = sarahVoice
+        var chat = Chat(title: "x")
+        chat.cast = [anna.id, sarah.id]
+        chat.characterId = anna.id
+        chat.entities = [annaEnt, sarahEnt]
+        var asst = Turn(role: .assistant, text: "x")
+        asst.speakerId = sarah.id
+        let voice = Speaker.resolveSpeakerVoice(turn: asst, chat: chat, characters: [anna, sarah])
+        try expectEqual(voice, sarahVoice, "expected Sarah's voice")
+    }
+
+    s.test("resolveSpeakerVoice returns nil when speaker's matched entity has no voice") {
+        let anna = Character(id: UUID(), name: "Anna")
+        let annaEnt = Entity(name: "Anna", type: .character)  // no voice
+        var chat = Chat(title: "x")
+        chat.characterId = anna.id
+        chat.entities = [annaEnt]
+        var asst = Turn(role: .assistant, text: "x")
+        let voice = Speaker.resolveSpeakerVoice(turn: asst, chat: chat, characters: [anna])
+        try expectNil(voice)
+    }
+
+    s.test("resolveSpeakerVoice returns nil for free-form chats with no character link") {
+        var chat = Chat(title: "x")
+        var asst = Turn(role: .assistant, text: "x")
+        let voice = Speaker.resolveSpeakerVoice(turn: asst, chat: chat, characters: [])
+        try expectNil(voice)
+    }
+
+    // MARK: - Phase 8 §4.5 — Chat.ensureCharacterEntity (auto-create stub)
+
+    s.test("ensureCharacterEntity creates a stub entity for a character with no matching entity") {
+        var chat = Chat(title: "x")
+        let anna = Character(id: UUID(), name: "Anna")
+        chat.ensureCharacterEntity(anna)
+        try expectEqual(chat.entities.count, 1)
+        try expectEqual(chat.entities.first?.name, "Anna")
+        try expectEqual(chat.entities.first?.type, .character)
+        try expectTrue(chat.entities.first?.pinnedByUser == true,
+                       "auto-created entity should be pinned (it's user-intentional, not extractor-suggested)")
+    }
+
+    s.test("ensureCharacterEntity is a no-op when a matching entity already exists") {
+        var chat = Chat(title: "x")
+        let existing = Entity(id: UUID(), name: "Anna", type: .character)
+        chat.entities = [existing]
+        let anna = Character(id: UUID(), name: "Anna")
+        chat.ensureCharacterEntity(anna)
+        try expectEqual(chat.entities.count, 1)
+        try expectEqual(chat.entities.first?.id, existing.id, "existing entity should not be replaced")
+    }
+
+    s.test("ensureCharacterEntity treats an alias match as existing (no duplicate)") {
+        var chat = Chat(title: "x")
+        let existing = Entity(id: UUID(), name: "the mage", aliases: ["Sage"], type: .character)
+        chat.entities = [existing]
+        let sage = Character(id: UUID(), name: "Sage")
+        chat.ensureCharacterEntity(sage)
+        try expectEqual(chat.entities.count, 1)
+    }
+
+    s.test("ensureCharacterEntity skips characters with empty / whitespace names") {
+        var chat = Chat(title: "x")
+        let nameless = Character(id: UUID(), name: "  ")
+        chat.ensureCharacterEntity(nameless)
+        try expectEqual(chat.entities.count, 0)
+    }
+
+    s.test("ensureCharacterEntity preserves voice routing — created entity is matchable") {
+        // The whole reason for §4.5 auto-create: cast member added by
+        // card → entity exists → user can assign a voice → speaker layer
+        // routes via matchCharacterToEntity to the created entity.
+        var chat = Chat(title: "x")
+        let lila = Character(id: UUID(), name: "Lila")
+        chat.ensureCharacterEntity(lila)
+        let matched = Speaker.matchCharacterToEntity(
+            characterName: lila.name,
+            entities: chat.entities
+        )
+        try expectEqual(matched, chat.entities.first?.id)
+    }
+
+    s.test("resolveSpeakerVoice on user turn returns nil (user turns aren't voiced)") {
+        let anna = Character(id: UUID(), name: "Anna")
+        let annaVoice = makeVoice("af_anna")
+        var annaEnt = Entity(name: "Anna", type: .character)
+        annaEnt.voice = annaVoice
+        var chat = Chat(title: "x")
+        chat.characterId = anna.id
+        chat.entities = [annaEnt]
+        let userTurn = Turn(role: .user, text: "hi")
+        let voice = Speaker.resolveSpeakerVoice(turn: userTurn, chat: chat, characters: [anna])
+        try expectNil(voice)
+    }
+
     return s
 }
 
