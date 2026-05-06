@@ -431,8 +431,12 @@ final class Speaker {
 
     private func handleStreamFinished() {
         guard shouldSpeak else { return }
+        // §3.3b: speak the active leaf, not storage's `turns.last` — once
+        // forks exist, the last-stored turn might be off-path while the
+        // freshly streamed reply lives at the active leaf.
         guard let chat = AppState.shared.currentChat,
-              let last = chat.turns.last,
+              let leafId = chat.activePath.last,
+              let last = chat.turn(id: leafId),
               last.role == .assistant else { return }
         let plain = Speaker.plainText(last.text)
         guard !plain.isEmpty else { return }

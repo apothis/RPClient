@@ -268,22 +268,33 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             removeEmptyState()
             return
         }
-        if chat.turns.isEmpty {
+        // Phase 7 §3.3b — the renderable list is the active path, not the
+        // storage `turns` array. Off-path siblings (created by fork) live in
+        // `chat.turns` so a later branch switch can re-surface them, but
+        // they don't show in the visible chat.
+        let active = chat.activeTurns
+        if active.isEmpty {
             installEmptyState()
         } else {
             removeEmptyState()
         }
-        let lastAssistantIdx = chat.turns.lastIndex(where: { $0.role == .assistant })
+        let lastAssistantIdx = active.lastIndex(where: { $0.role == .assistant })
         let character = chat.characterId.flatMap { AppState.shared.character(id: $0) }
-        for (i, t) in chat.turns.enumerated() {
+        for (i, t) in active.enumerated() {
             let tv = TurnView(turn: t, character: character)
             tv.delegate = self
             tv.isLastAssistant = (i == lastAssistantIdx)
             tv.setVariantState(
                 active: t.activeVariant,
                 count: t.variants.count,
-                activeIsStale: chat.isVariantStale(turnIndex: i, variantIndex: t.activeVariant)
+                activeIsStale: chat.isVariantStale(turnId: t.id, variantIndex: t.activeVariant)
             )
+            // Branch glyph in the gutter when this turn has siblings —
+            // i.e., the parent has more than one child. Only meaningful for
+            // non-root turns.
+            if let pid = t.parentId {
+                tv.hasSiblings = chat.children(of: pid).count > 1
+            }
             tv.translatesAutoresizingMaskIntoConstraints = false
             stackView.addArrangedSubview(tv)
             tv.widthAnchor.constraint(
@@ -342,10 +353,14 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     }
 
     @objc private func handleChatUpdated() {
-        // If the turns count changed (e.g. user message + empty assistant added),
-        // rebuild structurally. If only text changed, leave token stream handling alone.
+        // If the active-path count changed (e.g. user message + empty
+        // assistant added, or a fork landed and rewrote the path), rebuild
+        // structurally. Pure text edits leave the path stable and update
+        // in place. §3.3b: count is over `activeTurns`, not storage —
+        // off-path siblings live in `turns` and don't render.
         guard let chat = AppState.shared.currentChat else { return }
-        if chat.turns.count != turnViews.count {
+        let active = chat.activeTurns
+        if active.count != turnViews.count {
             rebuild()
             return
         }
@@ -354,13 +369,16 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         // Push the latest tuple to each view so the pager redraws (including
         // the ⚠ stale badge, since paging an earlier turn can change the
         // staleness of every later turn's active variant).
-        for (i, t) in chat.turns.enumerated() where i < turnViews.count {
+        for (i, t) in active.enumerated() where i < turnViews.count {
             let tv = turnViews[i]
             tv.setVariantState(
                 active: t.activeVariant,
                 count: t.variants.count,
-                activeIsStale: chat.isVariantStale(turnIndex: i, variantIndex: t.activeVariant)
+                activeIsStale: chat.isVariantStale(turnId: t.id, variantIndex: t.activeVariant)
             )
+            if let pid = t.parentId {
+                tv.hasSiblings = chat.children(of: pid).count > 1
+            }
             // Paging changes which variant's text is mirrored on `text`; the
             // bubble needs to reflect that immediately.
             if tv.currentText != t.text {
@@ -372,8 +390,13 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     }
 
     @objc private func handleStreamToken() {
+        // Stream tokens land in the active leaf — that's the turn AppState
+        // appended/forked into. Storage's `turns.last` may be off-path
+        // (e.g., user just switched away from a recent fork), so always go
+        // through activePath.
         guard let chat = AppState.shared.currentChat,
-              let lastTurn = chat.turns.last,
+              let leafId = chat.activePath.last,
+              let lastTurn = chat.turn(id: leafId),
               let lastView = turnViews.last,
               lastView.turnId == lastTurn.id else {
             return
@@ -407,8 +430,10 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         let thinking = AppState.shared.isThinking
         // Only the trailing assistant turn — the one currently streaming —
         // ever shows the placeholder. Earlier turns are settled history.
+        // §3.3b: target via activePath leaf, not storage's `turns.last`.
         guard let lastView = turnViews.last,
-              lastView.turnId == AppState.shared.currentChat?.turns.last?.id else {
+              let leafId = AppState.shared.currentChat?.activePath.last,
+              lastView.turnId == leafId else {
             return
         }
         lastView.isThinking = thinking
@@ -519,15 +544,45 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         }
     }
 
+    func turnViewDidRequestSiblingPopover(_ view: TurnView, anchor: NSView) {
+        guard let chat = AppState.shared.currentChat,
+              let turn = chat.turn(id: view.turnId),
+              let pid = turn.parentId else { return }
+        let siblings = chat.children(of: pid)
+        guard siblings.count > 1 else { return }
+        presentSiblingPopover(siblings: siblings, activeId: view.turnId, anchor: anchor)
+    }
+
+    private var siblingPopover: NSPopover?
+
+    private func presentSiblingPopover(siblings: [Turn], activeId: UUID, anchor: NSView) {
+        siblingPopover?.close()
+        let pop = NSPopover()
+        pop.behavior = .transient
+        pop.contentViewController = SiblingPickerViewController(
+            siblings: siblings,
+            activeId: activeId,
+            onPick: { [weak self] turnId in
+                self?.siblingPopover?.close()
+                self?.siblingPopover = nil
+                AppState.shared.switchBranch(to: turnId)
+            }
+        )
+        siblingPopover = pop
+        pop.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxX)
+    }
+
     // MARK: - Variant menu actions (⌘← / ⌘→)
 
     /// Page back through swipes on the trailing assistant turn. Targets the
     /// last assistant turn so the shortcut Just Works without the user having
-    /// to focus a particular bubble first.
+    /// to focus a particular bubble first. §3.3b: looks at activeTurns —
+    /// off-path siblings (forked alternatives) live in storage but never
+    /// claim "trailing".
     @objc func previousVariant(_ sender: Any?) {
         guard let chat = AppState.shared.currentChat,
               !AppState.shared.isStreaming,
-              let last = chat.turns.last(where: { $0.role == .assistant }) else { return }
+              let last = chat.activeTurns.last(where: { $0.role == .assistant }) else { return }
         AppState.shared.selectPreviousVariant(turnId: last.id)
     }
 
@@ -536,7 +591,7 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     @objc func nextVariant(_ sender: Any?) {
         guard let chat = AppState.shared.currentChat,
               !AppState.shared.isStreaming,
-              let last = chat.turns.last(where: { $0.role == .assistant }) else { return }
+              let last = chat.activeTurns.last(where: { $0.role == .assistant }) else { return }
         let atEnd = last.activeVariant >= last.variants.count - 1
         if atEnd {
             AppState.shared.regenerate()
@@ -545,20 +600,45 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         }
     }
 
+    /// Phase 7 §3.3b — Cmd-B menu action. Forks the trailing assistant turn
+    /// (creates a new sibling, stream into it). The design-doc target is
+    /// "focused turn's parent → fall back to trailing"; today the only
+    /// in-app focus is text-edit mode, so the fallback is the load-bearing
+    /// path. Future work: track a soft-focused turn via click-without-edit
+    /// and prefer it here.
+    @objc func forkBranch(_ sender: Any?) {
+        guard let chat = AppState.shared.currentChat,
+              !AppState.shared.isStreaming,
+              let last = chat.activeTurns.last(where: { $0.role == .assistant }),
+              last.parentId != nil else { return }
+        AppState.shared.forkFrom(turnId: last.id)
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let sel = menuItem.action
         if sel == #selector(previousVariant(_:)) {
             guard let chat = AppState.shared.currentChat,
                   !AppState.shared.isStreaming,
-                  let last = chat.turns.last(where: { $0.role == .assistant }) else { return false }
+                  let last = chat.activeTurns.last(where: { $0.role == .assistant }) else { return false }
             return last.activeVariant > 0
         }
         if sel == #selector(nextVariant(_:)) {
             guard let chat = AppState.shared.currentChat,
                   !AppState.shared.isStreaming,
-                  chat.turns.contains(where: { $0.role == .assistant }) else { return false }
+                  chat.activeTurns.contains(where: { $0.role == .assistant }) else { return false }
             // ▶ on the trailing assistant always lights up: at end-of-list it
             // generates a new variant (AppState.regenerate enforces the cap).
+            return true
+        }
+        if sel == #selector(forkBranch(_:)) {
+            // Disabled when streaming, or when there's no assistant turn yet
+            // (root-only chats), or when the trailing asst is the root (no
+            // parent to fork from — currently impossible in production but
+            // defensive).
+            guard let chat = AppState.shared.currentChat,
+                  !AppState.shared.isStreaming,
+                  let last = chat.activeTurns.last(where: { $0.role == .assistant }),
+                  last.parentId != nil else { return false }
             return true
         }
         return true

@@ -149,6 +149,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: String(format: "%C", 0xF703))   // NSRightArrowFunctionKey
         nextVariant.keyEquivalentModifierMask = .command
         viewMenu.addItem(nextVariant)
+        // Phase 7 §3.3b — Cmd-B forks the trailing assistant turn.
+        // Selector resolves up the responder chain to ChatViewController.
+        let forkBranch = NSMenuItem(
+            title: "Fork Branch",
+            action: Selector(("forkBranch:")),
+            keyEquivalent: "b")
+        forkBranch.keyEquivalentModifierMask = .command
+        viewMenu.addItem(forkBranch)
         viewMenuItem.submenu = viewMenu
 
         let editMenuItem = NSMenuItem()

@@ -475,6 +475,109 @@ func chatBranchingTests() -> TestSuite {
         try expectEqual(chat.activePath, [root.id, b.id, next.id])
     }
 
+    // MARK: - fork (Phase 7 §3.3b — sibling-add primitive)
+
+    s.test("fork(parentId:newTurn:) appends the new turn as a sibling under parent") {
+        // Tree: root → user → asstA. fork on user produces asstB as a
+        // sibling of asstA. activePath becomes [root, user, asstB].
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        let user = makeUser(parentId: root.id, text: "u")
+        let asstA = makeAssistant(parentId: user.id, text: "A")
+        chat.turns = [root, user, asstA]
+        chat.activePath = [root.id, user.id, asstA.id]
+
+        let asstB = Turn(role: .assistant, text: "B")
+        chat.fork(parentId: user.id, newTurn: asstB)
+
+        try expectEqual(chat.turns.count, 4)
+        try expectEqual(chat.turn(id: asstB.id)?.parentId, user.id)
+        try expectEqual(chat.activePath, [root.id, user.id, asstB.id])
+        // Old branch survives in storage.
+        try expectEqual(chat.turn(id: asstA.id)?.text, "A")
+    }
+
+    s.test("fork overwrites the new turn's parentId to the requested parent") {
+        // Defensive: caller passes a fresh turn whose parentId may be nil
+        // or stale; fork unconditionally rewrites it.
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        chat.turns = [root]
+        chat.activePath = [root.id]
+
+        var t = Turn(role: .assistant, text: "x")
+        t.parentId = UUID() // bogus — should be overwritten
+        chat.fork(parentId: root.id, newTurn: t)
+        try expectEqual(chat.turn(id: t.id)?.parentId, root.id)
+    }
+
+    s.test("fork sets parent.activeChildId to the new turn") {
+        // After a fork, switching away and back should land on the new
+        // sibling, not the original child. The activeChildId update is
+        // what makes that drill-down deterministic.
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        let asstA = makeAssistant(parentId: root.id, text: "A")
+        chat.turns = [root, asstA]
+        chat.activePath = [root.id, asstA.id]
+
+        let asstB = Turn(role: .assistant, text: "B")
+        chat.fork(parentId: root.id, newTurn: asstB)
+        try expectEqual(chat.turn(id: root.id)?.activeChildId, asstB.id)
+    }
+
+    s.test("fork truncates activePath when forking off a non-leaf ancestor") {
+        // Tree: root → t1 → t2 → t3 (active). Fork off t1 producing t1b
+        // → activePath becomes [root, t1, t1b]. t2 / t3 remain in
+        // chat.turns for later switchBranch-back.
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        let t1 = makeAssistant(parentId: root.id, text: "t1")
+        let t2 = makeUser(parentId: t1.id, text: "t2")
+        let t3 = makeAssistant(parentId: t2.id, text: "t3")
+        chat.turns = [root, t1, t2, t3]
+        chat.activePath = [root.id, t1.id, t2.id, t3.id]
+
+        let t1b = Turn(role: .user, text: "t1b")
+        chat.fork(parentId: t1.id, newTurn: t1b)
+        try expectEqual(chat.activePath, [root.id, t1.id, t1b.id])
+        // Old subtree still discoverable via children.
+        try expectEqual(chat.children(of: t1.id).map(\.text).sorted(), ["t1b", "t2"])
+    }
+
+    s.test("fork is a no-op when parentId doesn't exist in turns") {
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        chat.turns = [root]
+        chat.activePath = [root.id]
+
+        let bogus = Turn(role: .assistant, text: "x")
+        chat.fork(parentId: UUID(), newTurn: bogus)
+        try expectEqual(chat.turns.count, 1)
+        try expectEqual(chat.activePath, [root.id])
+    }
+
+    s.test("fork + switchBranch round-trip keeps both branches reachable") {
+        // Fork twice off the same parent, then switchBranch back to the
+        // first child. activePath should land on that child's leaf, with
+        // both siblings still in chat.turns.
+        var chat = Chat(title: "Test")
+        let root = Turn(role: .user, text: "root")
+        let asstA = makeAssistant(parentId: root.id, text: "A")
+        chat.turns = [root, asstA]
+        chat.activePath = [root.id, asstA.id]
+
+        let asstB = Turn(role: .assistant, text: "B")
+        chat.fork(parentId: root.id, newTurn: asstB)
+        try expectEqual(chat.activePath, [root.id, asstB.id])
+
+        chat.switchBranch(to: asstA.id)
+        try expectEqual(chat.activePath, [root.id, asstA.id])
+
+        chat.switchBranch(to: asstB.id)
+        try expectEqual(chat.activePath, [root.id, asstB.id])
+    }
+
     // MARK: - Round-trip with explicit branching state
 
     s.test("round-trip preserves parentId, activeChildId, and activePath") {

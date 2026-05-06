@@ -495,13 +495,37 @@ struct Chat: Codable, Equatable, Identifiable {
     /// recorded fingerprint that no longer matches the chat's live prefix.
     /// Variants without a fingerprint (legacy seeds, hand-edited rows) are
     /// reported as not-stale — we have no provenance to compare against.
+    ///
+    /// Pre-Phase-7 callers passed an index into `chat.turns` which doubled
+    /// as the renderable position. Under branching the two diverge; this
+    /// overload remains for the linear-chat case (and existing tests) and
+    /// resolves the id of the turn at `turnIndex` to delegate through the
+    /// id-based variant. Returns false on out-of-bounds.
     func isVariantStale(turnIndex: Int, variantIndex: Int) -> Bool {
         guard turns.indices.contains(turnIndex) else { return false }
-        guard turns[turnIndex].variants.indices.contains(variantIndex) else { return false }
-        guard let recorded = turns[turnIndex].variants[variantIndex].contextFingerprint else {
+        return isVariantStale(turnId: turns[turnIndex].id, variantIndex: variantIndex)
+    }
+
+    /// Phase 7 §3.3b — branch-aware staleness check. Computes the fingerprint
+    /// against the active-path prefix up to `turnId` rather than the storage
+    /// order, so a turn forked alongside off-path siblings still gets the
+    /// right baseline. If `turnId` isn't on the active path, falls back to
+    /// the position in storage (matches pre-§3.3b semantics).
+    func isVariantStale(turnId: UUID, variantIndex: Int) -> Bool {
+        guard let turn = turn(id: turnId) else { return false }
+        guard turn.variants.indices.contains(variantIndex) else { return false }
+        guard let recorded = turn.variants[variantIndex].contextFingerprint else {
             return false
         }
-        let live = Chat.makeContextFingerprint(turns[..<turnIndex])
+        let prefix: [Turn]
+        if let pos = activePosition(of: turnId) {
+            prefix = Array(activeTurns.prefix(pos))
+        } else if let storeIdx = turns.firstIndex(where: { $0.id == turnId }) {
+            prefix = Array(turns.prefix(storeIdx))
+        } else {
+            return false
+        }
+        let live = Chat.makeContextFingerprint(prefix)
         return recorded != live
     }
 
@@ -623,6 +647,57 @@ struct Chat: Codable, Equatable, Identifiable {
         }
         turns.append(t)
         activePath.append(t.id)
+    }
+
+    /// Fork a new branch by adding `newTurn` as a child of `parentId`.
+    /// Rewrites `newTurn.parentId` to `parentId` (so callers can pass a
+    /// freshly-constructed turn without pre-wiring), records the choice on
+    /// `parentId.activeChildId`, and rebuilds `activePath` as the
+    /// path-from-root-to-`parentId` followed by the new turn. Off-path
+    /// siblings stay in `turns` and remain reachable via `switchBranch`.
+    ///
+    /// No-op when `parentId` doesn't exist in `turns` — defensive guard for
+    /// the AppState wrapper, where the UI nominally only fires on existing
+    /// turns but state can race.
+    ///
+    /// summarizedThrough is clamped to the new path's length on the same
+    /// rationale as `switchBranch` — see §3.2.D / V2_PHASE7_FULL_BRANCHING.md.
+    mutating func fork(parentId: UUID, newTurn: Turn) {
+        guard turns.contains(where: { $0.id == parentId }) else { return }
+
+        // Walk parents from `parentId` up to root.
+        var pathToRoot: [UUID] = []
+        var cur: UUID? = parentId
+        var safety = turns.count + 1
+        while let id = cur {
+            pathToRoot.append(id)
+            safety -= 1
+            if safety < 0 { return }
+            cur = turns.first(where: { $0.id == id })?.parentId
+        }
+        let pathFromRoot = Array(pathToRoot.reversed())
+
+        // Update each ancestor's activeChildId to point at its successor on
+        // the new fork's path. Matches switchBranch's bookkeeping so a later
+        // load lands here without further drill.
+        for i in 0..<(pathFromRoot.count - 1) {
+            let p = pathFromRoot[i]
+            let child = pathFromRoot[i + 1]
+            if let idx = turns.firstIndex(where: { $0.id == p }) {
+                turns[idx].activeChildId = child
+            }
+        }
+
+        var t = newTurn
+        t.parentId = parentId
+        if let idx = turns.firstIndex(where: { $0.id == parentId }) {
+            turns[idx].activeChildId = t.id
+        }
+        turns.append(t)
+        activePath = pathFromRoot + [t.id]
+        if summarizedThrough > activePath.count {
+            summarizedThrough = activePath.count
+        }
     }
 
     /// Pick the next child to descend into when walking down from `turnId`.

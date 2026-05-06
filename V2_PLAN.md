@@ -2,7 +2,7 @@
 
 Forward plan for the V2 surface area listed in [`PLAN.md`](PLAN.md) §10. The MVP and the Memory V2 subsystem (Steps A–D, see [`MEMORY_V2_PLAN.md`](MEMORY_V2_PLAN.md)) shipped 2026-05-03. This doc covers everything outside the memory subsystem; memory polish is deferred per the user's directive and tracked in [`NEXT_STAGES.md`](NEXT_STAGES.md) §A.
 
-**Status snapshot (2026-05-06).** Phases 1–6 shipped on `v2-plan` (V5 Lorebook, V1 Swipes, V3 Cards + V4 Personas, V8 Multi-server, V10 Avatars, V6 Per-character voices). **Phase 7 (V2 Full branching) underway — §3.1 (data model) + §3.2 (memory subsystem migration) shipped, §3.3 (fork-on-regen + gutter glyph + Cmd-B) is the next sub-step.** 525/525 tests pass; 23 commits ahead of origin. Phase 8 (V9 Group chats) and the heuristic-refinement research item are queued.
+**Status snapshot (2026-05-06).** Phases 1–6 shipped on `v2-plan` (V5 Lorebook, V1 Swipes, V3 Cards + V4 Personas, V8 Multi-server, V10 Avatars, V6 Per-character voices). **Phase 7 (V2 Full branching) underway — §3.1 (data model) + §3.2 (memory subsystem migration) + §3.3 (fork-on-regen + gutter glyph + Cmd-B) shipped, §3.4 (Branches sidebar pane) is the next sub-step.** 536/536 tests pass; 26 commits ahead of origin. Phase 8 (V9 Group chats) and the heuristic-refinement research item are queued.
 
 ---
 
@@ -11,7 +11,7 @@ Forward plan for the V2 surface area listed in [`PLAN.md`](PLAN.md) §10. The MV
 | # | V2 item | Status | Pointer |
 |---|---|---|---|
 | V1 | Swipes (alt continuations) | ✅ shipped 2026-05-04 | §2.2 — commits `764b41f` → `54fca62` |
-| V2 | Branching (turn tree) | 🚧 in progress (§3.1 + §3.2 shipped 2026-05-06; §3.3 next) | §3 + [`V2_PHASE7_FULL_BRANCHING.md`](V2_PHASE7_FULL_BRANCHING.md) |
+| V2 | Branching (turn tree) | 🚧 in progress (§3.1 + §3.2 + §3.3 shipped 2026-05-06; §3.4 next) | §3 + [`V2_PHASE7_FULL_BRANCHING.md`](V2_PHASE7_FULL_BRANCHING.md) |
 | V3 | SillyTavern v2 character cards | ✅ shipped 2026-05-04 | §2.3 — commits `dd102db` → `342791c` |
 | V4 | Personas (user side) | ✅ shipped 2026-05-04 | §2.3 (paired with V3) |
 | V5 | Lorebook editor UI | ✅ shipped 2026-05-04 | §2.1 — commits `076f548` → `dacb4fc` |
@@ -69,7 +69,7 @@ Largest phase to date — shipped as ~30 commits across §7.1 (engine swap), §7
 
 ---
 
-## 3. Phase 7 — V2 Full branching 🚧 in progress (§3.1 + §3.2 shipped 2026-05-06)
+## 3. Phase 7 — V2 Full branching 🚧 in progress (§3.1 + §3.2 + §3.3 shipped 2026-05-06)
 
 Treat as its own design doc — the data-model swap is small but the `turnIndex: Int` → `turnId: UUID` migration through the memory subsystem (`SceneSummary`, `Chunker`, `VectorStore`, `RetrievalEngine`, `MemoryManager`) is the bulk of the work. Plan author's earlier warning still applies: not picking this up casually.
 
@@ -85,7 +85,7 @@ Treat as its own design doc — the data-model swap is small but the `turnIndex:
 
 - **§3.1** — Data model: `parentId` + `activePath`, migration of existing chats to a spine tree. No UI change. Tests-first; ~1 day. **Shipped 2026-05-06** (TDD; 21 new tests in `ChatBranchingTests`; lazy spine-migration in `Chat.init(from:)` covers both legacy on-disk chats and the in-memory round-trip case; cycle detection + connected-path + single-root validation throws `DecodingError` on bad shapes; `switchBranch(to:)` drills to deepest descendant via `activeChildId` per Open WebUI's pattern. 498/498 green.)
 - **§3.2** — Memory subsystem: `turnIndex` → `turnId` through `SceneSummary`, `Chunker`, `VectorStore`, `RetrievalEngine`, `MemoryManager`. Migration tests. ~2-3 days. *Load-bearing; ugly.* **Shipped 2026-05-06** in four sub-passes (§3.2.A SceneSummary 2426c7b → §3.2.B Chunk + Chunker + VectorStore 2f3aee0 → §3.2.C RetrievalEngine.excludePredicate(chat:) → §3.2.D summarizedThrough clamp on switchBranch). Both legacy Int APIs and new UUID APIs coexist during the transition window. Original spec to derive `summarizedThrough` from `sceneSummaries.last.lastTurnId` revised: doesn't capture between-scene-break advancement; clamping on branch switch is the working compromise. Per-branch rolling summary (`chat.summary` per leaf) flagged as separate future refactor. 525/525 green.
-- **§3.3** — Fork-on-regen for non-trailing turns. Sibling glyph in the gutter. Cmd-B action. ~1-2 days.
+- **§3.3** — Fork-on-regen for non-trailing turns. Sibling glyph in the gutter. Cmd-B action. ~1-2 days. **Shipped 2026-05-06** in two passes (§3.3a `Chat.appendTurn` maintains `parentId` + `activePath` across all production turn-mutation sites; §3.3b `Chat.fork` + `AppState.forkFrom` + `AppState.switchBranch` + gutter glyph + sibling popover + Cmd-B menu item, plus the necessary fan-out: rebuild iterates `activeTurns`, `isVariantStale(turnId:)` uses active-path prefix, stream/think handlers target the active leaf instead of `turns.last`). 536/536 green.
 - **§3.4** — Branches sidebar pane (list view). ~1 day.
 - **§3.5** — Visual tree minimap (custom AppKit layered layout, Open WebUI as reference). ~3-4 days.
 - **§3.6** (optional, deferred-by-default) — Collapse variants into branches.

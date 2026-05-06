@@ -15,6 +15,10 @@ protocol TurnViewDelegate: AnyObject {
     /// Drop the currently-active variant on this turn (count > 1 only —
     /// the button only appears when there's something to fall back to).
     func turnViewDidRequestDiscardVariant(_ view: TurnView)
+    /// Phase 7 §3.3b — gutter glyph clicked. The delegate presents a
+    /// popover anchored at `anchor` listing sibling branches, letting the
+    /// user pick one to switch to (`AppState.switchBranch`).
+    func turnViewDidRequestSiblingPopover(_ view: TurnView, anchor: NSView)
 }
 
 private final class FocusAwareTextView: NSTextView {
@@ -83,6 +87,10 @@ final class TurnView: NSView, NSTextViewDelegate {
     /// Discards the active variant. Only meaningful when count > 1 so it
     /// shares the same visibility gate as the rest of the pager.
     private let discardVariantButton: NSButton
+    /// Phase 7 §3.3b — branch-sibling glyph in the gutter. Visible only
+    /// when `hasSiblings` is true (i.e., this turn's parent has more than
+    /// one child). Click → delegate presents a sibling-list popover.
+    private let branchGlyph: NSButton
 
     private var baseFont: NSFont { Theme.font(15) }
 
@@ -113,6 +121,16 @@ final class TurnView: NSView, NSTextViewDelegate {
     /// matches the live chat prefix — see `Chat.isVariantStale`. Drives the
     /// ⚠ badge appended to the pager label.
     private(set) var activeIsStale: Bool = false
+
+    /// Phase 7 §3.3b — true when this turn's parent has more than one
+    /// child (i.e., switching branches is meaningful here). Drives the
+    /// gutter glyph's visibility. Set by ChatViewController during rebuild.
+    var hasSiblings: Bool = false {
+        didSet {
+            guard oldValue != hasSiblings else { return }
+            branchGlyph.isHidden = !hasSiblings
+        }
+    }
 
     func setVariantState(active: Int, count: Int, activeIsStale: Bool = false) {
         guard activeVariantIndex != active
@@ -203,6 +221,10 @@ final class TurnView: NSView, NSTextViewDelegate {
         prevVariantButton = TurnView.makeIconButton(symbol: "chevron.left", tooltip: "Previous variant (⌘←)")
         nextVariantButton = TurnView.makeIconButton(symbol: "chevron.right", tooltip: "Next variant (⌘→)")
         discardVariantButton = TurnView.makeIconButton(symbol: "minus.circle", tooltip: "Discard this variant")
+        branchGlyph = TurnView.makeIconButton(
+            symbol: "arrow.triangle.branch",
+            tooltip: "Switch branch — this turn has siblings"
+        )
 
         super.init(frame: .zero)
         wantsLayer = true
@@ -267,6 +289,10 @@ final class TurnView: NSView, NSTextViewDelegate {
         prevVariantButton.target = self; prevVariantButton.action = #selector(prevVariantTapped)
         nextVariantButton.target = self; nextVariantButton.action = #selector(nextVariantTapped)
         discardVariantButton.target = self; discardVariantButton.action = #selector(discardVariantTapped)
+        branchGlyph.target = self; branchGlyph.action = #selector(branchGlyphTapped)
+        branchGlyph.isHidden = true
+        branchGlyph.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(branchGlyph)
 
         saveButton.contentTintColor = .systemBlue
         cancelButton.contentTintColor = .secondaryLabelColor
@@ -345,7 +371,13 @@ final class TurnView: NSView, NSTextViewDelegate {
                 toolbar.topAnchor.constraint(equalTo: bubble.bottomAnchor, constant: toolbarTopGap),
                 toolbar.trailingAnchor.constraint(equalTo: bubble.trailingAnchor),
                 toolbar.heightAnchor.constraint(equalToConstant: toolbarHeight),
-                toolbar.bottomAnchor.constraint(equalTo: bottomAnchor)
+                toolbar.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+                // Branch glyph sits just outside the bubble's leading edge,
+                // top-aligned with the bubble. User turns are right-aligned
+                // so we have free real estate on the left.
+                branchGlyph.topAnchor.constraint(equalTo: bubble.topAnchor, constant: 2),
+                branchGlyph.trailingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: -6)
             ])
         } else {
             NSLayoutConstraint.activate([
@@ -366,7 +398,13 @@ final class TurnView: NSView, NSTextViewDelegate {
                 toolbar.topAnchor.constraint(equalTo: bubble.bottomAnchor, constant: toolbarTopGap),
                 toolbar.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
                 toolbar.heightAnchor.constraint(equalToConstant: toolbarHeight),
-                toolbar.bottomAnchor.constraint(equalTo: bottomAnchor)
+                toolbar.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+                // Branch glyph sits below the avatar in the gutter column —
+                // the same vertical track as the avatar so it reads as a
+                // turn-level affordance rather than a bubble decoration.
+                branchGlyph.topAnchor.constraint(equalTo: avatar.bottomAnchor, constant: 6),
+                branchGlyph.centerXAnchor.constraint(equalTo: avatar.centerXAnchor)
             ])
         }
     }
@@ -427,6 +465,10 @@ final class TurnView: NSView, NSTextViewDelegate {
 
     @objc private func discardVariantTapped() {
         delegate?.turnViewDidRequestDiscardVariant(self)
+    }
+
+    @objc private func branchGlyphTapped() {
+        delegate?.turnViewDidRequestSiblingPopover(self, anchor: branchGlyph)
     }
 
     /// Commit the user's pending edits and exit edit mode.

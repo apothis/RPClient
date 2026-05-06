@@ -639,26 +639,69 @@ final class AppState {
     func regenerate() {
         guard !isStreaming, var c = currentChat else { return }
         DebugLog.shared.write("trigger: regen (turnsBefore=\(c.turns.count))")
-        if let lastIdx = c.turns.indices.last, c.turns[lastIdx].role == .assistant {
-            if c.turns[lastIdx].variants.count >= AppState.variantCap {
+        // Operate on the active-path leaf, not c.turns.last — once §3.3b
+        // forks land, c.turns can include off-path siblings whose order is
+        // independent of the renderable path.
+        if let leafId = c.activePath.last,
+           let leaf = c.turn(id: leafId),
+           leaf.role == .assistant {
+            if leaf.variants.count >= AppState.variantCap {
                 DebugLog.shared.write(
                     "regen: refused — variants at cap (\(AppState.variantCap))"
                 )
                 return
             }
-            let fp = Chat.makeContextFingerprint(c.turns[..<lastIdx])
-            c.turns[lastIdx].addEmptyVariant(
-                samplerPresetId: c.samplerPresetId,
-                contextFingerprint: fp
-            )
+            let fp = Chat.makeContextFingerprint(c.activeTurns.dropLast())
+            if let idx = c.turns.firstIndex(where: { $0.id == leafId }) {
+                c.turns[idx].addEmptyVariant(
+                    samplerPresetId: c.samplerPresetId,
+                    contextFingerprint: fp
+                )
+            }
         } else {
-            // Append a fresh assistant turn and seed it with one empty,
-            // fingerprint-stamped variant so the same staleness machinery
-            // applies as in `sendUserMessage`.
+            // Active path ends on a user turn (or empty) — append a fresh
+            // assistant turn and seed it with one empty, fingerprint-stamped
+            // variant so the same staleness machinery applies as in
+            // `sendUserMessage`.
             c.appendTurn(Turn(role: .assistant, text: ""))
-            let asstIdx = c.turns.count - 1
-            let fp = Chat.makeContextFingerprint(c.turns[..<asstIdx])
-            c.turns[asstIdx].addEmptyVariant(
+            let fp = Chat.makeContextFingerprint(c.activeTurns.dropLast())
+            if let asstId = c.activePath.last,
+               let idx = c.turns.firstIndex(where: { $0.id == asstId }) {
+                c.turns[idx].addEmptyVariant(
+                    samplerPresetId: c.samplerPresetId,
+                    contextFingerprint: fp
+                )
+            }
+        }
+        updateCurrent { ch in
+            ch.turns = c.turns
+            ch.activePath = c.activePath
+        }
+        startStreaming()
+    }
+
+    /// Phase 7 §3.3b — explicit fork. Creates a new assistant sibling under
+    /// `turnId.parentId` (i.e., an alternative to the focused turn), makes
+    /// it the active leaf, and streams into it. The pre-fork branch stays
+    /// reachable via the gutter-glyph popover / Branches pane.
+    ///
+    /// Refuses on the root turn (no parent to fork from) and on user turns
+    /// (forking would produce a stranded user turn with no body to stream
+    /// into — the design-doc §4 "User turn → not regenerable" rule).
+    func forkFrom(turnId: UUID) {
+        guard !isStreaming, var c = currentChat,
+              let target = c.turn(id: turnId),
+              target.role == .assistant,
+              let parentId = target.parentId else {
+            DebugLog.shared.write("trigger: forkFrom refused (turnId=\(turnId))")
+            return
+        }
+        DebugLog.shared.write("trigger: forkFrom (turnId=\(turnId), parentId=\(parentId))")
+        let newAsst = Turn(role: .assistant, text: "")
+        c.fork(parentId: parentId, newTurn: newAsst)
+        let fp = Chat.makeContextFingerprint(c.activeTurns.dropLast())
+        if let idx = c.turns.firstIndex(where: { $0.id == newAsst.id }) {
+            c.turns[idx].addEmptyVariant(
                 samplerPresetId: c.samplerPresetId,
                 contextFingerprint: fp
             )
@@ -670,15 +713,30 @@ final class AppState {
         startStreaming()
     }
 
+    /// Switch the active branch to land on `turnId`'s leaf (drilling via
+    /// activeChildId). Used by the gutter-glyph popover and the Branches
+    /// pane (§3.4). Routed through here rather than `updateCurrent` directly
+    /// so the post-switch chunker / retrieval invalidation has a single
+    /// hook to attach to in future steps.
+    func switchBranch(to turnId: UUID) {
+        guard !isStreaming else { return }
+        updateCurrent { c in
+            c.switchBranch(to: turnId)
+        }
+        NotificationCenter.default.post(name: AppNotification.currentChatChanged, object: nil)
+    }
+
     /// Destructive regen — overwrite the active variant in place rather than
     /// adding a new one. Used by the "Replace current variant" path
     /// (Cmd-Shift-R / context menu) so the user can opt back into the pre-V2
     /// behaviour when they don't want the old text kept around.
     func replaceCurrentVariant() {
         guard !isStreaming, var c = currentChat else { return }
-        guard let lastIdx = c.turns.indices.last,
-              c.turns[lastIdx].role == .assistant,
-              !c.turns[lastIdx].variants.isEmpty else {
+        guard let leafId = c.activePath.last,
+              let leaf = c.turn(id: leafId),
+              leaf.role == .assistant,
+              !leaf.variants.isEmpty,
+              let lastIdx = c.turns.firstIndex(where: { $0.id == leafId }) else {
             // Nothing to replace — fall through to the normal regen path so
             // the user gets a reply regardless.
             regenerate()
@@ -686,7 +744,7 @@ final class AppState {
         }
         DebugLog.shared.write("trigger: replace-variant")
         let active = c.turns[lastIdx].activeVariant
-        let fp = Chat.makeContextFingerprint(c.turns[..<lastIdx])
+        let fp = Chat.makeContextFingerprint(c.activeTurns.dropLast())
         c.turns[lastIdx].variants[active].text = ""
         c.turns[lastIdx].variants[active].edited = false
         c.turns[lastIdx].variants[active].contextFingerprint = fp
