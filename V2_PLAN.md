@@ -2,7 +2,7 @@
 
 Forward plan for the V2 surface area listed in [`PLAN.md`](PLAN.md) §10. The MVP and the Memory V2 subsystem (Steps A–D, see [`MEMORY_V2_PLAN.md`](MEMORY_V2_PLAN.md)) shipped 2026-05-03. This doc covers everything outside the memory subsystem; memory polish is deferred per the user's directive and tracked in [`NEXT_STAGES.md`](NEXT_STAGES.md) §A.
 
-**Status snapshot (2026-05-05).** Phases 1–6 shipped on `v2-plan` (V5 Lorebook, V1 Swipes, V3 Cards + V4 Personas, V8 Multi-server, V10 Avatars, V6 Per-character voices). 477/477 tests pass. Phase 7 (V2 Full branching) is in design; Phase 8 (V9 Group chats) and the heuristic-refinement research item are queued.
+**Status snapshot (2026-05-06).** Phases 1–6 shipped on `v2-plan` (V5 Lorebook, V1 Swipes, V3 Cards + V4 Personas, V8 Multi-server, V10 Avatars, V6 Per-character voices). **Phase 7 (V2 Full branching) underway — §3.1 (data model) + §3.2 (memory subsystem migration) shipped, §3.3 (fork-on-regen + gutter glyph + Cmd-B) is the next sub-step.** 525/525 tests pass; 23 commits ahead of origin. Phase 8 (V9 Group chats) and the heuristic-refinement research item are queued.
 
 ---
 
@@ -11,7 +11,7 @@ Forward plan for the V2 surface area listed in [`PLAN.md`](PLAN.md) §10. The MV
 | # | V2 item | Status | Pointer |
 |---|---|---|---|
 | V1 | Swipes (alt continuations) | ✅ shipped 2026-05-04 | §2.2 — commits `764b41f` → `54fca62` |
-| V2 | Branching (turn tree) | 🚧 in design | §3 + `V2_PHASE7_FULL_BRANCHING.md` (TBD) |
+| V2 | Branching (turn tree) | 🚧 in progress (§3.1 + §3.2 shipped 2026-05-06; §3.3 next) | §3 + [`V2_PHASE7_FULL_BRANCHING.md`](V2_PHASE7_FULL_BRANCHING.md) |
 | V3 | SillyTavern v2 character cards | ✅ shipped 2026-05-04 | §2.3 — commits `dd102db` → `342791c` |
 | V4 | Personas (user side) | ✅ shipped 2026-05-04 | §2.3 (paired with V3) |
 | V5 | Lorebook editor UI | ✅ shipped 2026-05-04 | §2.1 — commits `076f548` → `dacb4fc` |
@@ -69,7 +69,7 @@ Largest phase to date — shipped as ~30 commits across §7.1 (engine swap), §7
 
 ---
 
-## 3. Phase 7 — V2 Full branching 🚧 in design
+## 3. Phase 7 — V2 Full branching 🚧 in progress (§3.1 + §3.2 shipped 2026-05-06)
 
 Treat as its own design doc — the data-model swap is small but the `turnIndex: Int` → `turnId: UUID` migration through the memory subsystem (`SceneSummary`, `Chunker`, `VectorStore`, `RetrievalEngine`, `MemoryManager`) is the bulk of the work. Plan author's earlier warning still applies: not picking this up casually.
 
