@@ -463,6 +463,103 @@ func phase8MigrationTests() -> TestSuite {
         try Chat.validateGroupChat(cast: [], turns: [asst])
     }
 
+    // MARK: - Phase 8 deferred — Chat.reorderCast + Chat.convertToSolo
+
+    s.test("reorderCast moves a member from one position to another") {
+        let a = UUID(), b = UUID(), cc = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, b, cc]
+        chat.reorderCast(from: 0, to: 2)
+        try expectEqual(chat.cast, [b, cc, a])
+    }
+
+    s.test("reorderCast moving up shifts intervening members down") {
+        let a = UUID(), b = UUID(), cc = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, b, cc]
+        chat.reorderCast(from: 2, to: 0)
+        try expectEqual(chat.cast, [cc, a, b])
+    }
+
+    s.test("reorderCast is a no-op when from == to") {
+        let a = UUID(), b = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, b]
+        chat.reorderCast(from: 1, to: 1)
+        try expectEqual(chat.cast, [a, b])
+    }
+
+    s.test("reorderCast is a no-op on out-of-bounds indices (defensive)") {
+        let a = UUID(), b = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, b]
+        chat.reorderCast(from: 5, to: 0)
+        chat.reorderCast(from: 0, to: 5)
+        chat.reorderCast(from: -1, to: 0)
+        try expectEqual(chat.cast, [a, b])
+    }
+
+    s.test("convertToSolo reduces cast to one member and updates characterId") {
+        let a = UUID(), b = UUID(), cc = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, b, cc]
+        chat.characterId = a
+        chat.convertToSolo(keeping: b)
+        try expectEqual(chat.cast, [b])
+        try expectEqual(chat.characterId, b)
+    }
+
+    s.test("convertToSolo clears pendingSpeakerId if it pointed at a removed member") {
+        let a = UUID(), b = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, b]
+        chat.pendingSpeakerId = a
+        chat.convertToSolo(keeping: b)
+        try expectNil(chat.pendingSpeakerId)
+    }
+
+    s.test("convertToSolo preserves pendingSpeakerId if it equals the kept member") {
+        let a = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, UUID()]
+        chat.pendingSpeakerId = a
+        chat.convertToSolo(keeping: a)
+        try expectEqual(chat.pendingSpeakerId, a)
+    }
+
+    s.test("convertToSolo leaves existing turns' speakerIds unchanged (off-cast attribution preserved)") {
+        // Old turns may have speakerId pointing to a removed cast member.
+        // validateGroupChat is solo-tolerant (cast.count <= 1 → speakerId
+        // unrestricted) so this round-trips fine. Keeping the attribution
+        // means the speaker layer can still resolve the original character
+        // for voice routing on those archived turns.
+        let a = UUID(), b = UUID()
+        let userId = UUID(), asstAId = UUID(), asstBId = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, b]
+        chat.characterId = a
+        var u = Turn(role: .user, text: "hi"); u.parentId = nil
+        var asstA = Turn(id: asstAId, role: .assistant, text: "from A"); asstA.speakerId = a; asstA.parentId = userId
+        var asstB = Turn(id: asstBId, role: .assistant, text: "from B"); asstB.speakerId = b; asstB.parentId = asstAId
+        // Wire ids so spine validation passes.
+        var u2 = Turn(id: userId, role: .user, text: "hi"); u2.parentId = nil
+        chat.turns = [u2, asstA, asstB]
+        chat.activePath = [u2.id, asstA.id, asstB.id]
+        chat.convertToSolo(keeping: a)
+        try expectEqual(chat.turns[1].speakerId, a)
+        try expectEqual(chat.turns[2].speakerId, b, "off-cast speakerId should be preserved on archived turns")
+    }
+
+    s.test("convertToSolo on cast that doesn't contain the kept id is a no-op") {
+        let a = UUID(), b = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, b]
+        chat.characterId = a
+        chat.convertToSolo(keeping: UUID())  // stranger
+        try expectEqual(chat.cast, [a, b])
+        try expectEqual(chat.characterId, a)
+    }
+
     s.test("validateGroupChat surfaces a diagnostic for user turn with speakerId") {
         let castA = UUID()
         var u = Turn(role: .user, text: "hi")

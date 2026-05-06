@@ -19,6 +19,7 @@ final class CastPane: NSViewController {
     private let stack = NSStackView()
     private let emptyLabel = NSTextField(labelWithString: "No chat selected.")
     private let addButton = NSPopUpButton()
+    private let convertButton = NSButton()
 
     override func loadView() {
         let v = NSView()
@@ -49,6 +50,18 @@ final class CastPane: NSViewController {
         addButton.action = #selector(addCharacterPicked)
         v.addSubview(addButton)
 
+        // Phase 8 deferred polish — "Convert to solo chat" button below
+        // the +Add picker. Hidden when cast.count <= 1 (no point
+        // collapsing a chat that's already solo or free-form).
+        convertButton.title = "Convert to solo chat…"
+        convertButton.bezelStyle = .rounded
+        convertButton.controlSize = .small
+        convertButton.target = self
+        convertButton.action = #selector(convertToSoloPressed)
+        convertButton.translatesAutoresizingMaskIntoConstraints = false
+        convertButton.isHidden = true
+        v.addSubview(convertButton)
+
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: v.topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: v.leadingAnchor),
@@ -62,7 +75,11 @@ final class CastPane: NSViewController {
 
             addButton.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 8),
             addButton.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -8),
-            addButton.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -8),
+            addButton.bottomAnchor.constraint(equalTo: convertButton.topAnchor, constant: -6),
+
+            convertButton.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 8),
+            convertButton.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -8),
+            convertButton.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -8),
 
             emptyLabel.centerXAnchor.constraint(equalTo: v.centerXAnchor),
             emptyLabel.centerYAnchor.constraint(equalTo: v.centerYAnchor),
@@ -91,11 +108,13 @@ final class CastPane: NSViewController {
             emptyLabel.isHidden = false
             scrollView.isHidden = true
             addButton.isHidden = true
+            convertButton.isHidden = true
             return
         }
         emptyLabel.isHidden = true
         scrollView.isHidden = false
         addButton.isHidden = false
+        convertButton.isHidden = chat.cast.count <= 1
 
         if chat.cast.isEmpty {
             let hint = NSTextField(labelWithString: "Free-form chat — add a character below to start a cast.")
@@ -106,8 +125,8 @@ final class CastPane: NSViewController {
             hint.preferredMaxLayoutWidth = 240
             stack.addArrangedSubview(hint)
         } else {
-            for cid in chat.cast {
-                let row = makeRow(characterId: cid)
+            for (idx, cid) in chat.cast.enumerated() {
+                let row = makeRow(characterId: cid, position: idx, total: chat.cast.count)
                 stack.addArrangedSubview(row)
                 row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -16).isActive = true
             }
@@ -116,7 +135,7 @@ final class CastPane: NSViewController {
         rebuildAddMenu(chat: chat)
     }
 
-    private func makeRow(characterId: UUID) -> NSView {
+    private func makeRow(characterId: UUID, position: Int, total: Int) -> NSView {
         let row = NSView()
         row.wantsLayer = true
 
@@ -146,6 +165,37 @@ final class CastPane: NSViewController {
         name.translatesAutoresizingMaskIntoConstraints = false
         row.addSubview(name)
 
+        // Phase 8 deferred polish — up/down reorder arrows. Up disabled
+        // on first row, down disabled on last row. Picked over native
+        // drag-and-drop because NSStackView has no built-in drag
+        // support and cast lists are tiny (typically 2-4 entries) —
+        // arrow buttons are simpler, more accessible, and achieve the
+        // same UX outcome (change `chat.cast` order, which drives
+        // round-robin / picker order).
+        let upButton = NSButton(image: NSImage(systemSymbolName: "chevron.up", accessibilityDescription: "Move up")!,
+                                target: self, action: #selector(moveMemberUp(_:)))
+        upButton.bezelStyle = .inline
+        upButton.isBordered = false
+        upButton.imagePosition = .imageOnly
+        upButton.controlSize = .small
+        upButton.tag = position
+        upButton.isEnabled = position > 0
+        upButton.translatesAutoresizingMaskIntoConstraints = false
+        upButton.toolTip = "Move up — speaks earlier in the rotation"
+        row.addSubview(upButton)
+
+        let downButton = NSButton(image: NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "Move down")!,
+                                  target: self, action: #selector(moveMemberDown(_:)))
+        downButton.bezelStyle = .inline
+        downButton.isBordered = false
+        downButton.imagePosition = .imageOnly
+        downButton.controlSize = .small
+        downButton.tag = position
+        downButton.isEnabled = position < total - 1
+        downButton.translatesAutoresizingMaskIntoConstraints = false
+        downButton.toolTip = "Move down — speaks later in the rotation"
+        row.addSubview(downButton)
+
         let remove = NSButton(title: "Remove", target: self, action: #selector(removeMember(_:)))
         remove.bezelStyle = .inline
         remove.controlSize = .small
@@ -168,12 +218,66 @@ final class CastPane: NSViewController {
 
             name.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: 8),
             name.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-            name.trailingAnchor.constraint(lessThanOrEqualTo: remove.leadingAnchor, constant: -8),
+            name.trailingAnchor.constraint(lessThanOrEqualTo: upButton.leadingAnchor, constant: -8),
+
+            upButton.trailingAnchor.constraint(equalTo: downButton.leadingAnchor, constant: -2),
+            upButton.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            upButton.widthAnchor.constraint(equalToConstant: 18),
+
+            downButton.trailingAnchor.constraint(equalTo: remove.leadingAnchor, constant: -6),
+            downButton.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            downButton.widthAnchor.constraint(equalToConstant: 18),
 
             remove.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -2),
             remove.centerYAnchor.constraint(equalTo: row.centerYAnchor)
         ])
         return row
+    }
+
+    @objc private func moveMemberUp(_ sender: NSButton) {
+        let from = sender.tag
+        guard from > 0 else { return }
+        AppState.shared.updateCurrent { c in
+            c.reorderCast(from: from, to: from - 1)
+        }
+    }
+
+    @objc private func moveMemberDown(_ sender: NSButton) {
+        let from = sender.tag
+        AppState.shared.updateCurrent { c in
+            guard from < c.cast.count - 1 else { return }
+            c.reorderCast(from: from, to: from + 1)
+        }
+    }
+
+    @objc private func convertToSoloPressed() {
+        guard let chat = AppState.shared.currentChat, chat.cast.count > 1 else { return }
+        // Build an alert with one button per cast member ("Keep <name>")
+        // plus Cancel. NSAlert renders buttons right-to-left, so the
+        // first added button is the rightmost (default action). Cancel
+        // goes last so it lands on the left.
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Convert to solo chat"
+        alert.informativeText = """
+        This reduces the cast to a single member. Existing turns from removed cast members stay in the chat — the speaker layer can still resolve their voice — but those characters won't appear in the round-robin or speaker picker.
+        """
+        // Add a "Keep" button per cast member, in cast order.
+        var keepIds: [UUID] = []
+        for cid in chat.cast {
+            let name = AppState.shared.character(id: cid)?.name ?? "Unknown"
+            alert.addButton(withTitle: "Keep \(name)")
+            keepIds.append(cid)
+        }
+        alert.addButton(withTitle: "Cancel")
+        let response = alert.runModal()
+        // First button is .alertFirstButtonReturn (1000), second is 1001, …
+        let pickedIdx = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        guard pickedIdx >= 0, pickedIdx < keepIds.count else { return }  // Cancel
+        let kept = keepIds[pickedIdx]
+        AppState.shared.updateCurrent { c in
+            c.convertToSolo(keeping: kept)
+        }
     }
 
     private func rebuildAddMenu(chat: Chat) {

@@ -497,16 +497,18 @@ final class Speaker {
 
         // Phase 8 §4.5 — per-turn voice baseline. Multi-cast chats
         // resolve the active speaker's matched entity and use its
-        // `voice` for unattributed segments (narration), so each cast
-        // member's prose reads in their own voice instead of every
-        // speaker falling through to chat.voice. Solo / free-form
-        // chats unchanged: speakerId is nil → resolver falls through
-        // to chat.characterId → same matched-entity voice as before
-        // (or nil → chatDefault below).
+        // `voice` as the segment-default for narration, so each
+        // speaker's prose reads in their own voice instead of every
+        // speaker falling through to chat.voice. Gated on
+        // `cast.count > 1` because solo chats have no concept of "the
+        // speaker who isn't the narrator" — pre-§4.5 they used
+        // chat-default for narration and entity voices only fired on
+        // attributed quoted spans. Restoring that for solo: only
+        // multi-cast routes through speakerVoice.
         let characters = AppState.shared.characters
-        let speakerVoice = Speaker.resolveSpeakerVoice(
-            turn: last, chat: chat, characters: characters
-        )
+        let speakerVoice: VoicePreference? = (chat.cast.count > 1)
+            ? Speaker.resolveSpeakerVoice(turn: last, chat: chat, characters: characters)
+            : nil
         let chatDefault = chat.voice ?? AppState.shared.settings.defaultVoice
         let segmentDefault = speakerVoice ?? chatDefault
         let segmentDefaultOptions = SpeakOptions(preference: segmentDefault)

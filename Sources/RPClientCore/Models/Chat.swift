@@ -492,6 +492,37 @@ struct Chat: Codable, Equatable, Identifiable {
         }
     }
 
+    /// Phase 8 deferred polish — move a cast member from one position
+    /// to another. Out-of-bounds indices are silent no-ops (defensive
+    /// against UI race conditions). Order matters because `cast`
+    /// drives both round-robin selection order and the input-bar
+    /// speaker picker order — reordering is the user's lever for
+    /// "I want X to speak before Y in the rotation."
+    mutating func reorderCast(from: Int, to: Int) {
+        guard cast.indices.contains(from), cast.indices.contains(to), from != to else { return }
+        let member = cast.remove(at: from)
+        cast.insert(member, at: to)
+    }
+
+    /// Phase 8 deferred polish — collapse the cast down to a single
+    /// kept member. Sets `characterId` to match the kept member so
+    /// legacy single-character paths (PromptBuilder solo, voice routing,
+    /// inspector tabs that read characterId) keep working. Pending
+    /// speaker picks pointing at removed members are cleared. Existing
+    /// turns' `speakerId`s are intentionally preserved — `validateGroupChat`
+    /// is solo-tolerant (cast.count <= 1 → unrestricted speakerId), so
+    /// archived turns from now-removed members still resolve to their
+    /// original character at render / playback time. No-op when the
+    /// kept id isn't a current cast member (defensive against UI races).
+    mutating func convertToSolo(keeping kept: UUID) {
+        guard cast.contains(kept) else { return }
+        cast = [kept]
+        characterId = kept
+        if let pending = pendingSpeakerId, pending != kept {
+            pendingSpeakerId = nil
+        }
+    }
+
     /// Phase 8 §4.5 — auto-create a stub `Entity` for `character` if no
     /// matching entity already exists. Idempotent: multiple calls with
     /// the same character produce one entity. Existing entities (from
