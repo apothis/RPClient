@@ -72,9 +72,26 @@ enum TokenBudget {
         continuation: Bool = false,
         userName: String = "",
         qwenThinking: Bool = false,
+        speakerId: UUID? = nil,
+        cast: [Character] = [],
         kobold: KoboldClient,
         completion: @escaping (PromptAssembly) -> Void
     ) {
+        // Phase 8 §4.2c — multi-cast assembly inputs. Triggered when the
+        // chat has more than one cast member AND a speakerId was resolved
+        // by the caller (AppState picks via SpeakerPicker before the
+        // assistant turn is appended). `character` is still the active
+        // speaker's full card; `cast` provides the rest for cohabitant
+        // briefs + name-prefix history. Solo / free-form chats pass
+        // through unchanged.
+        let isMultiCast = chat.cast.count > 1 && speakerId != nil
+        let cohabitants: [Character] = isMultiCast ? cast.filter { $0.id != speakerId } : []
+        let activeSpeakerName: String? = {
+            guard isMultiCast, let sid = speakerId else { return nil }
+            return cast.first(where: { $0.id == sid })?.name ?? character?.name
+        }()
+        let nudge: String? = activeSpeakerName.map { PromptBuilder.groupNudge(activeSpeakerName: $0) }
+
         // Memory block composition (system_prompt + userName line + card
         // biographical prefix + chat.memory) lives in
         // `PromptBuilder.composeMemoryBlock` so the test path and production
@@ -83,7 +100,8 @@ enum TokenBudget {
         let effectiveMemory: String = PromptBuilder.composeMemoryBlock(
             chat: chat,
             character: character,
-            userName: userName
+            userName: userName,
+            cohabitants: cohabitants
         ) ?? ""
         // User-side persona block (4f). Per-template placement: Gemma folds
         // it into the first user turn, Qwen into the system block.
@@ -127,7 +145,7 @@ enum TokenBudget {
         // Count the rendered scene block as a single chunk — this matches what
         // actually gets injected and accounts for new framing + staleness
         // compression so token math doesn't double-count what the model sees.
-        let renderedScenes = PromptBuilder.renderableScenes(chat: chat)
+        let renderedScenes = PromptBuilder.renderableScenes(chat: chat, speakerId: speakerId)
         let sceneText: String = renderedScenes.isEmpty
             ? ""
             : PromptBuilder.SceneSummaryFormatter.renderBlock(renderedScenes)
@@ -156,7 +174,15 @@ enum TokenBudget {
             group.enter()
             counter.count(rm, kobold: kobold) { n in retrTok = n; group.leave() }
         }
-        let verbatim = PromptBuilder.verbatimTurns(chat)
+        let verbatim: [Turn] = {
+            let raw = PromptBuilder.verbatimTurns(chat)
+            // Phase 8 §4.2c — name-prefix + reasoning-strip history when
+            // multi-cast. Solo path returns raw turns unchanged. Done
+            // before token-counting so the per-turn token estimates
+            // include the inflation from `Sarah: ` prefixes.
+            guard isMultiCast, let sid = speakerId else { return raw }
+            return PromptBuilder.formatHistoryForSpeaker(turns: raw, activeSpeakerId: sid, cast: cast)
+        }()
         for turn in verbatim where !turn.text.isEmpty {
             group.enter()
             counter.count(turn.text, kobold: kobold) { n in
@@ -194,6 +220,7 @@ enum TokenBudget {
                 relevantMemories: relevantMemories,
                 tailMemoryDigest: tailDigest,
                 currentSceneAnchor: anchor,
+                groupNudge: nudge,
                 turns: turns,
                 continuation: continuation
             )

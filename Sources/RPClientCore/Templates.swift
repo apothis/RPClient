@@ -15,6 +15,7 @@ protocol PromptTemplate {
         relevantMemories: String?,
         tailMemoryDigest: String?,
         currentSceneAnchor: String?,
+        groupNudge: String?,
         turns: [Turn],
         continuation: Bool
     ) -> String
@@ -40,14 +41,16 @@ extension PromptTemplate {
             relevantMemories: nil,
             tailMemoryDigest: nil,
             currentSceneAnchor: nil,
+            groupNudge: nil,
             turns: turns,
             continuation: false
         )
     }
 
     /// Convenience overload — same signature as the full one minus
-    /// `personaBlock` (added in 4f). Forwards `nil` so existing tests that
-    /// don't care about persona keep working without touching every callsite.
+    /// `personaBlock` (added in 4f) and `groupNudge` (added in Phase 8
+    /// §4.2b). Forwards `nil` so existing tests that don't care about
+    /// persona / multi-cast keep working without touching every callsite.
     func assemble(
         memoryBlock: String?,
         entitiesBlock: String?,
@@ -72,6 +75,7 @@ extension PromptTemplate {
             relevantMemories: relevantMemories,
             tailMemoryDigest: tailMemoryDigest,
             currentSceneAnchor: currentSceneAnchor,
+            groupNudge: nil,
             turns: turns,
             continuation: continuation
         )
@@ -97,6 +101,7 @@ extension PromptTemplate {
             relevantMemories: relevantMemories,
             tailMemoryDigest: nil,
             currentSceneAnchor: nil,
+            groupNudge: nil,
             turns: turns,
             continuation: false
         )

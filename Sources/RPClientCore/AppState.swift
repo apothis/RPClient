@@ -645,7 +645,19 @@ final class AppState {
         guard !isStreaming, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         updateCurrent { c in
             c.appendTurn(Turn(role: .user, text: text))
-            c.appendTurn(Turn(role: .assistant, text: ""))
+            // Phase 8 §4.2c — pick the next speaker for multi-cast chats
+            // and stamp the empty assistant slot with their id BEFORE
+            // appending. validateGroupChat enforces a non-nil speakerId
+            // on every assistant turn in cast.count > 1 chats; round-trip
+            // through Storage.saveChat would throw otherwise. Solo /
+            // free-form chats leave speakerId nil (the validation
+            // tolerates it for cast.count <= 1).
+            var asst = Turn(role: .assistant, text: "")
+            if c.cast.count > 1 {
+                asst.speakerId = SpeakerPicker.next(in: c) ?? c.cast.first
+                _ = c.consumePendingSpeaker()
+            }
+            c.appendTurn(asst)
             // Pre-seed the assistant turn with one empty variant carrying
             // the upstream-context fingerprint. Done here (rather than on
             // first stream token) so a future user edit on any prior turn
@@ -699,8 +711,15 @@ final class AppState {
             // Active path ends on a user turn (or empty) — append a fresh
             // assistant turn and seed it with one empty, fingerprint-stamped
             // variant so the same staleness machinery applies as in
-            // `sendUserMessage`.
-            c.appendTurn(Turn(role: .assistant, text: ""))
+            // `sendUserMessage`. Phase 8 §4.2c — stamp speakerId on
+            // multi-cast chats so the validateGroupChat invariant survives
+            // the next save.
+            var asst = Turn(role: .assistant, text: "")
+            if c.cast.count > 1 {
+                asst.speakerId = SpeakerPicker.next(in: c) ?? c.cast.first
+                _ = c.consumePendingSpeaker()
+            }
+            c.appendTurn(asst)
             let fp = Chat.makeContextFingerprint(c.activeTurns.dropLast())
             if let asstId = c.activePath.last,
                let idx = c.turns.firstIndex(where: { $0.id == asstId }) {
@@ -734,7 +753,13 @@ final class AppState {
             return
         }
         DebugLog.shared.write("trigger: forkFrom (turnId=\(turnId), parentId=\(parentId))")
-        let newAsst = Turn(role: .assistant, text: "")
+        var newAsst = Turn(role: .assistant, text: "")
+        // Phase 8 §5.1 — fork inherits the original turn's speakerId so
+        // "regenerate this speaker's line" preserves who's talking. The
+        // user can switch speaker on the new branch by editing the
+        // pendingSpeakerId via the input-bar picker (§4.3) before
+        // sending the next turn — fork itself doesn't reshuffle.
+        newAsst.speakerId = target.speakerId
         c.fork(parentId: parentId, newTurn: newAsst)
         let fp = Chat.makeContextFingerprint(c.activeTurns.dropLast())
         if let idx = c.turns.firstIndex(where: { $0.id == newAsst.id }) {
@@ -923,7 +948,22 @@ final class AppState {
 
     private func assembleAndStream(chat: Chat, ctx: Int, preset: SamplerPreset, relevantMemories: String?, continuation: Bool = false) {
         let replyMax = settings.replyTokensOverride > 0 ? settings.replyTokensOverride : preset.maxLength
-        let resolvedCharacter = character(id: chat.characterId)
+        // Phase 8 §4.2c — speaker resolution. For multi-cast chats, the
+        // trailing assistant slot was stamped with a speakerId by
+        // sendUserMessage / regenerate / forkFrom (whichever opened it).
+        // Resolve the speaker's full Character; fall back to chat-level
+        // characterId for solo / free-form chats so the existing single-
+        // speaker prompt path stays unchanged.
+        let trailingSpeakerId: UUID? = chat.activeTurns
+            .last(where: { $0.role == .assistant })?
+            .speakerId
+        let isMultiCast = chat.cast.count > 1 && trailingSpeakerId != nil
+        let resolvedCharacter: Character? = isMultiCast
+            ? trailingSpeakerId.flatMap { character(id: $0) }
+            : character(id: chat.characterId)
+        let resolvedCast: [Character] = isMultiCast
+            ? chat.cast.compactMap { character(id: $0) }
+            : []
         let resolvedPersona = persona(id: chat.personaId)
         // 4b/4f diagnostic — confirm card + persona composition is reaching
         // the prompt. Caught a stale-binary regression once already; cheap to
@@ -946,6 +986,8 @@ final class AppState {
             continuation: continuation,
             userName: settings.userName,
             qwenThinking: settings.qwenThinkingEnabled,
+            speakerId: trailingSpeakerId,
+            cast: resolvedCast,
             kobold: kobold
         ) { [weak self] assembly in
             guard let self = self else { return }

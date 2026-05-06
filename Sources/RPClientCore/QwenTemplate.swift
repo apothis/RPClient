@@ -30,6 +30,7 @@ struct QwenTemplate: PromptTemplate {
         relevantMemories: String?,
         tailMemoryDigest: String?,
         currentSceneAnchor: String?,
+        groupNudge: String?,
         turns: [Turn],
         continuation: Bool
     ) -> String {
@@ -92,6 +93,11 @@ struct QwenTemplate: PromptTemplate {
                 // Anchor goes last on the final user turn — see MEMORY_AUDIT §4.1-C.
                 if idx == lastUserIndex, let anchor = currentSceneAnchor, !anchor.isEmpty {
                     body = body + "\n\n" + anchor
+                }
+                // Phase 8 §3.2 / §4.2b — group nudge after anchor; see
+                // GemmaTemplate for placement rationale.
+                if idx == lastUserIndex, let nudge = groupNudge, !nudge.isEmpty {
+                    body = body + "\n\n" + nudge
                 }
                 out += body
                 out += "<|im_end|>\n"

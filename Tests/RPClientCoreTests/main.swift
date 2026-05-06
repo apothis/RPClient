@@ -47,6 +47,7 @@ let suites: [TestSuite] = [
     minimapLayoutTests(),
     phase8MigrationTests(),
     speakerPickerTests(),
+    promptBuilderGroupChatTests(),
 ]
 
 exit(TestRunner.run(suites))

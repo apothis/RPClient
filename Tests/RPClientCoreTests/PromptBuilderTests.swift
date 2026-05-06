@@ -472,6 +472,7 @@ func promptBuilderTests() -> TestSuite {
             relevantMemories: nil,
             tailMemoryDigest: nil,
             currentSceneAnchor: nil,
+            groupNudge: nil,
             turns: [Turn(role: .user, text: "hi")],
             continuation: false
         )
@@ -496,6 +497,7 @@ func promptBuilderTests() -> TestSuite {
             relevantMemories: nil,
             tailMemoryDigest: nil,
             currentSceneAnchor: nil,
+            groupNudge: nil,
             turns: [Turn(role: .user, text: "hi")],
             continuation: false
         )
@@ -521,6 +523,7 @@ func promptBuilderTests() -> TestSuite {
             relevantMemories: nil,
             tailMemoryDigest: nil,
             currentSceneAnchor: nil,
+            groupNudge: nil,
             turns: [Turn(role: .user, text: "hi")],
             continuation: false
         )
@@ -536,6 +539,7 @@ func promptBuilderTests() -> TestSuite {
             relevantMemories: nil,
             tailMemoryDigest: nil,
             currentSceneAnchor: nil,
+            groupNudge: nil,
             turns: [Turn(role: .user, text: "hi")],
             continuation: false
         )

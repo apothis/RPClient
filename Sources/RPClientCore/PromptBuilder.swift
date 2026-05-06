@@ -112,7 +112,91 @@ struct PromptBuilder {
     /// render "turns N–M" headers without needing chat access. **Output is
     /// render-cache, not persistence-bound** — never feed this back into
     /// `chat.sceneSummaries` or encode it.
-    static func renderableScenes(chat: Chat, staleAge: Int = SceneSummaryFormatter.defaultStalenessThreshold) -> [SceneSummary] {
+    /// Phase 8 §4.2b — character-count cap on a single cohabitant brief
+    /// line. ~60 tokens at the project's standard 4-chars-per-token
+    /// estimate. Long-description characters get truncated; short ones
+    /// pass through unchanged.
+    static let cohabitantBriefCharCap = 240
+
+    /// Phase 8 §4.2b — extract a single-sentence cohabitant brief from a
+    /// character description. Takes the first sentence (split on `. `,
+    /// `! `, or `? `, including the terminator) and caps at
+    /// `cohabitantBriefCharCap`. Falls back to the leading prefix when no
+    /// sentence terminator is present. Whitespace-trimmed.
+    static func cohabitantBrief(_ description: String) -> String {
+        let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        // Find first sentence terminator followed by whitespace or end.
+        var firstSentence = trimmed
+        for terminator in [". ", "! ", "? "] {
+            if let r = trimmed.range(of: terminator) {
+                firstSentence = String(trimmed[..<r.upperBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                break
+            }
+        }
+        if firstSentence.count > cohabitantBriefCharCap {
+            let cut = firstSentence.prefix(cohabitantBriefCharCap)
+            return String(cut) + "…"
+        }
+        return firstSentence
+    }
+
+    /// Phase 8 §3.2 — the "group nudge" system message inserted at end-of-
+    /// prompt to keep the model from impersonating other cast members.
+    /// Stolen verbatim from SillyTavern's `public/scripts/openai.js:114`,
+    /// substituting the active speaker's display name. Tiny, cheap, and
+    /// the load-bearing trick that makes role-prefix history-formatting
+    /// work in practice.
+    static func groupNudge(activeSpeakerName: String) -> String {
+        return "[Write the next reply only as \(activeSpeakerName).]"
+    }
+
+    /// Phase 8 §4.2b — transform history turns for per-speaker prompt
+    /// assembly. For every assistant turn whose `speakerId` resolves to
+    /// a cast member *other than* the active speaker, prefix the text
+    /// with `\(name): ` and strip any `<think>…</think>` blocks (other
+    /// speakers' internal reasoning shouldn't leak into the active
+    /// speaker's context). The active speaker's own prior turns are
+    /// preserved as-is (no prefix; reasoning kept — it's their internal
+    /// monologue, useful to their continuation). User turns and
+    /// assistant turns with no/unknown speakerId pass through unchanged.
+    static func formatHistoryForSpeaker(turns: [Turn], activeSpeakerId: UUID, cast: [Character]) -> [Turn] {
+        let nameById: [UUID: String] = Dictionary(uniqueKeysWithValues: cast.map { ($0.id, $0.name) })
+        return turns.map { t in
+            guard t.role == .assistant,
+                  let sid = t.speakerId,
+                  sid != activeSpeakerId,
+                  let name = nameById[sid] else {
+                return t
+            }
+            var out = t
+            let stripped = stripThinkBlocks(t.text)
+            out.text = "\(name): \(stripped)"
+            return out
+        }
+    }
+
+    /// Phase 8 §4.2b — strip `<think>…</think>` blocks (case-insensitive,
+    /// non-greedy, multi-line). Used to scrub other speakers' reasoning
+    /// from history before feeding into the active speaker's prompt.
+    /// Operates on a finished string (not a stream); mid-stream stripping
+    /// uses `ThinkBlockFilter` instead.
+    static func stripThinkBlocks(_ text: String) -> String {
+        // Pattern: `<think>` (case-insensitive), then any chars (lazy),
+        // then `</think>`. Using NSRegularExpression so we get
+        // non-greedy + multiline behaviour without depending on Swift's
+        // newer Regex DSL availability.
+        let pattern = "(?is)<think>.*?</think>"
+        guard let re = try? NSRegularExpression(pattern: pattern, options: []) else {
+            return text
+        }
+        let range = NSRange(text.startIndex..., in: text)
+        let stripped = re.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
+        // Trim any leftover blank-line padding the think tag was anchoring.
+        return stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func renderableScenes(chat: Chat, staleAge: Int = SceneSummaryFormatter.defaultStalenessThreshold, speakerId: UUID? = nil) -> [SceneSummary] {
         // Phase 7 §3.2 — `head` is the active path's length. Fall back to
         // turns.count when activePath is empty but turns isn't (in-memory
         // chats built via the Chat() initializer + direct turns mutation
@@ -139,8 +223,19 @@ struct PromptBuilder {
             // formatter (which doesn't take a chat) can render headers.
             rendered.firstTurn = firstPos
             rendered.lastTurn = lastPos
+            // Phase 8 §4.2b — lazy per-speaker scene cache. When a
+            // speaker is provided AND that speaker has a populated entry
+            // in `summariesBySpeaker`, that text replaces the narrator-
+            // view `text`. Falls back to `text` when the speaker has no
+            // entry (room hasn't summarised for them yet) and on the
+            // solo path (`speakerId == nil`) where there's no concept of
+            // "what X remembers."
+            if let sid = speakerId,
+               let perSpeaker = scene.summariesBySpeaker?[sid] {
+                rendered.text = perSpeaker
+            }
             if isStale {
-                rendered.text = SceneSummaryFormatter.compact(scene.text)
+                rendered.text = SceneSummaryFormatter.compact(rendered.text)
             }
             return rendered
         }
@@ -180,22 +275,41 @@ struct PromptBuilder {
     /// function of its inputs (testable without AppState). Both default to
     /// nil for the free-form chat path. Step 4a plumbs them through; later
     /// sub-steps consume them.
-    static func build(chat: Chat, character: Character? = nil, persona: Persona? = nil, relevantMemories: String? = nil, continuation: Bool = false, qwenThinking: Bool = false) -> (prompt: String, stops: [String]) {
-        let memoryBlock = composeMemoryBlock(chat: chat, character: character, userName: "")
+    static func build(chat: Chat, character: Character? = nil, persona: Persona? = nil, relevantMemories: String? = nil, continuation: Bool = false, qwenThinking: Bool = false, speakerId: UUID? = nil, cast: [Character] = []) -> (prompt: String, stops: [String]) {
+        // Phase 8 §4.2b — multi-cast assembly path. Triggered when the
+        // chat has more than one cast member AND the caller has resolved
+        // a speakerId for this generation. `character` is still the active
+        // speaker's full card (caller resolves from speakerId); `cast`
+        // adds the other cast members for cohabitant briefs + history
+        // name-prefixing. Solo / free-form chats pass through unchanged.
+        let isMultiCast = chat.cast.count > 1 && speakerId != nil
+        let cohabitants: [Character] = isMultiCast ? cast.filter { $0.id != speakerId } : []
+        let activeName: String? = {
+            guard isMultiCast, let sid = speakerId else { return nil }
+            return cast.first(where: { $0.id == sid })?.name ?? character?.name
+        }()
+        let nudge: String? = activeName.map { groupNudge(activeSpeakerName: $0) }
+        let renderedTurns: [Turn] = {
+            guard isMultiCast, let sid = speakerId else { return verbatimTurns(chat) }
+            return formatHistoryForSpeaker(turns: verbatimTurns(chat), activeSpeakerId: sid, cast: cast)
+        }()
+
+        let memoryBlock = composeMemoryBlock(chat: chat, character: character, userName: "", cohabitants: cohabitants)
         let personaBlock = renderPersonaBlock(persona)
         let template = Templates.byId(chat.templateId, qwenThinking: qwenThinking)
         let prompt = template.assemble(
             memoryBlock: memoryBlock,
             personaBlock: personaBlock,
             entitiesBlock: entitiesBlock(chat: chat),
-            sceneSummaries: renderableScenes(chat: chat),
+            sceneSummaries: renderableScenes(chat: chat, speakerId: speakerId),
             summary: chat.summary.isEmpty ? nil : chat.summary,
             worldInfoHits: worldInfoHits(chat: chat),
             authorsNote: effectiveAuthorsNote(chat: chat, character: character),
             relevantMemories: relevantMemories,
             tailMemoryDigest: tailMemoryDigest(chat: chat, continuation: continuation),
             currentSceneAnchor: currentSceneAnchor(chat: chat, continuation: continuation),
-            turns: verbatimTurns(chat),
+            groupNudge: nudge,
+            turns: renderedTurns,
             continuation: continuation
         )
         return (prompt, template.stopSequences)
@@ -265,7 +379,7 @@ struct PromptBuilder {
     ///
     /// Returns nil when nothing would be emitted, so callers can pass that
     /// through to the templates' `memoryBlock: String?` slot unchanged.
-    static func composeMemoryBlock(chat: Chat, character: Character?, userName: String) -> String? {
+    static func composeMemoryBlock(chat: Chat, character: Character?, userName: String, cohabitants: [Character] = []) -> String? {
         let trimmedName = userName.trimmingCharacters(in: .whitespacesAndNewlines)
         var sections: [String] = []
 
@@ -280,6 +394,19 @@ struct PromptBuilder {
             if !cardPrefix.isEmpty {
                 sections.append(cardPrefix)
             }
+        }
+        // Phase 8 §4.2b — cohabitant briefs (hybrid card scoping). Each
+        // other cast member contributes a one-line `- Name: first sentence`
+        // entry capped at ~60 tokens (~240 chars) so the active speaker
+        // knows who else is in the room without paying full-card token
+        // cost for every cohabitant on every turn. See §4.1 of the design
+        // doc for the SWAP/APPEND/hybrid trade-off.
+        if !cohabitants.isEmpty {
+            let lines = cohabitants.map { c in
+                let brief = cohabitantBrief(c.description)
+                return "- \(c.name): \(brief)"
+            }
+            sections.append("[Other characters present:]\n" + lines.joined(separator: "\n"))
         }
 
         // Decide whether to include the user-editable chat memory. The toggle

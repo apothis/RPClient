@@ -16,6 +16,7 @@ struct GemmaTemplate: PromptTemplate {
         relevantMemories: String?,
         tailMemoryDigest: String?,
         currentSceneAnchor: String?,
+        groupNudge: String?,
         turns: [Turn],
         continuation: Bool
     ) -> String {
@@ -83,6 +84,14 @@ struct GemmaTemplate: PromptTemplate {
                 // summaries higher in the prompt. See MEMORY_AUDIT §4.1-C.
                 if idx == lastUserIndex, let anchor = currentSceneAnchor, !anchor.isEmpty {
                     body = body + "\n\n" + anchor
+                }
+                // Phase 8 §3.2 / §4.2b — group nudge sits *after* the
+                // anchor so it's the very last thing the model sees
+                // before the generation marker. Tiny system message that
+                // pins the active speaker; matches SillyTavern's
+                // end-of-prompt placement.
+                if idx == lastUserIndex, let nudge = groupNudge, !nudge.isEmpty {
+                    body = body + "\n\n" + nudge
                 }
                 out += body
                 out += "<end_of_turn>\n"
