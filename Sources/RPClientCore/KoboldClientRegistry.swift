@@ -44,6 +44,27 @@ final class KoboldClientRegistry {
         return cachedFallback()
     }
 
+    /// Phase 9 §5.4.a — resolve the per-window card-creator server.
+    /// Settings.cardCreatorServerId → active chat's serverId →
+    /// defaultServerId per V2_PHASE9_CARD_CREATOR §4.4. Not routed
+    /// through `client(for:chatOverride:)` because card-gen has its
+    /// own settings field, not a chat-level override; calling it
+    /// `.general` would silently ignore the per-window picker.
+    func cardCreatorClient(chatOverride: UUID?) -> KoboldClient {
+        let liveIds = Set(current.servers.map(\.id))
+        let isLive: (UUID?) -> UUID? = { id in
+            guard let id = id, liveIds.contains(id) else { return nil }
+            return id
+        }
+        let resolved = isLive(current.cardCreatorServerId)
+            ?? isLive(chatOverride)
+            ?? isLive(current.defaultServerId)
+        if let id = resolved, let profile = current.servers.first(where: { $0.id == id }) {
+            return cachedClient(for: profile)
+        }
+        return cachedFallback()
+    }
+
     private func resolveProfileId(role: ServerRole, chatOverride: UUID?) -> UUID? {
         let liveIds = Set(current.servers.map(\.id))
         let isLive: (UUID?) -> UUID? = { id in

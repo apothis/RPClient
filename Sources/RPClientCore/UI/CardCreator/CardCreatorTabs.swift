@@ -310,19 +310,22 @@ final class PersonaTabViewController: NSViewController {
             label: "Description",
             initialValue: draft.character.description,
             hint: "Background, role, hooks. Reaches the prompt as part of the read-only memory prefix.",
-            placeholder: CardCreatorPlaceholders.personaDescription
+            placeholder: CardCreatorPlaceholders.personaDescription,
+            hasSuggestionsStrip: true
         )
         self.personalityField = MultilineFieldView(
             label: "Personality",
             initialValue: draft.character.personality,
             hint: "Disposition, tone, mannerisms. Often a list of traits.",
-            placeholder: CardCreatorPlaceholders.personaPersonality
+            placeholder: CardCreatorPlaceholders.personaPersonality,
+            hasSuggestionsStrip: true
         )
         self.scenarioField = MultilineFieldView(
             label: "Scenario",
             initialValue: draft.character.scenario,
             hint: "The setting at the moment the chat begins. {{user}} expands to the active persona.",
-            placeholder: CardCreatorPlaceholders.personaScenario
+            placeholder: CardCreatorPlaceholders.personaScenario,
+            hasSuggestionsStrip: true
         )
         super.init(nibName: nil, bundle: nil)
     }
@@ -346,9 +349,24 @@ final class PersonaTabViewController: NSViewController {
             self?.onDirty()
         }
 
+        attachStrip(to: descriptionField, field: .description)
+        attachStrip(to: personalityField, field: .personality)
+        attachStrip(to: scenarioField, field: .scenario)
+
         self.view = makeScrollingTab(fields: [
             descriptionField, personalityField, scenarioField,
         ])
+    }
+
+    private func attachStrip(to fieldView: MultilineFieldView, field: CardField) {
+        guard let strip = fieldView.suggestionsStrip else { return }
+        let controller = CardCreatorAIWiring.makeController(field: field, draft: draft)
+        strip.controller = controller
+        strip.onRequestGenerate = { [weak self] in
+            guard let self else { return }
+            let snapshot = CardDraftSnapshotBuilder.snapshot(of: self.draft)
+            controller.generate(draft: snapshot)
+        }
     }
 }
 
@@ -370,7 +388,8 @@ final class GreetingsTabViewController: NSViewController {
             label: "First message",
             initialValue: draft.character.firstMessage,
             hint: "The character's opening line. Seeded as turn 0 when a new chat is created.",
-            placeholder: CardCreatorPlaceholders.greetingsFirstMessage
+            placeholder: CardCreatorPlaceholders.greetingsFirstMessage,
+            hasSuggestionsStrip: true
         )
         self.alternateGreetingsEditor = GreetingListEditor(
             label: "Alternate greetings",
@@ -405,9 +424,22 @@ final class GreetingsTabViewController: NSViewController {
             self?.onDirty()
         }
 
+        attachStrip(to: firstMessageField, field: .firstMessage)
+
         self.view = makeScrollingTab(fields: [
             firstMessageField, alternateGreetingsEditor, groupOnlyEditor,
         ])
+    }
+
+    private func attachStrip(to fieldView: MultilineFieldView, field: CardField) {
+        guard let strip = fieldView.suggestionsStrip else { return }
+        let controller = CardCreatorAIWiring.makeController(field: field, draft: draft)
+        strip.controller = controller
+        strip.onRequestGenerate = { [weak self] in
+            guard let self else { return }
+            let snapshot = CardDraftSnapshotBuilder.snapshot(of: self.draft)
+            controller.generate(draft: snapshot)
+        }
     }
 }
 

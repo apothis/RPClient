@@ -58,6 +58,12 @@ final class MultilineFieldView: NSView {
     private let textView = PlaceholderTextView()
     private let hintView = NSTextField(labelWithString: "")
 
+    /// Phase 9 §5.4.a — optional AI-assist suggestions strip below the
+    /// input, above the hint. Constructed only when the caller passes
+    /// `cardField:` to init; the wiring layer (per-tab view controller)
+    /// attaches a `CardSuggestionsController` after construction.
+    let suggestionsStrip: CardSuggestionsStripView?
+
     private let label: String
     private let hint: String?
     private let v3Only: Bool
@@ -72,15 +78,39 @@ final class MultilineFieldView: NSView {
          v3Only: Bool = false,
          placeholder: String? = nil,
          minHeight: CGFloat = 96,
-         maxHeight: CGFloat = 320) {
+         maxHeight: CGFloat = 320,
+         hasSuggestionsStrip: Bool = false) {
         self.label = label
         self.hint = hint
         self.v3Only = v3Only
         self.minHeight = minHeight
         self.maxHeight = maxHeight
+        self.suggestionsStrip = hasSuggestionsStrip ? CardSuggestionsStripView() : nil
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         buildUI(initialValue: initialValue, placeholder: placeholder)
+        suggestionsStrip?.onUseCandidate = { [weak self] candidate in
+            self?.applyCandidate(candidate)
+        }
+        suggestionsStrip?.onEditCandidate = { [weak self] candidate in
+            // Edit-sheet deferred to §5.4.d polish — in the meantime,
+            // Edit just behaves like Use. Keeps the button visible
+            // and useful while the proper sheet UX gets designed.
+            self?.applyCandidate(candidate)
+        }
+    }
+
+    /// Set the field's text from a generated candidate. Marks dirty
+    /// via the same onChange path the user's typing triggers.
+    private func applyCandidate(_ candidate: CardCandidate) {
+        textView.string = candidate.text
+        // The textView delegate's textDidChange only fires on user
+        // input, not on programmatic mutations — fire onChange here
+        // so the surrounding tab marks the draft dirty.
+        onChange?(candidate.text)
+        DispatchQueue.main.async { [weak self] in
+            self?.recalculateHeight()
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -159,6 +189,11 @@ final class MultilineFieldView: NSView {
         heightConstraint = scrollView.heightAnchor.constraint(equalToConstant: minHeight)
         heightConstraint.priority = .defaultHigh
 
+        // Suggestions strip (optional, between input and hint).
+        if let strip = suggestionsStrip {
+            addSubview(strip)
+        }
+
         // Hint footer.
         if let hintText = hint {
             hintView.stringValue = hintText
@@ -181,15 +216,28 @@ final class MultilineFieldView: NSView {
             heightConstraint,
         ])
 
+        // The next-anchor for the hint depends on whether a strip exists.
+        let topOfHintAnchor: NSLayoutYAxisAnchor
+        if let strip = suggestionsStrip {
+            NSLayoutConstraint.activate([
+                strip.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: DesignTokens.Spacing.xs),
+                strip.leadingAnchor.constraint(equalTo: leadingAnchor),
+                strip.trailingAnchor.constraint(equalTo: trailingAnchor),
+            ])
+            topOfHintAnchor = strip.bottomAnchor
+        } else {
+            topOfHintAnchor = scrollView.bottomAnchor
+        }
+
         if hint != nil {
             NSLayoutConstraint.activate([
-                hintView.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: DesignTokens.Spacing.xs),
+                hintView.topAnchor.constraint(equalTo: topOfHintAnchor, constant: DesignTokens.Spacing.xs),
                 hintView.leadingAnchor.constraint(equalTo: leadingAnchor),
                 hintView.trailingAnchor.constraint(equalTo: trailingAnchor),
                 hintView.bottomAnchor.constraint(equalTo: bottomAnchor),
             ])
         } else {
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor).isActive = true
+            topOfHintAnchor.constraint(equalTo: bottomAnchor).isActive = true
         }
 
         // Initial height calc once layout pass settles.
