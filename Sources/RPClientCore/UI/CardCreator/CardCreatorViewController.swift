@@ -148,7 +148,7 @@ final class CardCreatorViewController: NSViewController {
         addTab(SystemTabViewController(draft: draft, onDirty: onDirty), label: "System")
 
         addTab(LorebookTabViewController(draft: draft), label: "Lorebook")
-        addPlaceholderTab(label: "Advanced", body: "Source, multilingual notes, extensions JSON viewer — §5.3c.4.")
+        addTab(AdvancedTabViewController(draft: draft, onDirty: onDirty), label: "Advanced")
 
         root.addSubview(tabView)
 

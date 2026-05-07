@@ -596,6 +596,703 @@ final class SystemTabViewController: NSViewController {
     }
 }
 
+// MARK: - AdvancedTabViewController (§5.3c.4)
+
+/// Advanced tab — v3-only `source` URLs/IDs, multilingual creator notes,
+/// and a read-only `extensions` JSON viewer. Power-user surface; most
+/// authors won't touch it.
+final class AdvancedTabViewController: NSViewController {
+    private let draft: CharacterDraft
+    private let onDirty: () -> Void
+
+    private let sourceEditor: StringListEditor
+    private let multilingualEditor: MultilingualNotesEditor
+    private let extensionsViewer = ExtensionsJSONViewer()
+
+    init(draft: CharacterDraft, onDirty: @escaping () -> Void) {
+        self.draft = draft
+        self.onDirty = onDirty
+        self.sourceEditor = StringListEditor(
+            label: "Source",
+            initialValues: draft.character.source,
+            hint: "URLs or external IDs that point at where this card came from. v3 export only — readers append, never overwrite.",
+            placeholder: "https://chub.ai/characters/foo/bar",
+            v3Only: true
+        )
+        self.multilingualEditor = MultilingualNotesEditor(
+            initialValues: draft.character.creatorNotesMultilingual ?? [:]
+        )
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        sourceEditor.onChange = { [weak self] arr in
+            self?.draft.character.source = arr
+            self?.draft.markDirty()
+            self?.onDirty()
+            self?.refreshExtensionsViewer()
+        }
+        multilingualEditor.onChange = { [weak self] dict in
+            self?.draft.character.creatorNotesMultilingual = dict.isEmpty ? nil : dict
+            self?.draft.markDirty()
+            self?.onDirty()
+            self?.refreshExtensionsViewer()
+        }
+        refreshExtensionsViewer()
+        self.view = makeScrollingTab(fields: [
+            sourceEditor, multilingualEditor, extensionsViewer,
+        ])
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        // The other tabs mutate Character.extensions (depth_prompt,
+        // rpclient/details, rpclient/intimacy). Re-render the JSON viewer
+        // every time Advanced is shown so the dump matches reality.
+        refreshExtensionsViewer()
+    }
+
+    private func refreshExtensionsViewer() {
+        extensionsViewer.update(extensions: draft.character.extensions)
+    }
+}
+
+// MARK: - StringListEditor (lighter sibling of GreetingListEditor)
+
+/// Single-line list editor — used for `source` URLs. Each row is a single-
+/// line text field rather than a multi-line text view. Hover-revealed
+/// up/down/trash matching the GreetingListEditor pattern.
+final class StringListEditor: NSView {
+
+    var onChange: (([String]) -> Void)?
+
+    private let label: String
+    private let hint: String?
+    private let placeholder: String
+    private let v3Only: Bool
+
+    private let labelView = NSTextField(labelWithString: "")
+    private let stack = NSStackView()
+    private let addButton = NSButton(title: "+ Add", target: nil, action: nil)
+    private let emptyState = NSTextField(labelWithString: "")
+
+    private(set) var values: [String] = []
+
+    init(label: String,
+         initialValues: [String],
+         hint: String? = nil,
+         placeholder: String = "",
+         v3Only: Bool = false) {
+        self.label = label
+        self.hint = hint
+        self.placeholder = placeholder
+        self.v3Only = v3Only
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        buildUI(initialValues: initialValues)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func buildUI(initialValues: [String]) {
+        labelView.stringValue = label
+        labelView.font = DesignTokens.Typography.headline
+        labelView.textColor = DesignTokens.Foreground.primary
+        labelView.translatesAutoresizingMaskIntoConstraints = false
+        let header = NSStackView(views: [labelView])
+        header.orientation = .horizontal
+        header.spacing = DesignTokens.Spacing.xs
+        header.alignment = .firstBaseline
+        header.translatesAutoresizingMaskIntoConstraints = false
+        if v3Only { header.addArrangedSubview(makeV3PillView()) }
+        addSubview(header)
+
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = DesignTokens.Spacing.xs
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+
+        emptyState.stringValue = "No entries. Click + Add to add one."
+        emptyState.font = DesignTokens.Typography.subheadline
+        emptyState.textColor = DesignTokens.Foreground.secondary
+        emptyState.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(emptyState)
+
+        addButton.target = self
+        addButton.action = #selector(addClicked)
+        addButton.bezelStyle = .rounded
+        addButton.controlSize = .small
+        addButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(addButton)
+
+        var hintConstraints: [NSLayoutConstraint] = []
+        var topAnchorTarget: NSLayoutConstraint
+        if let hintText = hint {
+            let hintView = NSTextField(labelWithString: hintText)
+            hintView.font = DesignTokens.Typography.subheadline
+            hintView.textColor = DesignTokens.Foreground.secondary
+            hintView.lineBreakMode = .byWordWrapping
+            hintView.maximumNumberOfLines = 3
+            hintView.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(hintView)
+            hintConstraints = [
+                hintView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: DesignTokens.Spacing.xs),
+                hintView.leadingAnchor.constraint(equalTo: leadingAnchor),
+                hintView.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            ]
+            topAnchorTarget = stack.topAnchor.constraint(equalTo: hintView.bottomAnchor, constant: DesignTokens.Spacing.sm)
+        } else {
+            topAnchorTarget = stack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: DesignTokens.Spacing.sm)
+        }
+
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: topAnchor),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor),
+            header.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+
+            topAnchorTarget,
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+            emptyState.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
+            emptyState.topAnchor.constraint(equalTo: stack.topAnchor),
+
+            addButton.topAnchor.constraint(equalTo: stack.bottomAnchor, constant: DesignTokens.Spacing.sm),
+            addButton.leadingAnchor.constraint(equalTo: leadingAnchor),
+            addButton.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ] + hintConstraints)
+
+        values = initialValues
+        rebuildRows()
+    }
+
+    @objc private func addClicked() {
+        values.append("")
+        rebuildRows()
+        onChange?(values)
+        if let lastRow = stack.arrangedSubviews.last as? StringListRow {
+            window?.makeFirstResponder(lastRow.field)
+        }
+    }
+
+    fileprivate func updateRow(at index: Int, to text: String) {
+        guard index >= 0 && index < values.count else { return }
+        values[index] = text
+        onChange?(values)
+    }
+
+    fileprivate func deleteRow(at index: Int) {
+        guard index >= 0 && index < values.count else { return }
+        values.remove(at: index)
+        rebuildRows()
+        onChange?(values)
+    }
+
+    private func rebuildRows() {
+        for view in stack.arrangedSubviews {
+            stack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        emptyState.isHidden = !values.isEmpty
+        for (i, value) in values.enumerated() {
+            let row = StringListRow(index: i, value: value, placeholder: placeholder, editor: self)
+            stack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+    }
+
+    private func makeV3PillView() -> NSView {
+        let pill = NSTextField(labelWithString: "v3")
+        pill.font = DesignTokens.Typography.caption2
+        pill.textColor = DesignTokens.Foreground.secondary
+        pill.translatesAutoresizingMaskIntoConstraints = false
+        pill.drawsBackground = false
+        let wrap = AppearanceAwareLayerView()
+        wrap.translatesAutoresizingMaskIntoConstraints = false
+        wrap.backgroundColor = DesignTokens.Background.group
+        wrap.cornerRadiusValue = DesignTokens.Radius.chip
+        wrap.addSubview(pill)
+        NSLayoutConstraint.activate([
+            pill.leadingAnchor.constraint(equalTo: wrap.leadingAnchor, constant: 6),
+            pill.trailingAnchor.constraint(equalTo: wrap.trailingAnchor, constant: -6),
+            pill.topAnchor.constraint(equalTo: wrap.topAnchor, constant: 2),
+            pill.bottomAnchor.constraint(equalTo: wrap.bottomAnchor, constant: -2),
+        ])
+        return wrap
+    }
+}
+
+private final class StringListRow: NSView {
+
+    let field = NSTextField()
+    private let deleteButton = NSButton(title: "", target: nil, action: nil)
+    private let index: Int
+    private weak var editor: StringListEditor?
+
+    init(index: Int, value: String, placeholder: String, editor: StringListEditor) {
+        self.index = index
+        self.editor = editor
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        buildUI(value: value, placeholder: placeholder)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func buildUI(value: String, placeholder: String) {
+        field.stringValue = value
+        field.placeholderString = placeholder
+        field.bezelStyle = .roundedBezel
+        field.controlSize = .small
+        field.font = DesignTokens.Typography.body
+        field.delegate = self
+        field.translatesAutoresizingMaskIntoConstraints = false
+
+        deleteButton.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "Remove")
+        deleteButton.isBordered = false
+        deleteButton.imagePosition = .imageOnly
+        deleteButton.target = self
+        deleteButton.action = #selector(deleteClicked)
+        deleteButton.contentTintColor = DesignTokens.Foreground.secondary
+        deleteButton.translatesAutoresizingMaskIntoConstraints = false
+        deleteButton.alphaValue = 0
+        addSubview(field)
+        addSubview(deleteButton)
+
+        NSLayoutConstraint.activate([
+            field.topAnchor.constraint(equalTo: topAnchor),
+            field.leadingAnchor.constraint(equalTo: leadingAnchor),
+            field.trailingAnchor.constraint(equalTo: deleteButton.leadingAnchor, constant: -DesignTokens.Spacing.xs),
+            field.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            deleteButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            deleteButton.trailingAnchor.constraint(equalTo: trailingAnchor),
+            deleteButton.widthAnchor.constraint(equalToConstant: 22),
+        ])
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        let area = NSTrackingArea(rect: bounds,
+                                  options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        animateAlpha(to: 1)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        animateAlpha(to: 0)
+    }
+
+    private func animateAlpha(to target: CGFloat) {
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = DesignTokens.Motion.hoverFade
+            ctx.allowsImplicitAnimation = true
+            deleteButton.animator().alphaValue = target
+        }
+    }
+
+    @objc private func deleteClicked() {
+        editor?.deleteRow(at: index)
+    }
+}
+
+extension StringListRow: NSTextFieldDelegate {
+    func controlTextDidChange(_ obj: Notification) {
+        editor?.updateRow(at: index, to: field.stringValue)
+    }
+}
+
+// MARK: - MultilingualNotesEditor
+
+/// Editor for `creatorNotesMultilingual: [String: String]?` — language-keyed
+/// creator notes per the v3 spec. Each row is `lang-popup + text-area +
+/// delete`. Add-row footer adds a new entry with a default lang of "en".
+final class MultilingualNotesEditor: NSView {
+
+    var onChange: (([String: String]) -> Void)?
+
+    /// Common ISO 639-1 codes the v3 spec calls out — popup defaults
+    /// authors to picking from this list. They can also type a custom 2-letter
+    /// code via the popup's "Custom…" sentinel (deferred — for now they
+    /// pick from this set; rare langs land in the JSON viewer's edit-on-
+    /// disk follow-up).
+    static let commonLanguages: [(code: String, name: String)] = [
+        ("en", "English"), ("ja", "Japanese"), ("ko", "Korean"),
+        ("zh", "Chinese"), ("de", "German"), ("fr", "French"),
+        ("es", "Spanish"), ("it", "Italian"), ("pt", "Portuguese"),
+        ("ru", "Russian"), ("ar", "Arabic"), ("hi", "Hindi"),
+    ]
+
+    private var entries: [(lang: String, text: String)] = []
+
+    private let labelView = NSTextField(labelWithString: "Creator notes (multilingual)")
+    private let hintView = NSTextField(wrappingLabelWithString:
+        "Per-language overrides for Creator notes. v3 export only. Reader picks the entry matching the user's locale; falls back to the plain Creator notes field on the System tab.")
+    private let stack = NSStackView()
+    private let addButton = NSButton(title: "+ Add language", target: nil, action: nil)
+    private let v3Pill: NSView
+
+    override init(frame frameRect: NSRect) {
+        self.v3Pill = MultilingualNotesEditor.makeV3Pill()
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        buildUI()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    convenience init(initialValues: [String: String]) {
+        self.init(frame: .zero)
+        self.entries = initialValues.map { (lang: $0.key, text: $0.value) }
+            .sorted { $0.lang < $1.lang }
+        rebuildRows()
+    }
+
+    private func buildUI() {
+        labelView.font = DesignTokens.Typography.headline
+        labelView.textColor = DesignTokens.Foreground.primary
+        labelView.translatesAutoresizingMaskIntoConstraints = false
+
+        let header = NSStackView(views: [labelView, v3Pill])
+        header.orientation = .horizontal
+        header.spacing = DesignTokens.Spacing.xs
+        header.alignment = .firstBaseline
+        header.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(header)
+
+        hintView.font = DesignTokens.Typography.subheadline
+        hintView.textColor = DesignTokens.Foreground.secondary
+        hintView.maximumNumberOfLines = 4
+        hintView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(hintView)
+
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = DesignTokens.Spacing.sm
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+
+        addButton.target = self
+        addButton.action = #selector(addClicked)
+        addButton.bezelStyle = .rounded
+        addButton.controlSize = .small
+        addButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(addButton)
+
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: topAnchor),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor),
+
+            hintView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: DesignTokens.Spacing.xs),
+            hintView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hintView.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+            stack.topAnchor.constraint(equalTo: hintView.bottomAnchor, constant: DesignTokens.Spacing.sm),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+            addButton.topAnchor.constraint(equalTo: stack.bottomAnchor, constant: DesignTokens.Spacing.sm),
+            addButton.leadingAnchor.constraint(equalTo: leadingAnchor),
+            addButton.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    @objc private func addClicked() {
+        // Default new entries to "en" unless that's already taken.
+        let usedLangs = Set(entries.map { $0.lang })
+        let nextLang = MultilingualNotesEditor.commonLanguages
+            .first(where: { !usedLangs.contains($0.code) })?.code ?? "en"
+        entries.append((lang: nextLang, text: ""))
+        rebuildRows()
+        notify()
+    }
+
+    fileprivate func updateRow(at index: Int, lang: String, text: String) {
+        guard index >= 0 && index < entries.count else { return }
+        entries[index] = (lang: lang, text: text)
+        notify()
+    }
+
+    fileprivate func deleteRow(at index: Int) {
+        guard index >= 0 && index < entries.count else { return }
+        entries.remove(at: index)
+        rebuildRows()
+        notify()
+    }
+
+    private func rebuildRows() {
+        for view in stack.arrangedSubviews {
+            stack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        for (i, entry) in entries.enumerated() {
+            let row = MultilingualNotesRow(index: i, lang: entry.lang, text: entry.text, editor: self)
+            stack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+    }
+
+    private func notify() {
+        var dict: [String: String] = [:]
+        for entry in entries where !entry.lang.isEmpty {
+            // Last write wins on duplicate-lang rows — UI doesn't prevent
+            // it but the storage shape is a dict.
+            dict[entry.lang] = entry.text
+        }
+        onChange?(dict)
+    }
+
+    private static func makeV3Pill() -> NSView {
+        let pill = NSTextField(labelWithString: "v3")
+        pill.font = DesignTokens.Typography.caption2
+        pill.textColor = DesignTokens.Foreground.secondary
+        pill.translatesAutoresizingMaskIntoConstraints = false
+        pill.drawsBackground = false
+        let wrap = AppearanceAwareLayerView()
+        wrap.translatesAutoresizingMaskIntoConstraints = false
+        wrap.backgroundColor = DesignTokens.Background.group
+        wrap.cornerRadiusValue = DesignTokens.Radius.chip
+        wrap.addSubview(pill)
+        NSLayoutConstraint.activate([
+            pill.leadingAnchor.constraint(equalTo: wrap.leadingAnchor, constant: 6),
+            pill.trailingAnchor.constraint(equalTo: wrap.trailingAnchor, constant: -6),
+            pill.topAnchor.constraint(equalTo: wrap.topAnchor, constant: 2),
+            pill.bottomAnchor.constraint(equalTo: wrap.bottomAnchor, constant: -2),
+        ])
+        return wrap
+    }
+}
+
+private final class MultilingualNotesRow: NSView {
+
+    private let langPopup = NSPopUpButton()
+    private let textView = PlaceholderTextView()
+    private let scroll = NSScrollView()
+    private let deleteButton = NSButton(title: "", target: nil, action: nil)
+
+    private let index: Int
+    private weak var editor: MultilingualNotesEditor?
+
+    init(index: Int, lang: String, text: String, editor: MultilingualNotesEditor) {
+        self.index = index
+        self.editor = editor
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        buildUI(lang: lang, text: text)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func buildUI(lang: String, text: String) {
+        langPopup.translatesAutoresizingMaskIntoConstraints = false
+        langPopup.bezelStyle = .rounded
+        langPopup.controlSize = .small
+        for entry in MultilingualNotesEditor.commonLanguages {
+            let item = NSMenuItem(title: "\(entry.code) — \(entry.name)", action: nil, keyEquivalent: "")
+            item.representedObject = entry.code
+            langPopup.menu?.addItem(item)
+        }
+        // Select the matching language. If the existing lang isn't in our
+        // common set, append it so it survives a save without forcing the
+        // user to remap.
+        if !MultilingualNotesEditor.commonLanguages.contains(where: { $0.code == lang }) {
+            let item = NSMenuItem(title: "\(lang)", action: nil, keyEquivalent: "")
+            item.representedObject = lang
+            langPopup.menu?.addItem(item)
+        }
+        if let idx = langPopup.menu?.items.firstIndex(where: { ($0.representedObject as? String) == lang }) {
+            langPopup.selectItem(at: idx)
+        }
+        langPopup.target = self
+        langPopup.action = #selector(langChanged)
+        addSubview(langPopup)
+
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.borderType = .bezelBorder
+
+        textView.minSize = .zero
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        textView.font = DesignTokens.Typography.body
+        textView.textColor = DesignTokens.Foreground.primary
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.string = text
+        textView.delegate = self
+        textView.placeholderString = "Notes in this language…"
+        textView.textContainerInset = NSSize(width: 4, height: 6)
+        scroll.documentView = textView
+        addSubview(scroll)
+
+        deleteButton.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "Remove")
+        deleteButton.isBordered = false
+        deleteButton.imagePosition = .imageOnly
+        deleteButton.target = self
+        deleteButton.action = #selector(deleteClicked)
+        deleteButton.contentTintColor = DesignTokens.Foreground.secondary
+        deleteButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(deleteButton)
+
+        NSLayoutConstraint.activate([
+            langPopup.topAnchor.constraint(equalTo: topAnchor),
+            langPopup.leadingAnchor.constraint(equalTo: leadingAnchor),
+            langPopup.widthAnchor.constraint(equalToConstant: 140),
+
+            deleteButton.topAnchor.constraint(equalTo: topAnchor),
+            deleteButton.trailingAnchor.constraint(equalTo: trailingAnchor),
+            deleteButton.widthAnchor.constraint(equalToConstant: 22),
+
+            scroll.topAnchor.constraint(equalTo: langPopup.bottomAnchor, constant: DesignTokens.Spacing.xs),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scroll.heightAnchor.constraint(equalToConstant: 80),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    @objc private func langChanged() {
+        emit()
+    }
+
+    @objc private func deleteClicked() {
+        editor?.deleteRow(at: index)
+    }
+
+    private func emit() {
+        let lang = (langPopup.selectedItem?.representedObject as? String) ?? "en"
+        editor?.updateRow(at: index, lang: lang, text: textView.string)
+    }
+}
+
+extension MultilingualNotesRow: NSTextViewDelegate {
+    func textDidChange(_ notification: Notification) {
+        emit()
+    }
+}
+
+// MARK: - ExtensionsJSONViewer
+
+/// Read-only pretty-printed JSON viewer for `Character.extensions`. Power-
+/// user surface (§3.7) — shows what's actually stored in the extensions
+/// blob so authors can verify depth_prompt / rpclient/details / risuai
+/// passthroughs round-trip correctly.
+final class ExtensionsJSONViewer: NSView {
+
+    private let labelView = NSTextField(labelWithString: "Extensions (JSON)")
+    private let hintView = NSTextField(wrappingLabelWithString:
+        "Read-only view of the card's extensions blob. Includes depth_prompt, rpclient/details, rpclient/intimacy, plus any passthrough keys from other clients (agnai, risuai, …). Edit-the-JSON-directly is intentionally not exposed.")
+    private let scroll = NSScrollView()
+    private let textView = NSTextView()
+    private let placeholderLabel = NSTextField(wrappingLabelWithString: "No extensions data on this card.")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        buildUI()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func update(extensions: [String: JSONValue]?) {
+        if let ext = extensions, !ext.isEmpty {
+            placeholderLabel.isHidden = true
+            scroll.isHidden = false
+            do {
+                let data = try JSONEncoder.prettyPrinted.encode(ext)
+                if let s = String(data: data, encoding: .utf8) {
+                    textView.string = s
+                }
+            } catch {
+                textView.string = "(failed to render extensions JSON)"
+            }
+        } else {
+            placeholderLabel.isHidden = false
+            scroll.isHidden = true
+        }
+    }
+
+    private func buildUI() {
+        labelView.font = DesignTokens.Typography.headline
+        labelView.textColor = DesignTokens.Foreground.primary
+        labelView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(labelView)
+
+        hintView.font = DesignTokens.Typography.subheadline
+        hintView.textColor = DesignTokens.Foreground.secondary
+        hintView.maximumNumberOfLines = 4
+        hintView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(hintView)
+
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.borderType = .bezelBorder
+
+        textView.minSize = .zero
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        textView.font = DesignTokens.Typography.mono(.body)
+        textView.textColor = DesignTokens.Foreground.primary
+        textView.isEditable = false
+        textView.isRichText = false
+        textView.textContainerInset = NSSize(width: 6, height: 8)
+        scroll.documentView = textView
+        addSubview(scroll)
+
+        placeholderLabel.font = DesignTokens.Typography.body
+        placeholderLabel.textColor = DesignTokens.Foreground.tertiary
+        placeholderLabel.alignment = .center
+        placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(placeholderLabel)
+
+        NSLayoutConstraint.activate([
+            labelView.topAnchor.constraint(equalTo: topAnchor),
+            labelView.leadingAnchor.constraint(equalTo: leadingAnchor),
+
+            hintView.topAnchor.constraint(equalTo: labelView.bottomAnchor, constant: DesignTokens.Spacing.xs),
+            hintView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hintView.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+            scroll.topAnchor.constraint(equalTo: hintView.bottomAnchor, constant: DesignTokens.Spacing.sm),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scroll.heightAnchor.constraint(equalToConstant: 280),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            placeholderLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            placeholderLabel.centerYAnchor.constraint(equalTo: scroll.centerYAnchor),
+        ])
+    }
+}
+
+private extension JSONEncoder {
+    static let prettyPrinted: JSONEncoder = {
+        let e = JSONEncoder()
+        e.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return e
+    }()
+}
+
 // MARK: - LorebookTabViewController (§5.3c.3)
 
 /// Lorebook tab — read-only summary of `charBook` entries imported with the
