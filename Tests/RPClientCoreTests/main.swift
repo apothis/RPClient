@@ -62,6 +62,7 @@ let suites: [TestSuite] = [
     phase9dRefusalDetectorTests(),
     phase9dPromptBuilderTests(),
     phase9dSideCallTests(),
+    phase9dControllerTests(),
 ]
 
 exit(TestRunner.run(suites))
