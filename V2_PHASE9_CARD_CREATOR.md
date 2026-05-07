@@ -585,22 +585,30 @@ This document. Output: `V2_PHASE9_CARD_CREATOR.md`. ~1 day. **In progress (this 
 - Update the stale doc-comment at the head of `CharacterCardImporter.swift`.
 - ~1–2 days. Tests-first.
 
-### §5.3 — Creator window UI
+### §5.3 — Creator window UI ✅ shipped 2026-05-07
 
-Sub-passes a–e mirror Phase 6/7/8 incremental shape. Each is independently smoke-testable; commits stage in this order:
+Sub-passes a–e mirrored Phase 6/7/8 incremental shape. Each independently smoke-tested; commits staged in this order:
 
-- **§5.3a** ✅ Window scaffold + Identity tab. `CharacterCreatorWindowController` + tabbed layout, `DesignTokens` foundation, `CharacterDraft.DraftOrigin`, `AvatarControl` per §3.6, server picker, save / cancel + dirty dot, menu entry stub.
-- **§5.3b** ✅ Persona / Greetings / Examples / System tabs. `MultilineFieldView` + `GreetingListEditor` reusable controls, `DepthPromptControl` per §3.4, conditional "Restore example dialogue" affordance per §3.5.
-- **§5.3c.1** Persistent custom tags. `Settings.customTags: [String]` additive Codable. Token-commit on Identity-tab `tagsField` checks the union (bundled + custom) and appends-and-saves on novel input. Autocomplete queries the union. Edit-tag-list UI deferred to V2_UI_OVERHAUL per §3.8.
-- **§5.3c.2** Details + Intimacy tabs. New `CardStructuredDetails.swift` carrying `CardDetails` / `CardIntimacy` Codable structs + `JSONValue` round-trip + fence render / parse helpers. New `DetailsTabViewController` and `IntimacyTabViewController` (single-line + multi-line field rows). Save flow: `CharacterDraft.prepareForSave()` re-renders fences and writes both `extensions["rpclient/{details,intimacy}"]` and the description-block. Load flow: extract from fence-in-description if extensions absent (one-time, on draft init for `.editing` origin). Bundled NSFW-realistic placeholder examples for each field. Round-trip tests on synthetic fixtures.
-- **§5.3c.3** Lorebook tab — read-only summary of imported `charBook`. Pointer copy: "Edit per-chat lore in the World Info pane." (Card-bound lorebook editing remains §6 out-of-scope.)
-- **§5.3c.4** Advanced tab + `extensions` JSON viewer per §3.7. Source / `creatorNotesMultilingual` editing. Read-only pretty-printed JSON viewer for the full extensions blob.
-- **§5.3d** Library + menu entry points + drag-drop + import-and-edit flow + `DraftOrigin` save semantics. `File → Import & Edit Card…`, `Library → Edit Card…`, drag-drop card onto creator window. Preserves the existing sidebar drag-drop import-and-save fast path unchanged.
-- **§5.3e** Polish + smoke pass.
+- **§5.3a** ✅ Window scaffold + Identity tab. `CharacterCreatorWindowController` + tabbed layout, `DesignTokens` foundation, `CharacterDraft.DraftOrigin`, `AvatarControl` per §3.6, server picker, save / cancel + dirty dot, menu entry stub. Smoke regressions caught + fixed: dark-mode CGColor snapshot trap (new `AppearanceAwareLayerView`); hint text contrast (`subheadline` paired with `secondary`, not `tertiary`); Library cache routing through `AppStateCardStorage` adapter.
+- **§5.3b** ✅ Persona / Greetings / Examples / System tabs. `MultilineFieldView` + `GreetingListEditor` reusable controls, `DepthPromptControl` per §3.4, conditional "Restore example dialogue" affordance per §3.5. NSScrollView-as-tab-root pattern fixed via wrapper-NSView (NSTabView's frame-set was being eaten by `translatesAutoresizingMaskIntoConstraints = false` on the scroll view). NSTextView canonical setup (minSize/maxSize/isVerticallyResizable/autoresizingMask) added to stop multi-line fields from intercepting clicks intended for sibling fields.
+- **§5.3c.1** ✅ Persistent custom tags. `Settings.customTags: [String]` additive Codable. Token-commit on Identity-tab `tagsField` checks the union (bundled + custom) and appends-and-saves on novel input. Autocomplete queries the union. Edit-tag-list UI deferred to V2_UI_OVERHAUL per §3.8.
+- **§5.3c.2** ✅ Details + Intimacy tabs. New `CardStructuredDetails.swift` carrying `CardDetails` / `CardIntimacy` Codable structs + `JSONValue` round-trip + fence render / parse helpers. Bundled NSFW-realistic placeholder examples for every multi-line field via new `PlaceholderTextView` (NSTextView subclass — AppKit doesn't ship a native multi-line placeholder). Save flow: `CharacterDraft.prepareForSave()` re-renders fences and writes both `extensions["rpclient/{details,intimacy}"]` and the description-block. Load flow: extract from fence-in-description if extensions absent (one-time, on draft init for `.editing` origin), eagerly mirror back into extensions so a save-without-edits doesn't strip the fence. Body field split into `build` / `anatomy` / `markings` triad mid-pass; legacy `body` key migrates to `anatomy` on `fromJSONValue` and on `parseIntimacy` so existing on-disk records repopulate.
+- **§5.3c.3** ✅ Lorebook tab — read-only summary of imported `charBook`. Per-entry card with name, keys/secondary-keys summary, content preview (3 lines), mode pill (always / keyword / vector), priority readout in mono. Disabled entries fade to half opacity. Card-bound lorebook editing remains §6 out-of-scope; pointer copy directs the author to the inspector's World Info pane for per-chat lore.
+- **§5.3c.4** ✅ Advanced tab + `extensions` JSON viewer per §3.7. New `StringListEditor` (single-line list, lighter sibling of `GreetingListEditor`) for v3 `source`. New `MultilingualNotesEditor` for v3 `creator_notes_multilingual` — 12-language popup (en/ja/ko/zh/de/fr/es/it/pt/ru/ar/hi from §3.9 common set), with non-common langs preserved on round-trip via fallback popup item. Read-only pretty-printed JSON viewer (`ExtensionsJSONViewer`) refreshes on `viewWillAppear` so cross-tab edits land visibly.
+- **§5.3d** ✅ Library + menu entry points + drag-drop + import-and-edit flow. `+ New Card` and `Edit Card…` buttons on the Library window. Right-click context menu on Library cards (Edit / Start Chat / Delete) and on empty space (New / Import). Double-click → Edit. New `LibraryCollectionView` subclass routes both right-click and double-click via closures back to the controller. `File → Import & Edit Card…` opens the file picker → CharacterCardImporter → `CardCreatorWindowController(importing:)`. Creator window's root view is now a `CardDropView` accepting `.png` / `.json` drops; each drop spawns a new creator window so the original draft is preserved (in-place "Replace / Keep / Cancel" replacement deferred — §5.3 deferred polish).
+- **§5.3e** ✅ Doc sweep, V2_PLAN status update, deferred-polish inventory, synthetic NSFW fixture for manual smoke.
 
-Tests: `DraftOrigin` save-path semantics + `CardStructuredDetails` render/parse round-trip + persistent-tag union behavior — pure unit tests with stub `CardStorage`. AppKit assemblage is smoke-tested against synthetic chub-shape NSFW + Risu v3 + v1 Pygmalion fixtures during §5.3e.
+**Deferred from §5.3 (queued, not in Phase 9 scope):**
+- In-place draft replacement on drag-drop (§3.1 Replace / Keep / Cancel — §5.3d ships only "Keep" via new window).
+- Per-row keyboard shortcuts in `GreetingListEditor` (⌘⌫ delete, option-up/down reorder).
+- "Restore from description" button — pulls description-block content back into Details / Intimacy form fields if the author manually edited the fence (§5.3c.2 currently clobbers manual block edits on save).
+- Edit-tag-list UI — the persistent custom-tag vocabulary accumulates indefinitely without a remove path; lives on V2_UI_OVERHAUL.
+- `+ Add` / `+ Add language` keyboard shortcuts on Advanced-tab list editors.
+- Hide-the-fence-block on the Description tab — currently the auto-folded `[character_details]` block is visible inside Description; cleaner UX would render it as a non-editable inline pill or hide it entirely, but that's NSTextView surgery best done in V2_UI_OVERHAUL.
 
-~3–4 days end to end (§5.3c.2 with the structured fields adds ~1 day over the original estimate).
+Tests: `DraftOrigin` save-path semantics + `CardStructuredDetails` render/parse round-trip + persistent-tag union behavior — pure unit tests with stub `CardStorage`. 763/763 passing across all of Phase 9 §5.3. AppKit assemblage smoke-tested manually throughout sub-passes; synthetic NSFW fixture at `/tmp/rpclient-fixtures/sample_card.json` covers full round-trip exercising every tab.
+
+Total effort: 2 days end-to-end including the body-split mid-pass + smoke regression rounds.
 
 ### §5.4 — AI-assist field generation
 
