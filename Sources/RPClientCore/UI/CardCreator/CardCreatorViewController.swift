@@ -257,30 +257,14 @@ final class CardCreatorViewController: NSViewController {
     // MARK: - Drag-drop handling (§5.3d.2)
 
     /// Called when a `.png` / `.json` card file is dropped on the creator
-    /// window. Per V2_PHASE9_CARD_CREATOR §3.1: clean draft → replace via
-    /// new window; dirty draft → prompt Replace / Keep / Cancel where
-    /// "Keep" opens the import in a new window and the current draft
-    /// continues uninterrupted.
+    /// window. Routes through `AppDelegate.importAndEditCard(from:)` so
+    /// the same path covers File-menu picker, Library-window drop, and
+    /// creator-window drop. The §3.1 in-place "Replace / Keep / Cancel"
+    /// for dirty drafts is a §5.3 deferred polish — for now every drop
+    /// spawns a new creator window and the original draft is preserved.
     private func handleDroppedCardFile(_ url: URL) {
         DebugLog.shared.write("cardcreator: drag-drop \(url.lastPathComponent)")
-        let result: CharacterCardImporter.Result
-        do {
-            result = try CharacterCardImporter.importFile(at: url)
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Couldn't import \(url.lastPathComponent)"
-            alert.informativeText = String(describing: error)
-            alert.runModal()
-            return
-        }
-
-        // Always open the import in a new creator window. The dirty-draft
-        // semantics from §3.1 ("Replace / Keep / Cancel") are simplified
-        // for the §5.3d.2 MVP: the original draft is preserved, the import
-        // gets its own window. If the user wants to abandon the original
-        // they close it explicitly. A proper in-place "Replace" affordance
-        // is a §5.3e candidate.
-        (NSApp.delegate as? AppDelegate)?.openImportAndEditCardCreator(from: result)
+        (NSApp.delegate as? AppDelegate)?.importAndEditCard(from: url)
     }
 }
 

@@ -310,6 +310,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.allowedContentTypes = [.png, .json]
         panel.message = "Choose a SillyTavern card (.png or .json) to import and edit. Save in the creator to commit."
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        importAndEditCard(from: url)
+    }
+
+    /// Shared import-and-edit path — used by the File menu picker, the
+    /// Library window drag-drop, and the creator-window drag-drop. Imports
+    /// via CharacterCardImporter and opens the result in the creator with
+    /// `.importing` origin so Save commits, Cancel discards entirely.
+    func importAndEditCard(from url: URL) {
         do {
             let result = try CharacterCardImporter.importFile(at: url)
             DebugLog.shared.write("import-and-edit: \(url.lastPathComponent) → \(result.character.name)")

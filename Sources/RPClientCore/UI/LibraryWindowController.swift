@@ -32,7 +32,16 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func buildUI() {
-        guard let cv = window?.contentView else { return }
+        // Replace the window's contentView with a CardDropView so PNG/JSON
+        // drops anywhere in the Library window (including over the Personas
+        // tab) route through Import & Edit. Existing sidebar drag-drop
+        // import-and-save fast path stays untouched — this Library-window
+        // drop path is the deliberate "review before commit" alternative.
+        let dropView = CardDropView()
+        dropView.onCardFileDropped = { url in
+            (NSApp.delegate as? AppDelegate)?.importAndEditCard(from: url)
+        }
+        window?.contentView = dropView
 
         tabView.translatesAutoresizingMaskIntoConstraints = false
         let charsItem = NSTabViewItem(viewController: charactersVC)
@@ -42,12 +51,12 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate {
         tabView.addTabViewItem(charsItem)
         tabView.addTabViewItem(personasItem)
 
-        cv.addSubview(tabView)
+        dropView.addSubview(tabView)
         NSLayoutConstraint.activate([
-            tabView.topAnchor.constraint(equalTo: cv.topAnchor, constant: 8),
-            tabView.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 8),
-            tabView.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -8),
-            tabView.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -8),
+            tabView.topAnchor.constraint(equalTo: dropView.topAnchor, constant: 8),
+            tabView.leadingAnchor.constraint(equalTo: dropView.leadingAnchor, constant: 8),
+            tabView.trailingAnchor.constraint(equalTo: dropView.trailingAnchor, constant: -8),
+            tabView.bottomAnchor.constraint(equalTo: dropView.bottomAnchor, constant: -8),
         ])
     }
 }
