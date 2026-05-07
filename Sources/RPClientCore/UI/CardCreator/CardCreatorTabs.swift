@@ -596,6 +596,198 @@ final class SystemTabViewController: NSViewController {
     }
 }
 
+// MARK: - LorebookTabViewController (§5.3c.3)
+
+/// Lorebook tab — read-only summary of `charBook` entries imported with the
+/// card. Card-bound lorebook editing remains §6 out-of-scope; this surface
+/// just shows the author what came along with the card so they know what
+/// will fire during a chat. Per-chat lore stays editable in the inspector
+/// pane (V2 Phase 1 §2.1 World Info).
+final class LorebookTabViewController: NSViewController {
+    private let draft: CharacterDraft
+
+    init(draft: CharacterDraft) {
+        self.draft = draft
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        let entries = draft.character.charBook
+        var rows: [NSView] = [headerRow(count: entries.count)]
+        if entries.isEmpty {
+            rows.append(emptyStateRow())
+        } else {
+            rows.append(contentsOf: entries.map(LorebookEntryRow.init(entry:)))
+        }
+        rows.append(footerRow())
+        self.view = makeScrollingTab(fields: rows)
+    }
+
+    private func headerRow(count: Int) -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = DesignTokens.Spacing.xs
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let header = NSTextField(labelWithString: "Character lorebook")
+        header.font = DesignTokens.Typography.title2
+        header.textColor = DesignTokens.Foreground.primary
+        header.translatesAutoresizingMaskIntoConstraints = false
+
+        let countLabel = NSTextField(labelWithString: count == 0
+            ? "No entries imported with this card."
+            : "\(count) entr\(count == 1 ? "y" : "ies") imported with this card.")
+        countLabel.font = DesignTokens.Typography.subheadline
+        countLabel.textColor = DesignTokens.Foreground.secondary
+        countLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        stack.addArrangedSubview(header)
+        stack.addArrangedSubview(countLabel)
+        return stack
+    }
+
+    private func emptyStateRow() -> NSView {
+        let label = NSTextField(wrappingLabelWithString:
+            "This character didn't ship with a lorebook. Per-chat world-info " +
+            "entries (which fire during a chat regardless of which card is " +
+            "loaded) are edited in the World Info pane on the inspector.")
+        label.font = DesignTokens.Typography.body
+        label.textColor = DesignTokens.Foreground.secondary
+        label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }
+
+    private func footerRow() -> NSView {
+        let label = NSTextField(wrappingLabelWithString:
+            "Card-bound lorebook editing isn't yet supported in the creator. " +
+            "Per-chat world-info edits live in the inspector's World Info pane.")
+        label.font = DesignTokens.Typography.subheadline
+        label.textColor = DesignTokens.Foreground.tertiary
+        label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }
+}
+
+private final class LorebookEntryRow: NSView {
+
+    init(entry: WorldInfoEntry) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        buildUI(entry: entry)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func buildUI(entry: WorldInfoEntry) {
+        let card = AppearanceAwareLayerView()
+        card.translatesAutoresizingMaskIntoConstraints = false
+        card.backgroundColor = DesignTokens.Background.group
+        card.cornerRadiusValue = DesignTokens.Radius.section
+        addSubview(card)
+
+        let nameLabel = NSTextField(labelWithString: entry.name.isEmpty
+            ? (entry.keys.first ?? "Untitled")
+            : entry.name)
+        nameLabel.font = DesignTokens.Typography.headline
+        nameLabel.textColor = DesignTokens.Foreground.primary
+        nameLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let modePill = makeModePill(mode: entry.injectionMode, enabled: entry.enabled)
+        let priorityLabel = NSTextField(labelWithString: "p\(entry.priority)")
+        priorityLabel.font = DesignTokens.Typography.mono(.caption1)
+        priorityLabel.textColor = DesignTokens.Foreground.tertiary
+        priorityLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let headerRow = NSStackView(views: [nameLabel, NSView(), modePill, priorityLabel])
+        headerRow.orientation = .horizontal
+        headerRow.alignment = .firstBaseline
+        headerRow.spacing = DesignTokens.Spacing.sm
+        headerRow.translatesAutoresizingMaskIntoConstraints = false
+
+        let keysLabel = NSTextField(labelWithString: keysSummary(entry))
+        keysLabel.font = DesignTokens.Typography.subheadline
+        keysLabel.textColor = DesignTokens.Foreground.secondary
+        keysLabel.lineBreakMode = .byTruncatingTail
+        keysLabel.maximumNumberOfLines = 1
+        keysLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let contentLabel = NSTextField(wrappingLabelWithString: entry.content)
+        contentLabel.font = DesignTokens.Typography.body
+        contentLabel.textColor = DesignTokens.Foreground.primary
+        contentLabel.lineBreakMode = .byTruncatingTail
+        contentLabel.maximumNumberOfLines = 3
+        contentLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView(views: [headerRow, keysLabel, contentLabel])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = DesignTokens.Spacing.xs
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            card.topAnchor.constraint(equalTo: topAnchor),
+            card.leadingAnchor.constraint(equalTo: leadingAnchor),
+            card.trailingAnchor.constraint(equalTo: trailingAnchor),
+            card.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            stack.topAnchor.constraint(equalTo: card.topAnchor, constant: DesignTokens.Spacing.md),
+            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: DesignTokens.Spacing.md),
+            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -DesignTokens.Spacing.md),
+            stack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -DesignTokens.Spacing.md),
+
+            headerRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+        ])
+
+        // Disabled entries fade — they don't fire in the chat, the author
+        // should see at-a-glance which are dormant.
+        if !entry.enabled {
+            self.alphaValue = 0.5
+        }
+    }
+
+    private func keysSummary(_ entry: WorldInfoEntry) -> String {
+        var bits: [String] = []
+        if !entry.keys.isEmpty {
+            bits.append("keys: " + entry.keys.joined(separator: ", "))
+        }
+        if !entry.secondaryKeys.isEmpty {
+            bits.append("AND " + entry.secondaryKeys.joined(separator: ", "))
+        }
+        return bits.isEmpty ? "no keys" : bits.joined(separator: " ")
+    }
+
+    private func makeModePill(mode: WorldInfoInjectionMode, enabled: Bool) -> NSView {
+        let title: String
+        switch mode {
+        case .always: title = "always"
+        case .keyword: title = "keyword"
+        case .vectorized: title = "vector"
+        }
+        let label = NSTextField(labelWithString: title)
+        label.font = DesignTokens.Typography.caption2
+        label.textColor = enabled ? DesignTokens.Foreground.secondary : DesignTokens.Foreground.tertiary
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.drawsBackground = false
+
+        let wrap = AppearanceAwareLayerView()
+        wrap.translatesAutoresizingMaskIntoConstraints = false
+        wrap.backgroundColor = DesignTokens.Background.window
+        wrap.cornerRadiusValue = DesignTokens.Radius.chip
+        wrap.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: wrap.leadingAnchor, constant: 6),
+            label.trailingAnchor.constraint(equalTo: wrap.trailingAnchor, constant: -6),
+            label.topAnchor.constraint(equalTo: wrap.topAnchor, constant: 2),
+            label.bottomAnchor.constraint(equalTo: wrap.bottomAnchor, constant: -2),
+        ])
+        return wrap
+    }
+}
+
 // MARK: - DepthPromptControl
 
 /// First-class UI for the community `extensions["depth_prompt"]`
