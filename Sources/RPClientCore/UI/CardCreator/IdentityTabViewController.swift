@@ -220,13 +220,29 @@ extension IdentityTabViewController: NSTokenFieldDelegate {
     func tokenField(_ tokenField: NSTokenField, completionsForSubstring substring: String, indexOfToken tokenIndex: Int, indexOfSelectedItem selectedIndex: UnsafeMutablePointer<Int>?) -> [Any]? {
         let needle = substring.lowercased()
         guard !needle.isEmpty else { return [] }
-        return TagVocabulary.shared.matches(prefix: needle).map { $0 as Any }
+        let custom = AppState.shared.settings.customTags
+        return TagVocabulary.shared.matches(prefix: needle, customTags: custom).map { $0 as Any }
     }
 
     func control(_ control: NSControl, textShouldEndEditing fieldEditor: NSText) -> Bool {
         if let tokenField = control as? NSTokenField, tokenField === tagsField {
             let tokens = (tokenField.objectValue as? [String]) ?? []
             draft.character.tags = tokens
+            // Phase 9 §3.8 — promote any novel committed tag into the
+            // persistent custom vocabulary so it appears in autocomplete
+            // for future cards.
+            var settings = AppState.shared.settings
+            var saved = false
+            for raw in tokens {
+                if let updated = TagVocabulary.shared.addIfNovel(raw, customTags: settings.customTags) {
+                    settings.customTags = updated
+                    saved = true
+                    DebugLog.shared.write("tags: added '\(raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())' to custom vocabulary (\(updated.count) total)")
+                }
+            }
+            if saved {
+                AppState.shared.saveSettings(settings)
+            }
             draft.markDirty()
             onDirty()
         }

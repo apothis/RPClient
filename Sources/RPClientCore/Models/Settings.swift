@@ -87,6 +87,13 @@ struct Settings: Codable, Equatable {
     /// will sanitize or refuse — see Phase 9 §4.4.
     var cardCreatorServerId: UUID?
 
+    /// User-accumulated tag vocabulary surfaced by the Card Creator's tag
+    /// autocomplete in addition to the bundled hand-curated common-set
+    /// (Phase 9 §3.8). New tags committed by the author get appended here
+    /// when novel; the autocomplete queries the union via
+    /// `TagVocabulary.matches(prefix:customTags:)`.
+    var customTags: [String]
+
     /// Temporary façade preserving the pre-Phase-4 single-server API. Reads
     /// the default profile's baseURL; setter mutates the default profile's
     /// URL in place. Removed in 4b once AppState routes through the registry.
@@ -148,7 +155,9 @@ struct Settings: Codable, Equatable {
          qwenThinkingEnabled: Bool = false,
          defaultPersonaId: UUID? = nil,
          voiceModelPath: String? = nil,
-         defaultVoice: VoicePreference? = nil) {
+         defaultVoice: VoicePreference? = nil,
+         cardCreatorServerId: UUID? = nil,
+         customTags: [String] = []) {
         self.servers = servers
         self.defaultServerId = defaultServerId
         self.summarizerServerId = summarizerServerId
@@ -170,6 +179,8 @@ struct Settings: Codable, Equatable {
         self.defaultPersonaId = defaultPersonaId
         self.voiceModelPath = voiceModelPath
         self.defaultVoice = defaultVoice
+        self.cardCreatorServerId = cardCreatorServerId
+        self.customTags = customTags
     }
 
     init(from decoder: Decoder) throws {
@@ -213,6 +224,7 @@ struct Settings: Codable, Equatable {
         voiceModelPath = try c.decodeIfPresent(String.self, forKey: .voiceModelPath)
         defaultVoice = try c.decodeIfPresent(VoicePreference.self, forKey: .defaultVoice)
         cardCreatorServerId = try c.decodeIfPresent(UUID.self, forKey: .cardCreatorServerId)
+        customTags = try c.decodeIfPresent([String].self, forKey: .customTags) ?? []
     }
 
     enum CodingKeys: String, CodingKey {
@@ -227,6 +239,7 @@ struct Settings: Codable, Equatable {
         case voiceModelPath
         case defaultVoice
         case cardCreatorServerId
+        case customTags
     }
 
     func encode(to encoder: Encoder) throws {
@@ -253,5 +266,8 @@ struct Settings: Codable, Equatable {
         try c.encodeIfPresent(voiceModelPath, forKey: .voiceModelPath)
         try c.encodeIfPresent(defaultVoice, forKey: .defaultVoice)
         try c.encodeIfPresent(cardCreatorServerId, forKey: .cardCreatorServerId)
+        if !customTags.isEmpty {
+            try c.encode(customTags, forKey: .customTags)
+        }
     }
 }

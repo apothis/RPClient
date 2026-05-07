@@ -55,6 +55,7 @@ let suites: [TestSuite] = [
     phase9DesignTokensTests(),
     phase9CharacterDraftTests(),
     phase9bHelpersTests(),
+    phase9cTagsPersistTests(),
 ]
 
 exit(TestRunner.run(suites))

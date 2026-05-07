@@ -20,16 +20,45 @@ final class TagVocabulary {
         self.entries = TagVocabulary.bundled
     }
 
-    /// Case-insensitive prefix match. Sorted alphabetically; capped at 12
-    /// results so the dropdown stays scannable.
-    func matches(prefix: String) -> [String] {
+    /// Case-insensitive prefix match across the union of bundled common-set
+    /// + the caller-supplied custom tags (Phase 9 §3.8). Sorted
+    /// alphabetically, deduplicated case-insensitively (custom tags
+    /// matching a bundled entry don't appear twice), capped at 12 so the
+    /// dropdown stays scannable.
+    ///
+    /// Production callers pass `AppState.shared.settings.customTags`. Tests
+    /// pass an explicit list.
+    func matches(prefix: String, customTags: [String] = []) -> [String] {
         let needle = prefix.lowercased()
         guard !needle.isEmpty else { return [] }
-        return entries
-            .filter { $0.hasPrefix(needle) }
-            .sorted()
-            .prefix(12)
-            .map { $0 }
+        var seen = Set<String>()
+        var results: [String] = []
+        for entry in entries where entry.hasPrefix(needle) {
+            if seen.insert(entry).inserted { results.append(entry) }
+        }
+        for raw in customTags {
+            let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !normalized.isEmpty, normalized.hasPrefix(needle) else { continue }
+            if seen.insert(normalized).inserted { results.append(normalized) }
+        }
+        return Array(results.sorted().prefix(12))
+    }
+
+    /// Decide whether a freshly-committed tag should be appended to
+    /// `Settings.customTags`. Returns the new full custom-tags list (with
+    /// the lowercased + trimmed tag appended) when the input is novel
+    /// against bundled + existing custom; returns nil when the tag is
+    /// already known, blank, or whitespace-only.
+    ///
+    /// Caller (IdentityTabViewController) writes the returned list back
+    /// into `Settings.customTags` and calls `AppState.saveSettings(_:)`.
+    func addIfNovel(_ tag: String, customTags: [String]) -> [String]? {
+        let normalized = tag.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return nil }
+        // Case-insensitive membership check across both lists.
+        if entries.contains(where: { $0.lowercased() == normalized }) { return nil }
+        if customTags.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalized }) { return nil }
+        return customTags + [normalized]
     }
 
     /// Public for tests + future surfacing as a "browse all tags" sheet.
