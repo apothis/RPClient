@@ -41,13 +41,8 @@ final class CardSuggestionsStripView: NSView {
         }
     }
 
-    // MARK: - State (UI-side)
-
-    private var isExpanded: Bool = false
-
     // MARK: - Subviews
 
-    private let disclosureButton = NSButton()
     private let titleLabel = NSTextField(labelWithString: "Suggestions")
     private let statusLabel = NSTextField(labelWithString: "")
     private let primaryButton = NSButton(title: "Generate", target: nil, action: nil)
@@ -71,16 +66,6 @@ final class CardSuggestionsStripView: NSView {
     // MARK: - Layout
 
     private func buildUI() {
-        // Disclosure triangle — system-provided behavior via NSButton's
-        // .disclosure type. macOS 26 renders it as a chevron in the
-        // current accent color; we just toggle isExpanded on click.
-        disclosureButton.bezelStyle = .disclosure
-        disclosureButton.title = ""
-        disclosureButton.state = .off
-        disclosureButton.target = self
-        disclosureButton.action = #selector(disclosureClicked)
-        disclosureButton.translatesAutoresizingMaskIntoConstraints = false
-
         titleLabel.font = DesignTokens.Typography.subheadline
         titleLabel.textColor = DesignTokens.Foreground.secondary
 
@@ -102,7 +87,7 @@ final class CardSuggestionsStripView: NSView {
         cancelButton.isHidden = true
 
         let header = NSStackView(views: [
-            disclosureButton, titleLabel, primaryButton, cancelButton, NSView(), statusLabel,
+            titleLabel, primaryButton, cancelButton, NSView(), statusLabel,
         ])
         header.orientation = .horizontal
         header.alignment = .centerY
@@ -144,16 +129,15 @@ final class CardSuggestionsStripView: NSView {
     // MARK: - Render
 
     private func render(state: CardSuggestionsController.State) {
-        // Body visibility depends on (isExpanded AND there's something
-        // to show). Per §4.1 the strip stays expanded once opened, so
-        // we don't auto-collapse on .idle.
-        let bodyVisible = isExpanded && hasBodyContent(state: state)
-        bodyContainer.isHidden = !bodyVisible
+        // Body shows whenever there's content (cards or progress text);
+        // hidden in .idle / .failed because there's nothing useful to
+        // render below the header.
+        bodyContainer.isHidden = !hasBodyContent(state: state)
 
         switch state {
         case .idle:
             primaryButton.title = "Generate"
-            primaryButton.isEnabled = isExpanded
+            primaryButton.isEnabled = true
             cancelButton.isHidden = true
             statusLabel.stringValue = ""
         case .generating(let n, let total):
@@ -163,20 +147,20 @@ final class CardSuggestionsStripView: NSView {
             statusLabel.stringValue = "Generating \(n) of \(total)…"
         case .ready(let candidates):
             primaryButton.title = "Refresh"
-            primaryButton.isEnabled = isExpanded
+            primaryButton.isEnabled = true
             cancelButton.isHidden = true
             statusLabel.stringValue = ""
             bindCandidates(candidates, stale: false)
         case .stale(let candidates):
             primaryButton.title = "Refresh"
-            primaryButton.isEnabled = isExpanded
+            primaryButton.isEnabled = true
             cancelButton.isHidden = true
             statusLabel.stringValue = "stale"
             statusLabel.textColor = DesignTokens.Foreground.warning
             bindCandidates(candidates, stale: true)
         case .failed(let message):
             primaryButton.title = "Try again"
-            primaryButton.isEnabled = isExpanded
+            primaryButton.isEnabled = true
             cancelButton.isHidden = true
             statusLabel.stringValue = message
             statusLabel.textColor = DesignTokens.Foreground.destructive
@@ -204,21 +188,6 @@ final class CardSuggestionsStripView: NSView {
     }
 
     // MARK: - Actions
-
-    @objc private func disclosureClicked() {
-        if !isExpanded {
-            isExpanded = true
-            DebugLog.shared.write("cardgen: strip opened")
-        }
-        // §4.1: once open, stays open. Re-clicking the disclosure is
-        // a no-op (we don't collapse). Kept the button enabled for
-        // visual consistency, but rebind state to its expected on
-        // value.
-        disclosureButton.state = .on
-        if let state = controller?.state {
-            render(state: state)
-        }
-    }
 
     @objc private func primaryClicked() {
         // Generate / Refresh / Try again all route through the same
