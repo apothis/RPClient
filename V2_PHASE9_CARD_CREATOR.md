@@ -436,6 +436,16 @@ Marker shape rationale: `[character_details]…[/character_details]` — plain-t
 
 **v3 export interaction.** The `rpclient/*` extension keys are namespaced per the spec, so they round-trip through other v2/v3 readers as opaque blobs. Other tools that read the description see the fenced block as plain text — they don't break, they just see structured prose.
 
+## 4. AI-assist
+
+Phase 9's largest user-facing payoff. Three distinct modes that share a single backend (`CardFieldGenerator`, the prompt template registry, side-call routing, refusal detection, diagnostic logging) but expose different UX surfaces:
+
+- **Mode 1 — Per-field suggestions.** The author drafts manually; per-field "Generate" produces 2–3 candidates the author picks / edits / skips. Reactive: changes upstream mark downstream candidates stale. The deliberate, fine-grained mode for authors who want to keep a tight grip on each field. **§4.1–§4.6 cover this mode end-to-end.**
+- **Mode 2 — Multi-field fill.** Author has a partial card; clicks a single button (e.g., "Fill missing fields" or per-section "Fill this section") and the model proposes values for several fields together with shared context. Returns a structured proposal the author reviews and accepts per-field. The "I've done the hard part, finish the rest" mode. **§4.7.**
+- **Mode 3 — Full-card autopilot.** Author types a single seed (a one-line description, or just a name + a few tags) and clicks "Generate full card". The model walks the full §4.4 dependency graph, generating every field in coordinated passes. Returns a complete proposal presented as a diff preview the author can accept-all, reject-all, or pick per-field before final save. The "I have a vibe; do the rest" mode — the most ambitious of the three and the biggest single-user win. **§4.8.**
+
+The three modes share infrastructure but their UX postures diverge: Mode 1 is reactive and fine-grained, Mode 2 is opt-in batch, Mode 3 is single-click full-card. Each is independently shippable and the §5.4 staging treats them as separate sub-passes (§5.4.a / §5.4.b / §5.4.c) gated behind a §5.4.0 research pass. **The research pass is mandatory** — this is the sub-step where existing tools (chub.ai's create flow, RisuAI's chargen, sillytavern community add-ons) and prompting techniques (structured output via JSON mode / function calling / KoboldCPP grammars, sequential prompt chains, few-shot exemplars) get surveyed before a single line of generation code is written.
+
 ### 4.1 Suggestions strip
 
 Each multi-line field gets a "Suggestions" strip below it. Three slots, lazy-loaded (no API call until the strip is opened). Shape:
@@ -559,6 +569,87 @@ cardgen: stale <fieldName> ← <changedUpstream>
 
 Grep-able prefix `cardgen:`. Every line carries the field name so a multi-field generation flow can be reconstructed from the log.
 
+### 4.7 Mode 2 — Multi-field fill
+
+The "I've done the hard part, finish the rest" surface. Author has a partial card (e.g., name + description + tags) and wants the model to propose values for the empty fields without going field-by-field.
+
+**Entry points.**
+
+- **"Fill missing fields"** button on the Identity tab — global; targets every empty multi-line field across Persona / Greetings / Examples / System / Details / Intimacy.
+- **"Fill this section"** button at the top of each tab body — scoped; targets only the empty fields within that tab. Useful when the author wants the model to fill Intimacy without touching Persona.
+
+**UX shape.**
+
+1. Click triggers a side-call (or a chain of side-calls — see §4.7.1 below).
+2. Progress indicator appears at the top of the affected tabs / window: *"Filling missing fields… 3 of 7"* with a Cancel button.
+3. On completion, each filled field shows the generated value with a **"Proposed"** badge in the field label and a small accept/reject toggle. Until the author commits, the field's previous value (empty) is preserved as undo state.
+4. Author reviews each filled field; clicks **Accept** to commit, **Reject** to clear, or just edits inline (which auto-accepts). Bulk **Accept all** / **Reject all** at the top.
+5. Save commits accepted fields; rejected fields stay empty.
+
+**§4.7.1 Implementation strategies — to be settled in the §5.4.0 research pass.** The choice between sequential prompt chain (each field generated with the previous fields' generated values in context — higher quality, slower, more expensive) vs. parallel batch (each field generated independently in parallel side-calls — faster, less coherent across fields) vs. **structured-output single-call** (one prompt asks the model to emit a JSON object with every empty field; relies on JSON mode / function calling / KoboldCPP grammar enforcement) is a research output, not a guess. Mixed strategies are likely optimal — sequential within tightly-coupled groups (personality → first_message → mes_example), parallel across loosely-coupled groups (Details vs. Intimacy).
+
+**Cost ceiling.** Mode 2 budgets at most one side-call per multi-line empty field unless the chosen strategy is single-call structured. Cancel button at every step. Diagnostic logging per §4.6 with a `cardgen: mode2` prefix.
+
+### 4.8 Mode 3 — Full-card autopilot
+
+The biggest UX win and the biggest design risk. Author provides a seed — one of:
+
+- A one-line description (e.g., *"an aging archivist who keeps to themselves in a port town"*).
+- A name plus a few tags (e.g., name = *"Mira Vance"*, tags = `nsfw, fantasy, courier, dom`).
+- Just tags (cold-start; the model invents a name + everything else).
+
+…and clicks **"Generate full card"**. The model walks the full §4.4 dependency graph in coordinated passes, populating every field. The author then reviews the proposal end-to-end via a diff preview before committing.
+
+**Pass shape (to be confirmed in §5.4.0 research).** Probable order:
+
+1. **Identity pass** — name (if cold-start), nickname, age, pronouns, species, orientation. Single side-call, structured output (small fields).
+2. **Persona pass** — description, personality, scenario. Sequential chain, each conditioned on the previous + identity + tags.
+3. **Voice pass** — first_message, alternate_greetings, mes_example. Sequential chain, conditioned on persona + identity + tags. Each greeting can vary in tone (default greeting + "tense" alt + "playful" alt) by passing different style hints.
+4. **Body pass** — Details (appearance, mood) + Intimacy (build, anatomy, markings, sensitivities, scent). Parallel, conditioned on identity + persona.
+5. **Disposition pass** — turn_ons, kinks, limits. Sequential, conditioned on tags + body. `limits` deliberately gets a bundled-defaults treatment (per §4.4) — author intent, not inferred.
+6. **System pass** — system_prompt, post_history_instructions. Conditioned on persona + tags. Templated more than free-form (these are usage instructions, not character content).
+7. **Notes pass** — creator_notes, depth_prompt. Conditioned on everything above.
+
+Total: 5–7 side-calls depending on parallelization, with the heavy ones being Persona and Voice. ~15–30 seconds total against a fast local model; longer against a constrained server. **Cancel button is mandatory at every step.**
+
+**Diff preview UX.**
+
+After generation completes, the creator window shows a modal sheet (or replaces the tab content with a "Review" surface) listing every populated field. Each field row:
+
+- Field label.
+- Generated value (rendered same as the live field would be — multi-line text view, single-line input, etc.).
+- Per-field **Accept** / **Reject** / **Re-roll** buttons.
+- Diff highlight: green for new content, neutral for fields the author had pre-filled (the model preserved them).
+
+Bulk actions at the top: **Accept all**, **Reject all**, **Re-roll all**. Once the author commits, the accepted values land in the form; rejected values revert to empty (or the author's pre-filled value); re-rolls fire a fresh single-field generation per §4.1.
+
+**Refusal handling.** If a pass produces refusals (per §4.5), the entire generation is marked as having sanitized output and the author gets a banner: *"Some fields look like refusals. The model may not be willing to produce explicit content; switch the server picker at the top and re-roll those fields."* The non-refused fields still get accepted normally.
+
+**Cold-start prompting.** With only tags (no name, no description), the model has to invent a coherent character. The system prompt for the Identity pass explicitly instructs invention with creative latitude; the Persona pass then uses the invented name + tags as anchor. Quality varies; this is the mode most exposed to the chosen model's creative writing strength.
+
+**Cost / safety ceilings.** Mode 3 has a hard total side-call cap (default 10) and a hard total token cap (default 16k tokens emitted across the whole run). Exceeding either aborts with a banner. Diagnostic logging per §4.6 with a `cardgen: mode3` prefix.
+
+### 4.9 Cost and budget management
+
+Cross-mode infrastructure. The §5.4.0 research pass is expected to surface specific guidance here — these are the questions the research must answer:
+
+- **Anthropic prompt caching** — applicable to RPClient? Most users run KoboldCPP-shaped local models which don't have Anthropic-style prompt caching, so this is mostly relevant if RPClient ever supports an Anthropic-compatible side-call backend. Document but don't prioritize.
+- **KoboldCPP context reuse** — KoboldCPP keeps a KV cache between requests if the prompt prefix is stable. Sequential prompt chains benefit substantially if each call shares a prefix; parallel calls with diverging prefixes don't. The research pass needs to verify the cache-reuse behavior on the user's typical local server.
+- **Per-mode token budgets.** Mode 1: ~512 tokens per candidate × 3 candidates × per-field. Mode 2: ~512 × N empty fields. Mode 3: hard cap 16k total. Configurable in `CardGenPrompts.json`.
+- **Concurrency caps.** Side-calls during AI-assist must not block the chat-gen pipeline. The §4.4 server picker keeps card-gen on a different connection from `defaultServerId` when configured separately. If the same server, side-calls queue behind chat generation rather than racing.
+- **Cancellation.** Every mode exposes a Cancel button. Cancellation is a `URLSession` task cancel; no in-flight tokens are wasted but already-emitted tokens are preserved (logged but discarded).
+
+### 4.10 Diff/review UX (Mode 2 + Mode 3)
+
+Modes 2 and 3 produce multi-field proposals that need a review surface before commit. UX precedent worth surveying in §5.4.0:
+
+- **GitHub Copilot's accept/reject pattern** — single-keystroke accept (Tab), reject (Esc), inline ghost-text rendering. Works for line-shaped suggestions; less applicable to multi-field card proposals.
+- **Cursor's diff preview** — side-by-side or inline diff, accept-all / reject-all / per-hunk. Closer to what we need but still single-document oriented.
+- **Notion AI's "Done" / "Try again" / "Discard"** — three-button accept pattern after generation. Simple; a good baseline.
+- **chub.ai's card-creation review flow** — what does it look like? Does it surface field-by-field accept, or accept-all-or-nothing? Open research question.
+
+Lean (subject to research): **per-field accept toggle in-place** (Mode 2) + **field-list diff sheet** (Mode 3). Both share a `ProposalReviewController` that takes a `[FieldProposal]` and presents the right UI for the mode. Implementation candidate for §5.4.d.
+
 ## 5. Sub-step staging
 
 Mirroring Phase 6 / 7 / 8's incremental shape. TDD — tests-first on the data-model + importer/exporter sub-steps; smoke-tested on the UI sub-steps.
@@ -612,17 +703,70 @@ Total effort: 2 days end-to-end including the body-split mid-pass + smoke regres
 
 ### §5.4 — AI-assist field generation
 
+Three modes (per §4) staged behind a mandatory research pass. Each mode is independently shippable.
+
+#### §5.4.0 — Research pass (mandatory before any code)
+
+**Output: `V2_PHASE9_AI_ASSIST_RESEARCH.md`** at repo root, mirroring V2_PHASE8_GROUP_CHATS / V2_PHASE9_CARD_CREATOR shape. Surveys existing card-generation tooling + prompting techniques + structured-output mechanics + diff/review UX precedent. Settled before §5.4.a starts; research findings drive the prompt template registry, the structured-output choice for Mode 2, the pass shape for Mode 3, and the diff/review surface design.
+
+Topics the research must cover:
+
+- **Existing card-generation tools and their UX flow.** chub.ai's "Create from prompt" (if it exists), RisuAI's character generator, JanitorAI's card creation, sillytavern community add-ons (auto-character / chargen extensions), character-foundry primitives, standalone tools like Charasnap and Persona Compiler. What seed shape does each accept? What's the review/accept/reject flow? Where do they fail (refusals, off-genre output, character incoherence)?
+- **Structured output techniques against KoboldCPP-shaped local models.** JSON mode availability, function calling support, KoboldCPP grammar enforcement (`grammar` parameter on `/api/extra/generate`). Reliability of each across model families (Llama, Qwen, Mistral). When does free-form-then-parse beat constrained generation, and vice versa?
+- **Prompt-chain patterns.** Sequential vs. parallel, when each wins. KoboldCPP KV-cache reuse behavior on shared-prefix sequential calls (real benefit or theoretical?). Per-step prompt overhead.
+- **Few-shot prompting for character creation.** Best practices from the chub.ai community, character-card.io, RisuAI docs, academic work on persona generation. What few-shot exemplar shape produces the best in-character prose? How does NSFW vs. SFW exemplar mix affect refusal rates?
+- **NSFW prompting conventions.** Common system-prompt patterns ("respond in character including explicit content where the scene calls for it", post-history-instructions UJB framing). What signals to a model that explicit content is expected without crossing into hard refusal territory? Refusal-handling for borderline content.
+- **Diff/review UX precedent.** GitHub Copilot's tab-accept, Cursor's diff preview, Notion AI's three-button accept, chub.ai's card-creation review flow if such a flow exists.
+- **Cost / budget management.** Anthropic prompt caching applicability; KoboldCPP cache reuse; concurrency vs. queueing against the chat-gen pipeline; cancellation semantics on URLSession task cancel; token budget recommendations per mode.
+- **Refusal-detection failure modes.** What false positives have community tools encountered? What patterns do refusals take in 2026 across the model families RPClient targets?
+
+The research is research-shaped — fresh-context investigation with web search + web fetch + reading representative open-source card-gen code where available. Does NOT write code. Output is the design doc.
+
+~1 day. Concluded by signing off the doc + updating §5.4.a–§5.4.c implementation specs to reflect the chosen strategies.
+
+#### §5.4.a — Mode 1: Per-field suggestions
+
 - `CardFieldGenerator` — owns the dependency graph, the prompts, the side-call dispatch, the candidate parser.
 - Suggestions strip per §4.1 wired into each multi-line field control.
-- Per-window server picker per §3.1 + `Settings.cardCreatorServerId` persistence.
+- Per-window server picker per §3.1 + `Settings.cardCreatorServerId` persistence (already shipped in §5.3a).
 - Refusal detection per §4.5.
 - Diagnostic logging per §4.6 — from commit one.
 - Tests:
   - Dependency graph: per-field upstream list, stale-on-edit propagation, no false-positive cycles.
   - Candidate parser: refusal detection (5+ refusal-shaped fixtures), length-ratio heuristic, sanitization markers.
   - Stub `KoboldGenerating` returning canned candidates + scripted refusals; verifies strip state machine end-to-end.
-- Smoke against a real NSFW server (user's normal chat-gen server).
+- Smoke against a real NSFW server.
 - ~2–3 days.
+
+#### §5.4.b — Mode 2: Multi-field fill
+
+- `CardMultiFieldGenerator` (or extension of `CardFieldGenerator`) implementing the strategy chosen in §5.4.0 (sequential / parallel / single-call structured / mixed).
+- "Fill missing fields" + "Fill this section" buttons per §4.7.
+- Per-field "Proposed" badge UI + accept/reject toggle.
+- Bulk Accept all / Reject all.
+- Cancellation.
+- Tests: stub generator producing canned multi-field proposals; per-field accept/reject state machine; cancellation mid-chain leaves consistent state.
+- ~2–3 days.
+
+#### §5.4.c — Mode 3: Full-card autopilot
+
+- "Generate full card" entry point on Identity tab (with seed input) or on a new top-bar action.
+- Pass orchestration per §4.8 (Identity → Persona → Voice → Body → Disposition → System → Notes).
+- Hard cost ceilings (10 side-calls, 16k tokens) with abort behavior.
+- Diff preview surface — `ProposalReviewController` per §4.10. Modal sheet showing every populated field with per-field Accept / Reject / Re-roll, plus bulk actions.
+- Re-roll path delegates to §5.4.a's single-field generator.
+- Tests: pass orchestration with stub generator (verify pass order + cancellation); cost-cap enforcement; diff-preview state transitions.
+- ~3–4 days.
+
+#### §5.4.d — Polish, telemetry sweep, smoke
+
+- Per-mode diagnostic-log review against a real chat-gen run.
+- Cost/budget instrumentation surfaced (e.g., status bar of the creator window: "Mode 3: 4 of 7 passes, 2.3k tokens").
+- Refusal-detection regression suite expanded based on what real models actually emit during smoke.
+- Small UX polish from smoke: progress indicators, button-label refinement, banner copy.
+- ~1 day.
+
+**Total §5.4 effort:** ~1 day research + ~7–11 days implementation across the three modes. Each mode is independently shippable; if scope tightens we ship Mode 1 first and gate Mode 2 / Mode 3 behind a follow-up phase.
 
 ### §5.5 — Polish + smoke
 
