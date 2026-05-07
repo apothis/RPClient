@@ -19,11 +19,19 @@ final class IdentityTabViewController: NSViewController {
 
     /// Row of small per-tag pills shown below the tags field for any
     /// tag that isn't in the bundled vocabulary OR the persistent
-    /// custom-tags list. Each pill carries a toggle button — default
-    /// ✗ (don't save to vocab); click → ✓ promotes the tag into
-    /// `Settings.customTags` so it autocompletes on future cards.
-    /// Hidden when there are no novel tags pending decision.
+    /// custom-tags list. Each pill carries a toggle: ✗ (default —
+    /// "use on this card only") or ✓ ("save to autocomplete vocab on
+    /// next save"). The toggle is purely UI state until the author
+    /// hits Save; only then do ✓-marked tags get promoted into
+    /// `Settings.customTags` (via `commitPendingTagPromotions()`).
     private let pendingTagsRow = NSStackView()
+
+    /// Author-marked novel tags that should be promoted into the
+    /// persistent custom-tags vocabulary on the next card save. UI
+    /// state — not persisted, cleared on commit. A tag drops from
+    /// this set if it stops being novel (e.g., the author removes it
+    /// from the field, or it was promoted on a save we already saw).
+    private var tagsToPromoteOnSave: Set<String> = []
 
     init(draft: CharacterDraft, onDirty: @escaping () -> Void, aiRegistry: CardCreatorAIRegistry) {
         self.draft = draft
@@ -228,6 +236,18 @@ extension IdentityTabViewController: NSTextFieldDelegate {
         case nicknameField: draft.character.nickname = nonEmpty(field.stringValue)
         case creatorField: draft.character.creator = nonEmpty(field.stringValue)
         case versionField: draft.character.characterVersion = nonEmpty(field.stringValue)
+        case tagsField:
+            // NSTokenField fires controlTextDidChange both on raw
+            // character entry (still-being-typed input) AND on token
+            // commit. objectValue only reflects committed tokens, so
+            // pulling here captures comma/enter token commits promptly
+            // without polluting state with mid-word characters. The
+            // textShouldEndEditing path remains as a backstop for
+            // focus-leaves-field commits.
+            let tokens = (tagsField.objectValue as? [String]) ?? []
+            draft.character.tags = tokens
+            aiRegistry.markTagsChanged()
+            refreshPendingTagsRow()
         default: return
         }
         draft.markDirty()
@@ -268,8 +288,8 @@ extension IdentityTabViewController: NSTokenFieldDelegate {
 
     /// Recompute the row of pending-novel-tag pills. A tag is "novel"
     /// if it isn't in the bundled vocabulary AND isn't already in
-    /// `Settings.customTags`. Promoted tags drop off the row on the
-    /// next refresh (because they're now known via customTags).
+    /// `Settings.customTags`. Pills stay visible while the tag is
+    /// novel; the ✗/✓ state is UI-only until the next save.
     private func refreshPendingTagsRow() {
         pendingTagsRow.arrangedSubviews.forEach {
             pendingTagsRow.removeArrangedSubview($0)
@@ -280,6 +300,7 @@ extension IdentityTabViewController: NSTokenFieldDelegate {
         let knownCustom = Set(AppState.shared.settings.customTags.map {
             $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         })
+        var novel: Set<String> = []
         var seen = Set<String>()
         for raw in cardTags {
             let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -287,16 +308,21 @@ extension IdentityTabViewController: NSTokenFieldDelegate {
             guard seen.insert(normalized).inserted else { continue }
             if knownBundled.contains(normalized) { continue }
             if knownCustom.contains(normalized) { continue }
+            novel.insert(normalized)
             pendingTagsRow.addArrangedSubview(makePendingTagPill(tag: normalized))
         }
+        // A tag that was marked-to-promote but is no longer in the
+        // field should drop from the pending set.
+        tagsToPromoteOnSave.formIntersection(novel)
         pendingTagsRow.isHidden = pendingTagsRow.arrangedSubviews.isEmpty
     }
 
-    /// Build one pill: small caption-style label + a borderless SF
-    /// Symbol toggle. Default visual is `xmark` ("don't save"); click
-    /// promotes the tag into the persistent vocabulary, which removes
-    /// the pill on the next refresh.
+    /// Build one pill: small caption-style label + an SF Symbol
+    /// toggle. ✗ = default ("don't save to vocab"); ✓ = "save when
+    /// the card next saves". Toggle is reversible; nothing is
+    /// persisted until the author clicks Save.
     private func makePendingTagPill(tag: String) -> NSView {
+        let willPromote = tagsToPromoteOnSave.contains(tag)
         let label = NSTextField(labelWithString: tag)
         label.font = DesignTokens.Typography.caption1
         label.textColor = DesignTokens.Foreground.secondary
@@ -306,9 +332,18 @@ extension IdentityTabViewController: NSTokenFieldDelegate {
         toggle.bezelStyle = .recessed
         toggle.controlSize = .mini
         toggle.imagePosition = .imageOnly
-        toggle.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Don't save '\(tag)' to vocabulary")
-        toggle.contentTintColor = DesignTokens.Foreground.tertiary
-        toggle.toolTip = "Save '\(tag)' to your tag vocabulary so it autocompletes on future cards"
+        toggle.image = NSImage(
+            systemSymbolName: willPromote ? "checkmark" : "xmark",
+            accessibilityDescription: willPromote
+                ? "Will save '\(tag)' on next save"
+                : "Don't save '\(tag)' to vocabulary"
+        )
+        toggle.contentTintColor = willPromote
+            ? DesignTokens.Foreground.success
+            : DesignTokens.Foreground.tertiary
+        toggle.toolTip = willPromote
+            ? "On save, '\(tag)' will be added to your tag vocabulary. Click to undo."
+            : "Click to add '\(tag)' to your tag vocabulary on next save."
         toggle.target = self
         toggle.action = #selector(pendingTagToggleClicked(_:))
         toggle.identifier = NSUserInterfaceItemIdentifier(rawValue: tag)
@@ -324,20 +359,57 @@ extension IdentityTabViewController: NSTokenFieldDelegate {
 
     @objc private func pendingTagToggleClicked(_ sender: NSButton) {
         guard let tag = sender.identifier?.rawValue else { return }
+        if tagsToPromoteOnSave.contains(tag) {
+            tagsToPromoteOnSave.remove(tag)
+            DebugLog.shared.write("tags: pending-promote '\(tag)' deselected")
+        } else {
+            tagsToPromoteOnSave.insert(tag)
+            DebugLog.shared.write("tags: pending-promote '\(tag)' marked")
+        }
+        // In-place visual update so the pill stays put — no flash, no
+        // pill removal. Re-rendering the whole row would also work but
+        // would lose focus / animation continuity.
+        let willPromote = tagsToPromoteOnSave.contains(tag)
+        sender.image = NSImage(
+            systemSymbolName: willPromote ? "checkmark" : "xmark",
+            accessibilityDescription: willPromote
+                ? "Will save '\(tag)' on next save"
+                : "Don't save '\(tag)' to vocabulary"
+        )
+        sender.contentTintColor = willPromote
+            ? DesignTokens.Foreground.success
+            : DesignTokens.Foreground.tertiary
+        sender.toolTip = willPromote
+            ? "On save, '\(tag)' will be added to your tag vocabulary. Click to undo."
+            : "Click to add '\(tag)' to your tag vocabulary on next save."
+    }
+
+    /// Called by `CardCreatorViewController.saveClicked()` just before
+    /// `draft.flush(...)`. Promotes every ✓-marked novel tag into
+    /// `Settings.customTags`; clears the pending set. Does nothing if
+    /// no tags are pending.
+    func commitPendingTagPromotions() {
+        guard !tagsToPromoteOnSave.isEmpty else { return }
         var settings = AppState.shared.settings
-        if settings.customTags.contains(where: { $0.lowercased() == tag }) {
-            // Already promoted — shouldn't happen (pill would have been
-            // removed) but guard anyway.
-            return
+        let known = Set(settings.customTags.map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        })
+        var added: [String] = []
+        for tag in tagsToPromoteOnSave.sorted() {
+            let normalized = tag.lowercased()
+            if known.contains(normalized) { continue }
+            settings.customTags.append(normalized)
+            added.append(normalized)
         }
-        settings.customTags.append(tag)
-        AppState.shared.saveSettings(settings)
-        DebugLog.shared.write("tags: promoted '\(tag)' to custom vocabulary (\(settings.customTags.count) total) via opt-in toggle")
-        // Visual confirmation before the pill disappears on refresh.
-        sender.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Saved")
-        sender.contentTintColor = DesignTokens.Foreground.success
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-            self?.refreshPendingTagsRow()
+        if !added.isEmpty {
+            AppState.shared.saveSettings(settings)
+            let joined = added.joined(separator: ", ")
+            DebugLog.shared.write("tags: promoted \(added.count) to custom vocabulary on save: \(joined)")
         }
+        tagsToPromoteOnSave.removeAll()
+        // Pills for now-known tags will drop on the next refresh —
+        // typically the next focus/typing event. Refresh proactively
+        // so the UI is in sync immediately after save.
+        refreshPendingTagsRow()
     }
 }

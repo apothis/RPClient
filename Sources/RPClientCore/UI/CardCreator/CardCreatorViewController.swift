@@ -22,6 +22,12 @@ final class CardCreatorViewController: NSViewController {
     /// across tabs.
     private lazy var aiRegistry = CardCreatorAIRegistry(draft: draft)
 
+    /// Strong reference to the Identity tab so saveClicked() can fire
+    /// `commitPendingTagPromotions()` before flushing the draft. The
+    /// tab is also reachable via NSTabView's tabViewItems array but
+    /// keeping a typed reference avoids per-save downcasting.
+    private var identityTab: IdentityTabViewController!
+
     private let tabView = NSTabView()
     private let serverPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let modelLabel = NSTextField(labelWithString: "")
@@ -146,7 +152,8 @@ final class CardCreatorViewController: NSViewController {
 
         let onDirty: () -> Void = { [weak self] in self?.handleDirtyChanged() }
 
-        addTab(IdentityTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Identity")
+        identityTab = IdentityTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry)
+        addTab(identityTab, label: "Identity")
         addTab(DetailsTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Details")
         addTab(PersonaTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Persona")
         addTab(IntimacyTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Intimacy")
@@ -231,6 +238,11 @@ final class CardCreatorViewController: NSViewController {
     // MARK: - Actions
 
     @objc private func saveClicked() {
+        // Pre-flush hook for tabs that hold UI-only state to be
+        // committed alongside the character. Today: Identity's
+        // pending-novel-tag opt-ins.
+        identityTab.commitPendingTagPromotions()
+
         // Route through AppStateCardStorage (not Storage.shared directly) so
         // AppState.saveCharacter updates the in-memory cache + posts
         // charactersChanged. Library refresh depends on the cache update.
