@@ -77,5 +77,16 @@ let package = Package(
             dependencies: ["RPClientCore", "RPClientVoice"],
             path: "Sources/KokoroSmoke"
         ),
+        // Phase 9 §5.4.a smoke runner — drives a real
+        // CardSuggestionsController against a real KoboldCPP server,
+        // prints the triad's state transitions + final candidates.
+        // Uses @testable import to reach internal types
+        // (KoboldClient, Templates, etc); runs only in debug builds.
+        // Run with `swift run CardGenSmoke [server-url] [template] [field] [tags]`.
+        .executableTarget(
+            name: "CardGenSmoke",
+            dependencies: ["RPClientCore"],
+            path: "Sources/CardGenSmoke"
+        ),
     ]
 )
