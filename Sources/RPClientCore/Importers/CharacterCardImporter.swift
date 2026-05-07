@@ -92,6 +92,19 @@ enum CharacterCardImporter {
         text.contains(legacyExamplePrefix)
     }
 
+    /// Split a legacy v1-squashed `description` back into
+    /// `(description, messageExample)`. Returns nil when the canonical
+    /// separator isn't present. Splits on the *first* occurrence so a
+    /// twice-squashed string preserves the trailing portion in the
+    /// example slot. Used by the §3.5 "Restore example dialogue"
+    /// affordance — author opts in via the creator UI; not auto-applied.
+    static func splitLegacyExampleSquash(_ text: String) -> (description: String, messageExample: String)? {
+        guard let range = text.range(of: legacyExamplePrefix) else { return nil }
+        let before = String(text[..<range.lowerBound])
+        let after = String(text[range.upperBound...])
+        return (before, after)
+    }
+
     static func importJSONData(_ data: Data) throws -> Result {
         let character = try decodeAndMap(data)
         return Result(character: character, avatarPNG: nil)
