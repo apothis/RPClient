@@ -5,8 +5,8 @@ import Foundation
 /// per-field three-candidate triad (literal → creative → terse) per
 /// research §3.3, with state surfaced for the strip view to render.
 ///
-/// Threading: main-thread-only by convention (matches the rest of
-/// the AppKit-adjacent surfaces in this module). The
+/// Threading: `@MainActor`-isolated. The strip view reads `state`
+/// directly and drives UI updates from `onStateChange`. The
 /// `KoboldGenerating` callback fires on its own queue (KoboldClient's
 /// URLSession delegate queue); the controller hops back to main
 /// before mutating state.
@@ -18,6 +18,7 @@ import Foundation
 /// generation-id guard. Per `V2_PHASE9_AI_ASSIST_RESEARCH.md` §7.5
 /// this is acceptable — the user gets a fresh strip, the discarded
 /// in-flight call wastes one set of tokens at most.
+@MainActor
 final class CardSuggestionsController {
 
     enum State: Equatable {
