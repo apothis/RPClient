@@ -231,8 +231,10 @@ Top of window: **server picker** (`NSPopUpButton` listing `Settings.servers`) + 
 
 | Tab | Fields |
 |---|---|
-| **Identity** | **Avatar** (image control, see §3.6), `name`, `nickname` (v3, marked), `tags` (token-pill input + autocomplete), `creator`, `characterVersion` |
+| **Identity** | **Avatar** (image control, see §3.6), `name`, `nickname` (v3, marked), `tags` (token-pill + autocomplete + persistent custom-vocabulary, §3.8), `creator`, `characterVersion` |
+| **Details** | Age, Pronouns, Species, Orientation (single-line), Appearance, Mood (multi-line). RPClient-structured, folded into `description` on save, see §3.9 |
 | **Persona** | `description`, `personality`, `scenario` |
+| **Intimacy** | Body, Sensitivities, Scent, Turn-ons, Kinks, Limits (all multi-line). RPClient-structured, folded into `description` on save, see §3.9 |
 | **Greetings** | `firstMessage`, `alternateGreetings` (list editor, drag-reorder), `groupOnlyGreetings` (v3, marked) |
 | **Examples** | `messageExample` |
 | **System** | `systemPrompt`, `postHistoryInstructions`, **Depth prompt** (text + depth + role; see §3.4), `creatorNotes` |
@@ -240,6 +242,8 @@ Top of window: **server picker** (`NSPopUpButton` listing `Settings.servers`) + 
 | **Advanced** | `source` (v3, marked), `creatorNotesMultilingual` (v3, marked), `extensions` raw JSON viewer (read-only) |
 
 v3-only fields are tagged with a small "v3" pill so authors know they'll be dropped on a v2 export.
+
+The **Details** and **Intimacy** tabs are RPClient-structured surfaces. Their fields are stored under `extensions["rpclient/details"]` and `extensions["rpclient/intimacy"]` for round-trip preservation, AND auto-rendered into a fenced block at the start of `description` on save so the prompt sees them without engine integration. Bidirectional: cards opened from other tools that already carry the fenced block in description get their values extracted into the form on load. See §3.9 for the marker shape and §4.2 for AI-assist conditioning on these fields.
 
 ### 3.3 Field controls
 
@@ -328,7 +332,101 @@ Multi-megabyte blobs (RisuAI cards with embedded scripts / images / regex) are c
 
 Raw JSON *editing* is deliberately out of scope. Footgun. If a future need lands, it's a separate sub-step.
 
-## 4. AI-assist
+### 3.8 Persistent custom tag vocabulary
+
+The Identity-tab `tags` token field autocompletes from a **union** of:
+
+- The bundled hand-curated common-set (~140 entries, see V2_DESIGN_LANGUAGE §11 + §3.3).
+- A user-accumulated custom list at `Settings.customTags: [String]` — additive Codable, like the rest of Settings.
+
+When the author commits a token that isn't already in the union (case-insensitively), the token is appended to `Settings.customTags` and `AppState.shared.saveSettings(_:)` fires. Future sessions show that tag in autocomplete.
+
+Out of scope for §5.3c: an "Edit tag list" UI for removing accumulated tags. The JSON file is editable on disk if needed; a Settings → Tags surface is a candidate for the future V2_UI_OVERHAUL pass.
+
+Long-tail community-vocabulary discovery (network-fetched chub-style ~1000-entry list) remains deferred per §6 — the persistent custom list bridges the common case (authors who use a specific niche tag a few times per card) without committing to maintaining a churning third-party vocabulary.
+
+### 3.9 RPClient-structured Details + Intimacy
+
+Two tabs that surface NSFW-relevant structured data without the tedium of editing prose-shaped `description` text. Each tab's fields are independent — leaving a tab entirely empty produces no fenced block, so SFW or minimalist cards stay clean.
+
+**Field layout.**
+
+Details tab (between Identity and Persona):
+
+| Field | Shape | Maps to fence key |
+|---|---|---|
+| Age | Single-line | `age` |
+| Pronouns | Single-line | `pronouns` |
+| Species | Single-line | `species` |
+| Orientation | Single-line | `orientation` |
+| Appearance | Multi-line — height, build, hair, eyes, skin, clothing | `appearance` |
+| Mood | Multi-line — default emotional state, baseline temperament | `mood` |
+
+Intimacy tab (between Persona and Greetings):
+
+| Field | Shape | Maps to fence key |
+|---|---|---|
+| Body | Multi-line — explicit physical traits, NSFW-specific | `body` |
+| Sensitivities | Multi-line — physical sensitivities | `sensitivities` |
+| Scent | Multi-line — what they smell like | `scent` |
+| Turn-ons | Multi-line — list-style, what arouses | `turn_ons` |
+| Kinks | Multi-line — specific fetishes | `kinks` |
+| Limits | Multi-line — hard nos, dislikes | `limits` |
+
+Each field gets bundled NSFW-realistic placeholder examples (not graphic; example shape illustrates the expected register).
+
+**On-disk shape.**
+
+Source of truth: `extensions["rpclient/details"]` and `extensions["rpclient/intimacy"]` as JSONValue objects with the snake_case keys above. Empty / nil / whitespace-only fields are omitted from the object so the extensions blob stays clean.
+
+```json
+"extensions": {
+  "rpclient/details": {
+    "age": "28",
+    "pronouns": "she/her",
+    "species": "Human",
+    "appearance": "tall, lean, copper braid…"
+  },
+  "rpclient/intimacy": {
+    "body": "small chest, faint freckles…",
+    "turn_ons": "praise, slow build",
+    "limits": "nothing involving family roles"
+  }
+}
+```
+
+**Description-block rendering.**
+
+On every save, the structured fields auto-render into a fenced text block at the start of `description`, so the prompt-builder (which already reads `description + personality + scenario` as the read-only memory prefix) sees them without engine integration:
+
+```
+[character_details]
+age: 28
+pronouns: she/her
+species: Human
+appearance: tall, lean, copper braid down her back
+[/character_details]
+
+[character_intimacy]
+body: small chest, faint freckles, sensitive at the nape
+turn_ons: praise, being read to, slow build
+limits: nothing involving family roles
+[/character_intimacy]
+
+(rest of description, written by the author)
+```
+
+Marker shape rationale: `[character_details]…[/character_details]` — plain-text fence with a distinctive prefix, snake_case `key: value` lines, blank line after the closing fence to separate from prose. Distinctive enough to avoid prose collision; readable when the author glances at description; parseable by a small regex.
+
+**Note on the alternative**: if `[character_details]` collisions surface in real cards (an author whose prose legitimately uses that exact section header), the fallback is HTML-namespace tags (`<rpclient:details>…</rpclient:details>`) — collision-proof but uglier in description. Documented here so future code knows the escape hatch.
+
+**Bidirectional sync.**
+
+- **On save.** Render the fenced blocks from form fields. Replace any existing blocks in description (matched by fence regex). If absent, prepend at the start of description with a blank line separator. Persist `extensions["rpclient/details"]` + `extensions["rpclient/intimacy"]` from the same form values. Both surfaces stay in sync.
+- **On load.** Editor reads from extensions first. If extensions are missing but description contains a recognized fence, parse the fence values into the form (one-time extract on load — no auto-write back to extensions until the user saves). Handles cards from other clients or from manual prose edits.
+- **Conflict resolution.** Extensions wins. Manual edits to the description-block content do not survive a save — the next save re-renders from form values and overwrites. If this becomes annoying, a "Re-import from description" button is a §5.3e polish candidate.
+
+**v3 export interaction.** The `rpclient/*` extension keys are namespaced per the spec, so they round-trip through other v2/v3 readers as opaque blobs. Other tools that read the description see the fenced block as plain text — they don't break, they just see structured prose.
 
 ### 4.1 Suggestions strip
 
@@ -359,22 +457,39 @@ Single-line fields (`name`, `nickname`, tags) get a single-shot dropdown rather 
 
 Direction of read: **node → list of upstream nodes whose change marks this node's strip stale.** This is *not* a generation-order DAG. Reactive: an upstream change does not auto-regenerate; it badges the strip and waits for an explicit Refresh.
 
+**Tags are an explicit upstream for every narrative-shaped field**, not just transitively-via-description. Tags carry strong genre / tone / kink signals; the prompt template references them directly so a draft for `personality` with tags `monstergirl, fantasy, dom` reads differently from the same field with tags `human, modern, sub` even when description is identical.
+
 ```
-name           ←  (cold-start: tags[], or empty)
-description    ←  name, tags
-personality    ←  name, description
-scenario       ←  name, description, personality
-firstMessage   ←  name, description, personality, scenario
-messageExample ←  name, description, personality
-alternateGreetings ←  firstMessage, scenario, personality
-systemPrompt   ←  name, description, personality
-postHistoryInstructions ←  systemPrompt, scenario
-depthPrompt    ←  scenario, systemPrompt
-creatorNotes   ←  name, description, personality, scenario, tags
-tags           ←  name, description, personality
-nickname       ←  name
-groupOnlyGreetings ←  firstMessage, name, description
+name                ←  (cold-start: tags, or empty)
+description         ←  name, tags
+personality         ←  name, description, tags
+scenario            ←  name, description, personality, tags
+firstMessage        ←  name, description, personality, scenario, tags
+messageExample      ←  name, description, personality, tags
+alternateGreetings  ←  firstMessage, scenario, personality, tags
+systemPrompt        ←  name, description, personality, tags
+postHistoryInstructions ← systemPrompt, scenario
+depthPrompt         ←  scenario, systemPrompt
+creatorNotes        ←  name, description, personality, scenario, tags
+nickname            ←  name
+groupOnlyGreetings  ←  firstMessage, name, description, tags
+
+# §3.9 RPClient-structured fields
+details.age          ←  (cold-start; usually author-set)
+details.pronouns     ←  (cold-start)
+details.species      ←  tags
+details.orientation  ←  tags, details.species
+details.appearance   ←  name, tags, details.species, details.age
+details.mood         ←  name, personality, tags
+intimacy.body        ←  details.species, details.age, tags
+intimacy.sensitivities ← intimacy.body, tags
+intimacy.scent       ←  details.species, intimacy.body, tags
+intimacy.turn_ons    ←  personality, tags, intimacy.body
+intimacy.kinks       ←  tags, intimacy.turn_ons
+intimacy.limits      ←  (cold-start; explicit author intent)
 ```
+
+`limits` deliberately has no upstream — hard nos are an author intent statement, not a derived field. Generate on `limits` produces a generic starting list (the bundled placeholder) that the author edits; AI-assist doesn't try to infer limits from other fields because the cost of a wrong inference is high.
 
 `tags ↔ description / personality` is a near-cycle. Resolved by a freshness rule: tags consume description/personality but only marks-stale on tag *removal*, not addition. Adding a tag does not mark description stale — that would loop authors who add a tag mid-write. Removing one does (because the implicit shape changed).
 
@@ -462,21 +577,20 @@ This document. Output: `V2_PHASE9_CARD_CREATOR.md`. ~1 day. **In progress (this 
 
 ### §5.3 — Creator window UI
 
-- `CharacterCreatorWindowController` + tabbed layout.
-- Field controls per §3.3.
-- Bundled placeholder library at `Resources/CardCreatorExamples.json`.
-- Tag autocomplete vocabulary at `Resources/CardTagVocabulary.json` — hand-curated ~150-entry common set per §3.3.
-- Examples-tab "Restore example dialogue" affordance per §3.5 (conditional, opt-in legacy-squash splitter).
-- Identity-tab avatar control per §3.6 (image picker + drag-drop, auto-resize via `Storage.normalizeAvatarData`, common formats).
-- Advanced-tab read-only `extensions` JSON viewer per §3.7.
-- Save → `AppState.characters` + Library refresh. Save handles all three origin modes per §3.1 (`.created` / `.editing` / `.importing`).
-- Menu items: `File → New Character…`, `File → Import & Edit Card…`, `Library → New Card…`, `Library → Edit Card…` (enabled when a Library card is selected).
-- Library window "+ New Card" button.
-- Edit-existing path: right-click a Library card → "Edit Card…".
-- Import-and-edit path: file picker (`File → Import & Edit Card…`) and drag-drop a `.png` / `.json` onto the creator window. Preserve the existing sidebar drag-drop import-and-save fast path unchanged.
-- Tests: `DraftOrigin` save-path semantics — `.created` mints UUID + writes avatar; `.editing` preserves UUID + skips avatar write unless changed; `.importing` mints UUID + writes import's avatarPNG. Pure tests with a stub `Storage`.
-- Smoke-tested. UI sub-step — flag honestly per the TDD memory rule. Pure unit tests cover the draft-flush logic + the placeholder-rotation seed + the legacy-squash detection predicate; the AppKit layer is smoke-tested against a sample card.
-- ~3–4 days.
+Sub-passes a–e mirror Phase 6/7/8 incremental shape. Each is independently smoke-testable; commits stage in this order:
+
+- **§5.3a** ✅ Window scaffold + Identity tab. `CharacterCreatorWindowController` + tabbed layout, `DesignTokens` foundation, `CharacterDraft.DraftOrigin`, `AvatarControl` per §3.6, server picker, save / cancel + dirty dot, menu entry stub.
+- **§5.3b** ✅ Persona / Greetings / Examples / System tabs. `MultilineFieldView` + `GreetingListEditor` reusable controls, `DepthPromptControl` per §3.4, conditional "Restore example dialogue" affordance per §3.5.
+- **§5.3c.1** Persistent custom tags. `Settings.customTags: [String]` additive Codable. Token-commit on Identity-tab `tagsField` checks the union (bundled + custom) and appends-and-saves on novel input. Autocomplete queries the union. Edit-tag-list UI deferred to V2_UI_OVERHAUL per §3.8.
+- **§5.3c.2** Details + Intimacy tabs. New `CardStructuredDetails.swift` carrying `CardDetails` / `CardIntimacy` Codable structs + `JSONValue` round-trip + fence render / parse helpers. New `DetailsTabViewController` and `IntimacyTabViewController` (single-line + multi-line field rows). Save flow: `CharacterDraft.prepareForSave()` re-renders fences and writes both `extensions["rpclient/{details,intimacy}"]` and the description-block. Load flow: extract from fence-in-description if extensions absent (one-time, on draft init for `.editing` origin). Bundled NSFW-realistic placeholder examples for each field. Round-trip tests on synthetic fixtures.
+- **§5.3c.3** Lorebook tab — read-only summary of imported `charBook`. Pointer copy: "Edit per-chat lore in the World Info pane." (Card-bound lorebook editing remains §6 out-of-scope.)
+- **§5.3c.4** Advanced tab + `extensions` JSON viewer per §3.7. Source / `creatorNotesMultilingual` editing. Read-only pretty-printed JSON viewer for the full extensions blob.
+- **§5.3d** Library + menu entry points + drag-drop + import-and-edit flow + `DraftOrigin` save semantics. `File → Import & Edit Card…`, `Library → Edit Card…`, drag-drop card onto creator window. Preserves the existing sidebar drag-drop import-and-save fast path unchanged.
+- **§5.3e** Polish + smoke pass.
+
+Tests: `DraftOrigin` save-path semantics + `CardStructuredDetails` render/parse round-trip + persistent-tag union behavior — pure unit tests with stub `CardStorage`. AppKit assemblage is smoke-tested against synthetic chub-shape NSFW + Risu v3 + v1 Pygmalion fixtures during §5.3e.
+
+~3–4 days end to end (§5.3c.2 with the structured fields adds ~1 day over the original estimate).
 
 ### §5.4 — AI-assist field generation
 
