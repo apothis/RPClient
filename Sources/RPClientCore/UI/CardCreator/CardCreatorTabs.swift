@@ -299,13 +299,15 @@ final class IntimacyTabViewController: NSViewController {
 final class PersonaTabViewController: NSViewController {
     private let draft: CharacterDraft
     private let onDirty: () -> Void
+    private let aiRegistry: CardCreatorAIRegistry
     private let descriptionField: MultilineFieldView
     private let personalityField: MultilineFieldView
     private let scenarioField: MultilineFieldView
 
-    init(draft: CharacterDraft, onDirty: @escaping () -> Void) {
+    init(draft: CharacterDraft, onDirty: @escaping () -> Void, aiRegistry: CardCreatorAIRegistry) {
         self.draft = draft
         self.onDirty = onDirty
+        self.aiRegistry = aiRegistry
         self.descriptionField = MultilineFieldView(
             label: "Description",
             initialValue: draft.character.description,
@@ -337,16 +339,19 @@ final class PersonaTabViewController: NSViewController {
             self?.draft.character.description = s
             self?.draft.markDirty()
             self?.onDirty()
+            self?.aiRegistry.markDownstreamStale(of: .description)
         }
         personalityField.onChange = { [weak self] s in
             self?.draft.character.personality = s
             self?.draft.markDirty()
             self?.onDirty()
+            self?.aiRegistry.markDownstreamStale(of: .personality)
         }
         scenarioField.onChange = { [weak self] s in
             self?.draft.character.scenario = s
             self?.draft.markDirty()
             self?.onDirty()
+            self?.aiRegistry.markDownstreamStale(of: .scenario)
         }
 
         attachStrip(to: descriptionField, field: .description)
@@ -360,7 +365,7 @@ final class PersonaTabViewController: NSViewController {
 
     private func attachStrip(to fieldView: MultilineFieldView, field: CardField) {
         guard let strip = fieldView.suggestionsStrip else { return }
-        let controller = CardCreatorAIWiring.makeController(field: field, draft: draft)
+        let controller = aiRegistry.controller(for: field)
         strip.controller = controller
         strip.onRequestGenerate = { [weak self] in
             guard let self else { return }
@@ -377,13 +382,15 @@ final class PersonaTabViewController: NSViewController {
 final class GreetingsTabViewController: NSViewController {
     private let draft: CharacterDraft
     private let onDirty: () -> Void
+    private let aiRegistry: CardCreatorAIRegistry
     private let firstMessageField: MultilineFieldView
     private let alternateGreetingsEditor: GreetingListEditor
     private let groupOnlyEditor: GreetingListEditor
 
-    init(draft: CharacterDraft, onDirty: @escaping () -> Void) {
+    init(draft: CharacterDraft, onDirty: @escaping () -> Void, aiRegistry: CardCreatorAIRegistry) {
         self.draft = draft
         self.onDirty = onDirty
+        self.aiRegistry = aiRegistry
         self.firstMessageField = MultilineFieldView(
             label: "First message",
             initialValue: draft.character.firstMessage,
@@ -412,6 +419,7 @@ final class GreetingsTabViewController: NSViewController {
             self?.draft.character.firstMessage = s
             self?.draft.markDirty()
             self?.onDirty()
+            self?.aiRegistry.markDownstreamStale(of: .firstMessage)
         }
         alternateGreetingsEditor.onChange = { [weak self] arr in
             self?.draft.character.alternateGreetings = arr
@@ -433,7 +441,7 @@ final class GreetingsTabViewController: NSViewController {
 
     private func attachStrip(to fieldView: MultilineFieldView, field: CardField) {
         guard let strip = fieldView.suggestionsStrip else { return }
-        let controller = CardCreatorAIWiring.makeController(field: field, draft: draft)
+        let controller = aiRegistry.controller(for: field)
         strip.controller = controller
         strip.onRequestGenerate = { [weak self] in
             guard let self else { return }

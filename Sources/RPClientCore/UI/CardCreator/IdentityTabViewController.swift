@@ -8,6 +8,7 @@ final class IdentityTabViewController: NSViewController {
 
     private let draft: CharacterDraft
     private let onDirty: () -> Void
+    private let aiRegistry: CardCreatorAIRegistry
 
     private let avatarControl = AvatarControl()
     private let nameField = NSTextField()
@@ -16,9 +17,10 @@ final class IdentityTabViewController: NSViewController {
     private let creatorField = NSTextField()
     private let versionField = NSTextField()
 
-    init(draft: CharacterDraft, onDirty: @escaping () -> Void) {
+    init(draft: CharacterDraft, onDirty: @escaping () -> Void, aiRegistry: CardCreatorAIRegistry) {
         self.draft = draft
         self.onDirty = onDirty
+        self.aiRegistry = aiRegistry
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -200,7 +202,9 @@ extension IdentityTabViewController: NSTextFieldDelegate {
     func controlTextDidChange(_ obj: Notification) {
         guard let field = obj.object as? NSTextField else { return }
         switch field {
-        case nameField: draft.character.name = field.stringValue
+        case nameField:
+            draft.character.name = field.stringValue
+            aiRegistry.markDownstreamStale(of: .name)
         case nicknameField: draft.character.nickname = nonEmpty(field.stringValue)
         case creatorField: draft.character.creator = nonEmpty(field.stringValue)
         case versionField: draft.character.characterVersion = nonEmpty(field.stringValue)
@@ -245,6 +249,7 @@ extension IdentityTabViewController: NSTokenFieldDelegate {
             }
             draft.markDirty()
             onDirty()
+            aiRegistry.markTagsChanged()
         }
         return true
     }

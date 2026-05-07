@@ -16,6 +16,12 @@ final class CardCreatorViewController: NSViewController {
     var onCancel: (() -> Void)?
     var onDirtyChanged: (() -> Void)?
 
+    /// Phase 9 §5.4.a — per-window AI controller registry. Constructed
+    /// once per draft; passed to tabs so they share the same
+    /// CardSuggestionsController instances and stale-propagation hits
+    /// across tabs.
+    private lazy var aiRegistry = CardCreatorAIRegistry(draft: draft)
+
     private let tabView = NSTabView()
     private let serverPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let modelLabel = NSTextField(labelWithString: "")
@@ -140,11 +146,11 @@ final class CardCreatorViewController: NSViewController {
 
         let onDirty: () -> Void = { [weak self] in self?.handleDirtyChanged() }
 
-        addTab(IdentityTabViewController(draft: draft, onDirty: onDirty), label: "Identity")
+        addTab(IdentityTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Identity")
         addTab(DetailsTabViewController(draft: draft, onDirty: onDirty), label: "Details")
-        addTab(PersonaTabViewController(draft: draft, onDirty: onDirty), label: "Persona")
+        addTab(PersonaTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Persona")
         addTab(IntimacyTabViewController(draft: draft, onDirty: onDirty), label: "Intimacy")
-        addTab(GreetingsTabViewController(draft: draft, onDirty: onDirty), label: "Greetings")
+        addTab(GreetingsTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Greetings")
         addTab(ExamplesTabViewController(draft: draft, onDirty: onDirty), label: "Examples")
         addTab(SystemTabViewController(draft: draft, onDirty: onDirty), label: "System")
 
