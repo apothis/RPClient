@@ -136,17 +136,22 @@ final class AvatarControl: NSView {
     /// Set the avatar bytes. Routes through `Storage.normalizeAvatarData`
     /// to enforce the 512px cap and PNG re-encode. Fires `onChange`.
     func setAvatar(_ data: Data?) {
-        if let raw = data, let normalized = Storage.normalizeAvatarData(raw) {
-            avatarData = normalized
-        } else if data == nil {
-            avatarData = nil
+        if let raw = data {
+            DebugLog.shared.write("avatar: setAvatar input=\(raw.count)B")
+            if let normalized = Storage.normalizeAvatarData(raw) {
+                avatarData = normalized
+                DebugLog.shared.write("avatar: normalized=\(normalized.count)B (was \(raw.count)B)")
+            } else {
+                // Decoder failed — leave state untouched, don't fire onChange.
+                DebugLog.shared.write("avatar: ⚠ couldn't decode \(raw.count)B")
+                return
+            }
         } else {
-            // Decoder failed — surface the error via the `onChange`
-            // contract by leaving state untouched and not firing.
-            DebugLog.shared.write("avatar: ⚠ couldn't decode image bytes (\(data?.count ?? 0)B)")
-            return
+            avatarData = nil
+            DebugLog.shared.write("avatar: cleared")
         }
         refreshDisplay()
+        DebugLog.shared.write("avatar: firing onChange (current=\(avatarData?.count ?? 0)B)")
         onChange?(avatarData)
     }
 
@@ -181,12 +186,16 @@ final class AvatarControl: NSView {
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.png, .jpeg, .webP, .heic, .gif, .bmp]
         panel.message = "Choose an image for this character. Resized to fit (longest side ≤ 512px)."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let result = panel.runModal()
+        DebugLog.shared.write("avatar: chooseImage panel result=\(result.rawValue) url=\(panel.url?.lastPathComponent ?? "nil")")
+        guard result == .OK, let url = panel.url else { return }
         guard let data = try? Data(contentsOf: url) else {
+            DebugLog.shared.write("avatar: ⚠ couldn't read \(url.path)")
             NSAlert.showSimple(message: "Couldn't read that image",
                                info: "The file at \(url.lastPathComponent) couldn't be loaded.")
             return
         }
+        DebugLog.shared.write("avatar: chooseImage loaded \(data.count)B from \(url.lastPathComponent)")
         setAvatar(data)
     }
 

@@ -33,6 +33,7 @@ final class IdentityTabViewController: NSViewController {
         avatarControl.translatesAutoresizingMaskIntoConstraints = false
         avatarControl.loadAvatarUnchecked(draft.avatarPNG)
         avatarControl.onChange = { [weak self] data in
+            DebugLog.shared.write("avatar: identity-tab received \(data?.count ?? 0)B → draft")
             self?.draft.avatarPNG = data
             self?.draft.markDirty()
             self?.onDirty()

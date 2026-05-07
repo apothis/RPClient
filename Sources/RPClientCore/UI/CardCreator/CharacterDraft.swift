@@ -102,18 +102,25 @@ final class CharacterDraft {
         switch origin {
         case .created, .importing:
             if let png = avatarPNG {
+                DebugLog.shared.write("cardcreator: flush-avatar write \(png.count)B for \(id) (origin=\(origin))")
                 storage.writeCharacterAvatar(png, for: id)
+            } else {
+                DebugLog.shared.write("cardcreator: flush-avatar skip (nil avatarPNG, origin=\(origin)) id=\(id)")
             }
         case .editing:
             switch (avatarBaseline, avatarPNG) {
             case (.some(let baseline), .some(let current)):
                 if baseline != current {
+                    DebugLog.shared.write("cardcreator: flush-avatar overwrite \(current.count)B for \(id) (baseline=\(baseline.count)B)")
                     storage.writeCharacterAvatar(current, for: id)
+                } else {
+                    DebugLog.shared.write("cardcreator: flush-avatar skip (byte-equal) id=\(id)")
                 }
-                // bytes equal → skip the write
             case (.none, .some(let current)):
+                DebugLog.shared.write("cardcreator: flush-avatar add \(current.count)B for \(id) (no baseline)")
                 storage.writeCharacterAvatar(current, for: id)
             case (.some, .none):
+                DebugLog.shared.write("cardcreator: flush-avatar delete for \(id) (cleared)")
                 storage.deleteCharacterAvatarFile(for: id)
             case (.none, .none):
                 break
