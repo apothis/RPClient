@@ -136,15 +136,14 @@ final class CardCreatorViewController: NSViewController {
         tabView.tabViewType = .topTabsBezelBorder
         tabView.translatesAutoresizingMaskIntoConstraints = false
 
-        let identityVC = IdentityTabViewController(draft: draft) { [weak self] in
-            self?.handleDirtyChanged()
-        }
-        addTab(identityVC, label: "Identity")
+        let onDirty: () -> Void = { [weak self] in self?.handleDirtyChanged() }
 
-        addPlaceholderTab(label: "Persona", body: "Description, personality, scenario — §5.3b.")
-        addPlaceholderTab(label: "Greetings", body: "First message, alternate greetings, group-only — §5.3b.")
-        addPlaceholderTab(label: "Examples", body: "Message examples — §5.3b. Restore-example-dialogue affordance — §3.5.")
-        addPlaceholderTab(label: "System", body: "System prompt, post-history instructions, depth prompt, creator notes — §5.3b.")
+        addTab(IdentityTabViewController(draft: draft, onDirty: onDirty), label: "Identity")
+        addTab(PersonaTabViewController(draft: draft, onDirty: onDirty), label: "Persona")
+        addTab(GreetingsTabViewController(draft: draft, onDirty: onDirty), label: "Greetings")
+        addTab(ExamplesTabViewController(draft: draft, onDirty: onDirty), label: "Examples")
+        addTab(SystemTabViewController(draft: draft, onDirty: onDirty), label: "System")
+
         addPlaceholderTab(label: "Lorebook", body: "Read-only summary of imported character_book — §5.3c.")
         addPlaceholderTab(label: "Advanced", body: "Source, multilingual notes, extensions JSON viewer — §5.3c.")
 
