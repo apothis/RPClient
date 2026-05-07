@@ -17,6 +17,14 @@ final class IdentityTabViewController: NSViewController {
     private let creatorField = NSTextField()
     private let versionField = NSTextField()
 
+    /// Row of small per-tag pills shown below the tags field for any
+    /// tag that isn't in the bundled vocabulary OR the persistent
+    /// custom-tags list. Each pill carries a toggle button — default
+    /// ✗ (don't save to vocab); click → ✓ promotes the tag into
+    /// `Settings.customTags` so it autocompletes on future cards.
+    /// Hidden when there are no novel tags pending decision.
+    private let pendingTagsRow = NSStackView()
+
     init(draft: CharacterDraft, onDirty: @escaping () -> Void, aiRegistry: CardCreatorAIRegistry) {
         self.draft = draft
         self.onDirty = onDirty
@@ -79,6 +87,18 @@ final class IdentityTabViewController: NSViewController {
                                  hint: "Comma-separated. Used by the library for filtering. Common tags autocomplete.",
                                  width: 360)
         fieldStack.addArrangedSubview(tagsRow)
+
+        // Pending-novel-tags row (Phase 9 §5.3a follow-up). One pill per
+        // novel tag with an ✗/✓ toggle so the author opts-in to
+        // promoting the tag into the persistent custom-tags vocabulary.
+        // Defaults to ✗ — typos no longer pollute autocomplete forever.
+        pendingTagsRow.orientation = .horizontal
+        pendingTagsRow.alignment = .centerY
+        pendingTagsRow.spacing = DesignTokens.Spacing.xs
+        pendingTagsRow.translatesAutoresizingMaskIntoConstraints = false
+        pendingTagsRow.isHidden = true
+        fieldStack.addArrangedSubview(pendingTagsRow)
+        refreshPendingTagsRow()
 
         // Creator (optional).
         configureField(creatorField, placeholder: "anon", width: 240)
@@ -232,25 +252,92 @@ extension IdentityTabViewController: NSTokenFieldDelegate {
         if let tokenField = control as? NSTokenField, tokenField === tagsField {
             let tokens = (tokenField.objectValue as? [String]) ?? []
             draft.character.tags = tokens
-            // Phase 9 §3.8 — promote any novel committed tag into the
-            // persistent custom vocabulary so it appears in autocomplete
-            // for future cards.
-            var settings = AppState.shared.settings
-            var saved = false
-            for raw in tokens {
-                if let updated = TagVocabulary.shared.addIfNovel(raw, customTags: settings.customTags) {
-                    settings.customTags = updated
-                    saved = true
-                    DebugLog.shared.write("tags: added '\(raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())' to custom vocabulary (\(updated.count) total)")
-                }
-            }
-            if saved {
-                AppState.shared.saveSettings(settings)
-            }
+            // Phase 9 §3.8 was auto-promote-on-commit; superseded by the
+            // per-tag opt-in toggle below the field. Author clicks ✓ on
+            // a novel tag to promote it to Settings.customTags. Typos no
+            // longer pollute autocomplete forever.
             draft.markDirty()
             onDirty()
             aiRegistry.markTagsChanged()
+            refreshPendingTagsRow()
         }
         return true
+    }
+
+    // MARK: - Pending-novel-tags row
+
+    /// Recompute the row of pending-novel-tag pills. A tag is "novel"
+    /// if it isn't in the bundled vocabulary AND isn't already in
+    /// `Settings.customTags`. Promoted tags drop off the row on the
+    /// next refresh (because they're now known via customTags).
+    private func refreshPendingTagsRow() {
+        pendingTagsRow.arrangedSubviews.forEach {
+            pendingTagsRow.removeArrangedSubview($0)
+            $0.removeFromSuperview()
+        }
+        let cardTags = draft.character.tags
+        let knownBundled = Set(TagVocabulary.shared.all.map { $0.lowercased() })
+        let knownCustom = Set(AppState.shared.settings.customTags.map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        })
+        var seen = Set<String>()
+        for raw in cardTags {
+            let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !normalized.isEmpty else { continue }
+            guard seen.insert(normalized).inserted else { continue }
+            if knownBundled.contains(normalized) { continue }
+            if knownCustom.contains(normalized) { continue }
+            pendingTagsRow.addArrangedSubview(makePendingTagPill(tag: normalized))
+        }
+        pendingTagsRow.isHidden = pendingTagsRow.arrangedSubviews.isEmpty
+    }
+
+    /// Build one pill: small caption-style label + a borderless SF
+    /// Symbol toggle. Default visual is `xmark` ("don't save"); click
+    /// promotes the tag into the persistent vocabulary, which removes
+    /// the pill on the next refresh.
+    private func makePendingTagPill(tag: String) -> NSView {
+        let label = NSTextField(labelWithString: tag)
+        label.font = DesignTokens.Typography.caption1
+        label.textColor = DesignTokens.Foreground.secondary
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let toggle = NSButton()
+        toggle.bezelStyle = .recessed
+        toggle.controlSize = .mini
+        toggle.imagePosition = .imageOnly
+        toggle.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Don't save '\(tag)' to vocabulary")
+        toggle.contentTintColor = DesignTokens.Foreground.tertiary
+        toggle.toolTip = "Save '\(tag)' to your tag vocabulary so it autocompletes on future cards"
+        toggle.target = self
+        toggle.action = #selector(pendingTagToggleClicked(_:))
+        toggle.identifier = NSUserInterfaceItemIdentifier(rawValue: tag)
+        toggle.translatesAutoresizingMaskIntoConstraints = false
+
+        let pill = NSStackView(views: [label, toggle])
+        pill.orientation = .horizontal
+        pill.alignment = .centerY
+        pill.spacing = DesignTokens.Spacing.xs
+        pill.translatesAutoresizingMaskIntoConstraints = false
+        return pill
+    }
+
+    @objc private func pendingTagToggleClicked(_ sender: NSButton) {
+        guard let tag = sender.identifier?.rawValue else { return }
+        var settings = AppState.shared.settings
+        if settings.customTags.contains(where: { $0.lowercased() == tag }) {
+            // Already promoted — shouldn't happen (pill would have been
+            // removed) but guard anyway.
+            return
+        }
+        settings.customTags.append(tag)
+        AppState.shared.saveSettings(settings)
+        DebugLog.shared.write("tags: promoted '\(tag)' to custom vocabulary (\(settings.customTags.count) total) via opt-in toggle")
+        // Visual confirmation before the pill disappears on refresh.
+        sender.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Saved")
+        sender.contentTintColor = DesignTokens.Foreground.success
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+            self?.refreshPendingTagsRow()
+        }
     }
 }
