@@ -47,4 +47,24 @@ enum CardCreatorAIWiring {
             stopSequences: template.stopSequences
         )
     }
+
+    /// Bind a multi-line field's suggestions strip to the registry's
+    /// controller for that field. Hoisted out of the per-tab
+    /// `attachStrip` helpers so each tab is one line of glue.
+    @MainActor
+    static func attachStrip(
+        to fieldView: MultilineFieldView,
+        field: CardField,
+        aiRegistry: CardCreatorAIRegistry,
+        draft: CharacterDraft
+    ) {
+        guard let strip = fieldView.suggestionsStrip else { return }
+        let controller = aiRegistry.controller(for: field)
+        strip.controller = controller
+        strip.onRequestGenerate = { [weak draft] in
+            guard let draft else { return }
+            let snapshot = CardDraftSnapshotBuilder.snapshot(of: draft)
+            controller.generate(draft: snapshot)
+        }
+    }
 }

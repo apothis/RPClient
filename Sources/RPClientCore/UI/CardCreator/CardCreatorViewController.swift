@@ -147,12 +147,12 @@ final class CardCreatorViewController: NSViewController {
         let onDirty: () -> Void = { [weak self] in self?.handleDirtyChanged() }
 
         addTab(IdentityTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Identity")
-        addTab(DetailsTabViewController(draft: draft, onDirty: onDirty), label: "Details")
+        addTab(DetailsTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Details")
         addTab(PersonaTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Persona")
-        addTab(IntimacyTabViewController(draft: draft, onDirty: onDirty), label: "Intimacy")
+        addTab(IntimacyTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Intimacy")
         addTab(GreetingsTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Greetings")
-        addTab(ExamplesTabViewController(draft: draft, onDirty: onDirty), label: "Examples")
-        addTab(SystemTabViewController(draft: draft, onDirty: onDirty), label: "System")
+        addTab(ExamplesTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Examples")
+        addTab(SystemTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "System")
 
         addTab(LorebookTabViewController(draft: draft), label: "Lorebook")
         addTab(AdvancedTabViewController(draft: draft, onDirty: onDirty), label: "Advanced")

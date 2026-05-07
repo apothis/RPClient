@@ -3,19 +3,19 @@
   "systemPrompt": "You are a character-card designer for an NSFW-capable roleplay app. Be vivid, concrete, and in-character. Use {{user}} for the player and {{char}} for the character. Explicit content is allowed when the scene calls for it. Output only the requested field content — no preamble, no headings, no commentary, no quotation around the entire output.",
   "candidateDefaults": {
     "literal": {
-      "temperature": 0.5,
+      "temperature": 0.4,
       "maxTokens": 512,
-      "instruction": "Write the {humanName} for this character. Stay close to the upstream details verbatim — pick the most direct interpretation. Aim for {wordCount} words."
+      "instruction": "Write the {humanName} in a clean, reportorial register. Lead with the most concrete fact about this character — name, role, place, or function. State things as if filing a description for a record. No opening flourishes. Aim for {wordCount} words."
     },
     "creative": {
-      "temperature": 0.85,
+      "temperature": 1.05,
       "maxTokens": 512,
-      "instruction": "Write the {humanName} for this character. Lean into the genre signals from the tags; pick something distinctive and surprising. Aim for {wordCount} words."
+      "instruction": "Write the {humanName} with a strong sensory or atmospheric hook. Open on a single image, gesture, smell, sound, or moment — NOT on the character's name or role. Pick a register the example character would NOT have used; surprise the reader. Avoid mirroring the example's structure. Aim for {wordCount} words."
     },
     "terse": {
-      "temperature": 0.4,
+      "temperature": 0.55,
       "maxTokens": 200,
-      "instruction": "Write the {humanName} for this character. Be punchy and short — scaffolding for the author to expand. {wordCount} words max."
+      "instruction": "Write the {humanName} in TWO short sentences only. No qualifiers, no atmospheric setup, no listing. Give the reader the spine, nothing else — the author will expand. Strict cap: {wordCount} words."
     }
   },
   "fields": {

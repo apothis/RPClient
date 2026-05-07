@@ -75,10 +75,12 @@ final class DetailsTabViewController: NSViewController {
     private let orientationField: SingleLineFieldView
     private let appearanceField: MultilineFieldView
     private let moodField: MultilineFieldView
+    private let aiRegistry: CardCreatorAIRegistry
 
-    init(draft: CharacterDraft, onDirty: @escaping () -> Void) {
+    init(draft: CharacterDraft, onDirty: @escaping () -> Void, aiRegistry: CardCreatorAIRegistry) {
         self.draft = draft
         self.onDirty = onDirty
+        self.aiRegistry = aiRegistry
         // Resolution order:
         //   1. extensions["rpclient/details"] (RPClient-edited cards, source of truth)
         //   2. parse fence in description (cards from other tools, or hand-edited)
@@ -105,7 +107,8 @@ final class DetailsTabViewController: NSViewController {
             hint: "Height, build, hair, eyes, skin, clothing — what they look like.",
             placeholder: CardCreatorPlaceholders.detailsAppearance,
             minHeight: 80,
-            maxHeight: 220
+            maxHeight: 220,
+            hasSuggestionsStrip: true
         )
         self.moodField = MultilineFieldView(
             label: "Mood",
@@ -113,7 +116,8 @@ final class DetailsTabViewController: NSViewController {
             hint: "Default emotional state, baseline temperament. Distinct from Personality (behavior).",
             placeholder: CardCreatorPlaceholders.detailsMood,
             minHeight: 64,
-            maxHeight: 180
+            maxHeight: 180,
+            hasSuggestionsStrip: true
         )
         super.init(nibName: nil, bundle: nil)
     }
@@ -121,12 +125,33 @@ final class DetailsTabViewController: NSViewController {
     required init?(coder: NSCoder) { fatalError() }
 
     override func loadView() {
-        ageField.onChange = { [weak self] _ in self?.commit() }
-        pronounsField.onChange = { [weak self] _ in self?.commit() }
-        speciesField.onChange = { [weak self] _ in self?.commit() }
-        orientationField.onChange = { [weak self] _ in self?.commit() }
-        appearanceField.onChange = { [weak self] _ in self?.commit() }
-        moodField.onChange = { [weak self] _ in self?.commit() }
+        ageField.onChange = { [weak self] _ in
+            self?.commit()
+            self?.aiRegistry.markDownstreamStale(of: .detailsAge)
+        }
+        pronounsField.onChange = { [weak self] _ in
+            self?.commit()
+            self?.aiRegistry.markDownstreamStale(of: .detailsPronouns)
+        }
+        speciesField.onChange = { [weak self] _ in
+            self?.commit()
+            self?.aiRegistry.markDownstreamStale(of: .detailsSpecies)
+        }
+        orientationField.onChange = { [weak self] _ in
+            self?.commit()
+            self?.aiRegistry.markDownstreamStale(of: .detailsOrientation)
+        }
+        appearanceField.onChange = { [weak self] _ in
+            self?.commit()
+            self?.aiRegistry.markDownstreamStale(of: .detailsAppearance)
+        }
+        moodField.onChange = { [weak self] _ in
+            self?.commit()
+            self?.aiRegistry.markDownstreamStale(of: .detailsMood)
+        }
+
+        CardCreatorAIWiring.attachStrip(to: appearanceField, field: .detailsAppearance, aiRegistry: aiRegistry, draft: draft)
+        CardCreatorAIWiring.attachStrip(to: moodField, field: .detailsMood, aiRegistry: aiRegistry, draft: draft)
 
         // Two columns of single-line identity fields (compact at top), then
         // the two multi-line fields full-width below.
@@ -174,6 +199,7 @@ final class DetailsTabViewController: NSViewController {
 final class IntimacyTabViewController: NSViewController {
     private let draft: CharacterDraft
     private let onDirty: () -> Void
+    private let aiRegistry: CardCreatorAIRegistry
 
     private let buildField: MultilineFieldView
     private let anatomyField: MultilineFieldView
@@ -184,9 +210,10 @@ final class IntimacyTabViewController: NSViewController {
     private let kinksField: MultilineFieldView
     private let limitsField: MultilineFieldView
 
-    init(draft: CharacterDraft, onDirty: @escaping () -> Void) {
+    init(draft: CharacterDraft, onDirty: @escaping () -> Void, aiRegistry: CardCreatorAIRegistry) {
         self.draft = draft
         self.onDirty = onDirty
+        self.aiRegistry = aiRegistry
         // Same resolution + eager-mirror as DetailsTab.
         var seed = CardIntimacy()
         if let fromExt = CardIntimacy.extractFrom(draft.character) {
@@ -202,56 +229,64 @@ final class IntimacyTabViewController: NSViewController {
             initialValue: i.build,
             hint: "Overall shape, height, weight, body type, athleticism.",
             placeholder: CardCreatorPlaceholders.intimacyBuild,
-            minHeight: 64, maxHeight: 160
+            minHeight: 64, maxHeight: 160,
+            hasSuggestionsStrip: true
         )
         self.anatomyField = MultilineFieldView(
             label: "Anatomy",
             initialValue: i.anatomy,
             hint: "Explicit physical / sexual anatomy — chest, genitals, hips, sensitive areas.",
             placeholder: CardCreatorPlaceholders.intimacyAnatomy,
-            minHeight: 80, maxHeight: 200
+            minHeight: 80, maxHeight: 200,
+            hasSuggestionsStrip: true
         )
         self.markingsField = MultilineFieldView(
             label: "Markings",
             initialValue: i.markings,
             hint: "Tattoos, scars, piercings, distinguishing features.",
             placeholder: CardCreatorPlaceholders.intimacyMarkings,
-            minHeight: 64, maxHeight: 160
+            minHeight: 64, maxHeight: 160,
+            hasSuggestionsStrip: true
         )
         self.sensitivitiesField = MultilineFieldView(
             label: "Sensitivities",
             initialValue: i.sensitivities,
             hint: "Where they're ticklish, what arouses, neural-hot spots.",
             placeholder: CardCreatorPlaceholders.intimacySensitivities,
-            minHeight: 64, maxHeight: 160
+            minHeight: 64, maxHeight: 160,
+            hasSuggestionsStrip: true
         )
         self.scentField = MultilineFieldView(
             label: "Scent",
             initialValue: i.scent,
             hint: "What they smell like; scent associations.",
             placeholder: CardCreatorPlaceholders.intimacyScent,
-            minHeight: 64, maxHeight: 140
+            minHeight: 64, maxHeight: 140,
+            hasSuggestionsStrip: true
         )
         self.turnOnsField = MultilineFieldView(
             label: "Turn-ons",
             initialValue: i.turnOns,
             hint: "What arouses them. Often list-style.",
             placeholder: CardCreatorPlaceholders.intimacyTurnOns,
-            minHeight: 80, maxHeight: 200
+            minHeight: 80, maxHeight: 200,
+            hasSuggestionsStrip: true
         )
         self.kinksField = MultilineFieldView(
             label: "Kinks",
             initialValue: i.kinks,
             hint: "Specific fetishes / preferences. Distinct from broader Turn-ons.",
             placeholder: CardCreatorPlaceholders.intimacyKinks,
-            minHeight: 80, maxHeight: 200
+            minHeight: 80, maxHeight: 200,
+            hasSuggestionsStrip: true
         )
         self.limitsField = MultilineFieldView(
             label: "Limits",
             initialValue: i.limits,
             hint: "Hard nos, dislikes. AI-assist deliberately doesn't infer these — author intent.",
             placeholder: CardCreatorPlaceholders.intimacyLimits,
-            minHeight: 64, maxHeight: 160
+            minHeight: 64, maxHeight: 160,
+            hasSuggestionsStrip: true
         )
         super.init(nibName: nil, bundle: nil)
     }
@@ -259,14 +294,39 @@ final class IntimacyTabViewController: NSViewController {
     required init?(coder: NSCoder) { fatalError() }
 
     override func loadView() {
-        buildField.onChange = { [weak self] _ in self?.commit() }
-        anatomyField.onChange = { [weak self] _ in self?.commit() }
-        markingsField.onChange = { [weak self] _ in self?.commit() }
-        sensitivitiesField.onChange = { [weak self] _ in self?.commit() }
-        scentField.onChange = { [weak self] _ in self?.commit() }
-        turnOnsField.onChange = { [weak self] _ in self?.commit() }
-        kinksField.onChange = { [weak self] _ in self?.commit() }
-        limitsField.onChange = { [weak self] _ in self?.commit() }
+        buildField.onChange = { [weak self] _ in
+            self?.commit(); self?.aiRegistry.markDownstreamStale(of: .intimacyBuild)
+        }
+        anatomyField.onChange = { [weak self] _ in
+            self?.commit(); self?.aiRegistry.markDownstreamStale(of: .intimacyAnatomy)
+        }
+        markingsField.onChange = { [weak self] _ in
+            self?.commit(); self?.aiRegistry.markDownstreamStale(of: .intimacyMarkings)
+        }
+        sensitivitiesField.onChange = { [weak self] _ in
+            self?.commit(); self?.aiRegistry.markDownstreamStale(of: .intimacySensitivities)
+        }
+        scentField.onChange = { [weak self] _ in
+            self?.commit(); self?.aiRegistry.markDownstreamStale(of: .intimacyScent)
+        }
+        turnOnsField.onChange = { [weak self] _ in
+            self?.commit(); self?.aiRegistry.markDownstreamStale(of: .intimacyTurnOns)
+        }
+        kinksField.onChange = { [weak self] _ in
+            self?.commit(); self?.aiRegistry.markDownstreamStale(of: .intimacyKinks)
+        }
+        limitsField.onChange = { [weak self] _ in
+            self?.commit(); self?.aiRegistry.markDownstreamStale(of: .intimacyLimits)
+        }
+
+        CardCreatorAIWiring.attachStrip(to: buildField, field: .intimacyBuild, aiRegistry: aiRegistry, draft: draft)
+        CardCreatorAIWiring.attachStrip(to: anatomyField, field: .intimacyAnatomy, aiRegistry: aiRegistry, draft: draft)
+        CardCreatorAIWiring.attachStrip(to: markingsField, field: .intimacyMarkings, aiRegistry: aiRegistry, draft: draft)
+        CardCreatorAIWiring.attachStrip(to: sensitivitiesField, field: .intimacySensitivities, aiRegistry: aiRegistry, draft: draft)
+        CardCreatorAIWiring.attachStrip(to: scentField, field: .intimacyScent, aiRegistry: aiRegistry, draft: draft)
+        CardCreatorAIWiring.attachStrip(to: turnOnsField, field: .intimacyTurnOns, aiRegistry: aiRegistry, draft: draft)
+        CardCreatorAIWiring.attachStrip(to: kinksField, field: .intimacyKinks, aiRegistry: aiRegistry, draft: draft)
+        CardCreatorAIWiring.attachStrip(to: limitsField, field: .intimacyLimits, aiRegistry: aiRegistry, draft: draft)
 
         self.view = makeScrollingTab(fields: [
             buildField, anatomyField, markingsField, sensitivitiesField,
@@ -354,24 +414,13 @@ final class PersonaTabViewController: NSViewController {
             self?.aiRegistry.markDownstreamStale(of: .scenario)
         }
 
-        attachStrip(to: descriptionField, field: .description)
-        attachStrip(to: personalityField, field: .personality)
-        attachStrip(to: scenarioField, field: .scenario)
+        CardCreatorAIWiring.attachStrip(to: descriptionField, field: .description, aiRegistry: aiRegistry, draft: draft)
+        CardCreatorAIWiring.attachStrip(to: personalityField, field: .personality, aiRegistry: aiRegistry, draft: draft)
+        CardCreatorAIWiring.attachStrip(to: scenarioField, field: .scenario, aiRegistry: aiRegistry, draft: draft)
 
         self.view = makeScrollingTab(fields: [
             descriptionField, personalityField, scenarioField,
         ])
-    }
-
-    private func attachStrip(to fieldView: MultilineFieldView, field: CardField) {
-        guard let strip = fieldView.suggestionsStrip else { return }
-        let controller = aiRegistry.controller(for: field)
-        strip.controller = controller
-        strip.onRequestGenerate = { [weak self] in
-            guard let self else { return }
-            let snapshot = CardDraftSnapshotBuilder.snapshot(of: self.draft)
-            controller.generate(draft: snapshot)
-        }
     }
 }
 
@@ -432,22 +481,11 @@ final class GreetingsTabViewController: NSViewController {
             self?.onDirty()
         }
 
-        attachStrip(to: firstMessageField, field: .firstMessage)
+        CardCreatorAIWiring.attachStrip(to: firstMessageField, field: .firstMessage, aiRegistry: aiRegistry, draft: draft)
 
         self.view = makeScrollingTab(fields: [
             firstMessageField, alternateGreetingsEditor, groupOnlyEditor,
         ])
-    }
-
-    private func attachStrip(to fieldView: MultilineFieldView, field: CardField) {
-        guard let strip = fieldView.suggestionsStrip else { return }
-        let controller = aiRegistry.controller(for: field)
-        strip.controller = controller
-        strip.onRequestGenerate = { [weak self] in
-            guard let self else { return }
-            let snapshot = CardDraftSnapshotBuilder.snapshot(of: self.draft)
-            controller.generate(draft: snapshot)
-        }
     }
 }
 
@@ -460,6 +498,7 @@ final class GreetingsTabViewController: NSViewController {
 final class ExamplesTabViewController: NSViewController {
     private let draft: CharacterDraft
     private let onDirty: () -> Void
+    private let aiRegistry: CardCreatorAIRegistry
     private let exampleField: MultilineFieldView
     private let restoreCallout = NSStackView()
     private let restoreInfoLabel = NSTextField(labelWithString: "")
@@ -468,14 +507,16 @@ final class ExamplesTabViewController: NSViewController {
     private var restoreVisibleConstraint: NSLayoutConstraint!
     private var dismissed = false
 
-    init(draft: CharacterDraft, onDirty: @escaping () -> Void) {
+    init(draft: CharacterDraft, onDirty: @escaping () -> Void, aiRegistry: CardCreatorAIRegistry) {
         self.draft = draft
         self.onDirty = onDirty
+        self.aiRegistry = aiRegistry
         self.exampleField = MultilineFieldView(
             label: "Example dialogue",
             initialValue: draft.character.messageExample,
             hint: "Few-shot example exchanges. Helps the model match the character's voice.",
-            placeholder: CardCreatorPlaceholders.exampleDialogue
+            placeholder: CardCreatorPlaceholders.exampleDialogue,
+            hasSuggestionsStrip: true
         )
         super.init(nibName: nil, bundle: nil)
     }
@@ -488,7 +529,9 @@ final class ExamplesTabViewController: NSViewController {
             self?.draft.markDirty()
             self?.onDirty()
             self?.refreshRestoreVisibility()
+            self?.aiRegistry.markDownstreamStale(of: .messageExample)
         }
+        CardCreatorAIWiring.attachStrip(to: exampleField, field: .messageExample, aiRegistry: aiRegistry, draft: draft)
 
         // Restore-affordance row — built once and toggled visible.
         restoreInfoLabel.stringValue = "This card may have its example dialogue squashed into Description (legacy v1 import shape)."
@@ -570,25 +613,29 @@ final class ExamplesTabViewController: NSViewController {
 final class SystemTabViewController: NSViewController {
     private let draft: CharacterDraft
     private let onDirty: () -> Void
+    private let aiRegistry: CardCreatorAIRegistry
     private let systemPromptField: MultilineFieldView
     private let postHistoryField: MultilineFieldView
     private let depthPromptControl: DepthPromptControl
     private let creatorNotesField: MultilineFieldView
 
-    init(draft: CharacterDraft, onDirty: @escaping () -> Void) {
+    init(draft: CharacterDraft, onDirty: @escaping () -> Void, aiRegistry: CardCreatorAIRegistry) {
         self.draft = draft
         self.onDirty = onDirty
+        self.aiRegistry = aiRegistry
         self.systemPromptField = MultilineFieldView(
             label: "System prompt",
             initialValue: draft.character.systemPrompt ?? "",
             hint: "Replaces the user's default system prompt. Use {{original}} to layer instead of replace.",
-            placeholder: CardCreatorPlaceholders.systemPrompt
+            placeholder: CardCreatorPlaceholders.systemPrompt,
+            hasSuggestionsStrip: true
         )
         self.postHistoryField = MultilineFieldView(
             label: "Post-history instructions",
             initialValue: draft.character.postHistoryInstructions ?? "",
             hint: "Injected after history, near the response. Often used for tone or content-permission framing.",
-            placeholder: CardCreatorPlaceholders.postHistoryInstructions
+            placeholder: CardCreatorPlaceholders.postHistoryInstructions,
+            hasSuggestionsStrip: true
         )
         let extracted = DepthPrompt.extractFrom(draft.character)
         self.depthPromptControl = DepthPromptControl(initial: extracted)
@@ -596,7 +643,8 @@ final class SystemTabViewController: NSViewController {
             label: "Creator notes",
             initialValue: draft.character.creatorNotes ?? "",
             hint: "Display only — never reaches the prompt. Trigger warnings, kink list, content rating.",
-            placeholder: CardCreatorPlaceholders.creatorNotes
+            placeholder: CardCreatorPlaceholders.creatorNotes,
+            hasSuggestionsStrip: true
         )
         super.init(nibName: nil, bundle: nil)
     }
@@ -608,17 +656,23 @@ final class SystemTabViewController: NSViewController {
             self?.draft.character.systemPrompt = s.isEmpty ? nil : s
             self?.draft.markDirty()
             self?.onDirty()
+            self?.aiRegistry.markDownstreamStale(of: .systemPrompt)
         }
         postHistoryField.onChange = { [weak self] s in
             self?.draft.character.postHistoryInstructions = s.isEmpty ? nil : s
             self?.draft.markDirty()
             self?.onDirty()
+            self?.aiRegistry.markDownstreamStale(of: .postHistoryInstructions)
         }
         creatorNotesField.onChange = { [weak self] s in
             self?.draft.character.creatorNotes = s.isEmpty ? nil : s
             self?.draft.markDirty()
             self?.onDirty()
+            self?.aiRegistry.markDownstreamStale(of: .creatorNotes)
         }
+        CardCreatorAIWiring.attachStrip(to: systemPromptField, field: .systemPrompt, aiRegistry: aiRegistry, draft: draft)
+        CardCreatorAIWiring.attachStrip(to: postHistoryField, field: .postHistoryInstructions, aiRegistry: aiRegistry, draft: draft)
+        CardCreatorAIWiring.attachStrip(to: creatorNotesField, field: .creatorNotes, aiRegistry: aiRegistry, draft: draft)
         depthPromptControl.onChange = { [weak self] dp in
             guard let self = self else { return }
             if let dp = dp, !dp.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
