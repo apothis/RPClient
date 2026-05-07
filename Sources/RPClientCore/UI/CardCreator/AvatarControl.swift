@@ -39,20 +39,19 @@ final class AvatarControl: NSView {
         registerForDraggedTypes([.fileURL])
     }
 
+    private let avatarFrameView = AppearanceAwareLayerView()
+
     private func buildUI() {
-        wantsLayer = true
         translatesAutoresizingMaskIntoConstraints = false
 
-        // Frame container — the visible 128×128 square.
-        let frame = NSView()
-        frame.wantsLayer = true
-        frame.translatesAutoresizingMaskIntoConstraints = false
-        frame.layer?.backgroundColor = DesignTokens.Background.group.cgColor
-        frame.layer?.cornerRadius = DesignTokens.Radius.section
-        frame.layer?.cornerCurve = .continuous
-        frame.layer?.borderColor = NSColor.separatorColor.cgColor
-        frame.layer?.borderWidth = 1
-        addSubview(frame)
+        // Frame container — the visible 128×128 square. Appearance-aware
+        // so light/dark/accent flips re-resolve the layer colors.
+        avatarFrameView.translatesAutoresizingMaskIntoConstraints = false
+        avatarFrameView.backgroundColor = DesignTokens.Background.group
+        avatarFrameView.cornerRadiusValue = DesignTokens.Radius.section
+        avatarFrameView.borderColor = NSColor.separatorColor
+        avatarFrameView.borderWidthValue = 1
+        addSubview(avatarFrameView)
 
         // Placeholder glyph for empty state — SF Symbol `person.crop.circle`.
         if let img = NSImage(systemSymbolName: "person.crop.circle",
@@ -63,7 +62,7 @@ final class AvatarControl: NSView {
         }
         placeholderView.imageScaling = .scaleProportionallyUpOrDown
         placeholderView.translatesAutoresizingMaskIntoConstraints = false
-        frame.addSubview(placeholderView)
+        avatarFrameView.addSubview(placeholderView)
 
         // Avatar image view — overlaid on top, hidden when no avatar.
         thumbnail.imageScaling = .scaleProportionallyUpOrDown
@@ -73,7 +72,7 @@ final class AvatarControl: NSView {
         thumbnail.layer?.cornerCurve = .continuous
         thumbnail.layer?.masksToBounds = true
         thumbnail.isHidden = true
-        frame.addSubview(thumbnail)
+        avatarFrameView.addSubview(thumbnail)
 
         chooseButton.target = self
         chooseButton.action = #selector(chooseImageClicked)
@@ -95,7 +94,7 @@ final class AvatarControl: NSView {
         addSubview(buttonRow)
 
         formatHint.font = DesignTokens.Typography.subheadline
-        formatHint.textColor = DesignTokens.Foreground.tertiary
+        formatHint.textColor = DesignTokens.Foreground.secondary
         formatHint.lineBreakMode = .byWordWrapping
         formatHint.maximumNumberOfLines = 2
         formatHint.translatesAutoresizingMaskIntoConstraints = false
@@ -103,23 +102,23 @@ final class AvatarControl: NSView {
 
         NSLayoutConstraint.activate([
             // Frame at the top, fixed 128×128.
-            frame.topAnchor.constraint(equalTo: topAnchor),
-            frame.centerXAnchor.constraint(equalTo: centerXAnchor),
-            frame.widthAnchor.constraint(equalToConstant: 128),
-            frame.heightAnchor.constraint(equalToConstant: 128),
+            avatarFrameView.topAnchor.constraint(equalTo: topAnchor),
+            avatarFrameView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            avatarFrameView.widthAnchor.constraint(equalToConstant: 128),
+            avatarFrameView.heightAnchor.constraint(equalToConstant: 128),
 
-            placeholderView.centerXAnchor.constraint(equalTo: frame.centerXAnchor),
-            placeholderView.centerYAnchor.constraint(equalTo: frame.centerYAnchor),
+            placeholderView.centerXAnchor.constraint(equalTo: avatarFrameView.centerXAnchor),
+            placeholderView.centerYAnchor.constraint(equalTo: avatarFrameView.centerYAnchor),
             placeholderView.widthAnchor.constraint(equalToConstant: 56),
             placeholderView.heightAnchor.constraint(equalToConstant: 56),
 
-            thumbnail.topAnchor.constraint(equalTo: frame.topAnchor),
-            thumbnail.leadingAnchor.constraint(equalTo: frame.leadingAnchor),
-            thumbnail.trailingAnchor.constraint(equalTo: frame.trailingAnchor),
-            thumbnail.bottomAnchor.constraint(equalTo: frame.bottomAnchor),
+            thumbnail.topAnchor.constraint(equalTo: avatarFrameView.topAnchor),
+            thumbnail.leadingAnchor.constraint(equalTo: avatarFrameView.leadingAnchor),
+            thumbnail.trailingAnchor.constraint(equalTo: avatarFrameView.trailingAnchor),
+            thumbnail.bottomAnchor.constraint(equalTo: avatarFrameView.bottomAnchor),
 
             // Buttons below the frame, sm gap.
-            buttonRow.topAnchor.constraint(equalTo: frame.bottomAnchor, constant: DesignTokens.Spacing.sm),
+            buttonRow.topAnchor.constraint(equalTo: avatarFrameView.bottomAnchor, constant: DesignTokens.Spacing.sm),
             buttonRow.centerXAnchor.constraint(equalTo: centerXAnchor),
 
             // Format hint below buttons, xs gap.
@@ -241,14 +240,22 @@ final class AvatarControl: NSView {
     }
 
     private func animateBorder(toAccent: Bool) {
-        guard let frameLayer = subviews.first?.layer else { return }
-        let target = toAccent ? DesignTokens.Foreground.accent.cgColor : NSColor.separatorColor.cgColor
+        // Drive the appearance-aware property so light/dark mode flips
+        // remain correct after a drag-over animation. CABasicAnimation
+        // takes a snapshot CGColor for the animation duration; the final
+        // value is set via the AppearanceAwareLayerView setter so a
+        // subsequent system flip still re-resolves correctly.
+        let targetColor: NSColor = toAccent ? DesignTokens.Foreground.accent : NSColor.separatorColor
+        var snapshot = targetColor.cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            snapshot = targetColor.cgColor
+        }
         let anim = CABasicAnimation(keyPath: "borderColor")
-        anim.fromValue = frameLayer.borderColor
-        anim.toValue = target
+        anim.fromValue = avatarFrameView.layer?.borderColor
+        anim.toValue = snapshot
         anim.duration = DesignTokens.Motion.hoverFade
-        frameLayer.add(anim, forKey: "borderColor")
-        frameLayer.borderColor = target
+        avatarFrameView.layer?.add(anim, forKey: "borderColor")
+        avatarFrameView.borderColor = targetColor
     }
 }
 

@@ -33,7 +33,7 @@ System font is **SF Pro** (the macOS default — `NSFont.systemFont(ofSize:)`). 
 | `headline` | 13 | **Semibold** | Field labels, list-row primary text, table column headers. |
 | `body` | 13 | Regular | Default body text. Field input. Multi-line content. |
 | `callout` | 12 | Regular | Inline annotations next to body text. |
-| `subheadline` | 11 | Regular | Field hint text below input, secondary metadata. |
+| `subheadline` | 11 | Regular | Field hint text below input (paired with `secondary` color, not `tertiary`), secondary metadata. |
 | `footnote` | 10 | Regular | Tertiary text. Disabled-state captions. |
 | `caption1` | 10 | Regular | Smallest visible text. Avatar captions, tag pills. |
 
@@ -74,10 +74,12 @@ Use **system** semantic colors, never raw hex. The app should adapt automaticall
 
 | Use | Token |
 |---|---|
-| Primary text | `NSColor.labelColor` |
-| Field labels, secondary metadata | `NSColor.secondaryLabelColor` |
-| Placeholder, hint text | `NSColor.tertiaryLabelColor` |
+| Primary text (field input, body) | `NSColor.labelColor` |
+| Field labels, secondary metadata, **hint text below a field** | `NSColor.secondaryLabelColor` |
+| **Placeholder text *inside* an empty field**, low-priority captions | `NSColor.tertiaryLabelColor` |
 | Disabled | `NSColor.quaternaryLabelColor` |
+
+Hint text below a field is **explanatory copy the user reads**, not a temporary stand-in — `tertiaryLabelColor` is too dim at 11pt subheadline (especially in light mode). Reserve `tertiaryLabelColor` for the text *inside* an empty input field that disappears on first keystroke. This was a §5.3a smoke-test correction; the original draft conflated the two.
 | Primary action (button title), focused field outline, selected list row | `NSColor.controlAccentColor` |
 | Destructive action | `NSColor.systemRed` |
 | Warning chip (refusal-detected, depth_prompt-not-routed) | `NSColor.systemYellow` |

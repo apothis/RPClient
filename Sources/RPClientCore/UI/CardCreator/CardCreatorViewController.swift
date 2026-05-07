@@ -31,10 +31,12 @@ final class CardCreatorViewController: NSViewController {
     required init?(coder: NSCoder) { fatalError() }
 
     override func loadView() {
+        // No explicit layer.backgroundColor — NSWindow paints its
+        // contentView with windowBackgroundColor automatically and tracks
+        // appearance changes. Setting the layer here would freeze a
+        // light-mode CGColor and not flip on the system mode switch.
         let root = NSView()
         root.translatesAutoresizingMaskIntoConstraints = false
-        root.wantsLayer = true
-        root.layer?.backgroundColor = DesignTokens.Background.window.cgColor
         self.view = root
 
         buildHeader(in: root)
@@ -220,9 +222,11 @@ final class CardCreatorViewController: NSViewController {
     // MARK: - Actions
 
     @objc private func saveClicked() {
-        let id = draft.flush(storage: Storage.shared)
+        // Route through AppStateCardStorage (not Storage.shared directly) so
+        // AppState.saveCharacter updates the in-memory cache + posts
+        // charactersChanged. Library refresh depends on the cache update.
+        let id = draft.flush(storage: AppStateCardStorage())
         DebugLog.shared.write("cardcreator: save \(id) name=\(draft.character.name)")
-        NotificationCenter.default.post(name: AppNotification.charactersChanged, object: nil)
         onSave?(id)
     }
 

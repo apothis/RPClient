@@ -157,3 +157,21 @@ extension Storage: CardStorage {
         try? FileManager.default.removeItem(at: characterAvatarURL(id))
     }
 }
+
+/// Production conformance — routes `saveCharacter` through
+/// `AppState.shared.saveCharacter(_:)` so the in-memory `characters` cache
+/// stays in sync (and the Library window's `charactersChanged` listener
+/// fires). Direct calls to `Storage.shared.saveCharacter` would only write
+/// to disk; the cache wouldn't update until next launch — see §5.3a smoke
+/// regression. Tests still use `Storage` (or a stub) for pure-logic coverage.
+struct AppStateCardStorage: CardStorage {
+    func saveCharacter(_ c: Character) {
+        AppState.shared.saveCharacter(c)
+    }
+    func writeCharacterAvatar(_ data: Data, for id: UUID) {
+        Storage.shared.writeCharacterAvatar(data, for: id)
+    }
+    func deleteCharacterAvatarFile(for id: UUID) {
+        Storage.shared.deleteCharacterAvatarFile(for: id)
+    }
+}

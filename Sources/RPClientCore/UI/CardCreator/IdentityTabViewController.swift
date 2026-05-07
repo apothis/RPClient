@@ -144,7 +144,7 @@ final class IdentityTabViewController: NSViewController {
         if let hint = hint {
             let hintView = NSTextField(labelWithString: hint)
             hintView.font = DesignTokens.Typography.subheadline
-            hintView.textColor = DesignTokens.Foreground.tertiary
+            hintView.textColor = DesignTokens.Foreground.secondary
             hintView.lineBreakMode = .byWordWrapping
             hintView.maximumNumberOfLines = 2
             hintView.translatesAutoresizingMaskIntoConstraints = false
@@ -173,20 +173,16 @@ final class IdentityTabViewController: NSViewController {
         pill.font = DesignTokens.Typography.caption2
         pill.textColor = DesignTokens.Foreground.secondary
         pill.translatesAutoresizingMaskIntoConstraints = false
-        pill.wantsLayer = true
-        pill.layer?.backgroundColor = DesignTokens.Background.group.cgColor
-        pill.layer?.cornerRadius = DesignTokens.Radius.chip
-        pill.layer?.cornerCurve = .continuous
+        pill.drawsBackground = false
 
         // Inset the text via a wrapping container so the pill has padding.
-        let wrap = NSView()
+        // Use AppearanceAwareLayerView so the chip background tracks
+        // light/dark/accent flips.
+        let wrap = AppearanceAwareLayerView()
         wrap.translatesAutoresizingMaskIntoConstraints = false
-        wrap.wantsLayer = true
-        wrap.layer?.backgroundColor = DesignTokens.Background.group.cgColor
-        wrap.layer?.cornerRadius = DesignTokens.Radius.chip
-        wrap.layer?.cornerCurve = .continuous
+        wrap.backgroundColor = DesignTokens.Background.group
+        wrap.cornerRadiusValue = DesignTokens.Radius.chip
         wrap.addSubview(pill)
-        pill.layer?.backgroundColor = NSColor.clear.cgColor
         NSLayoutConstraint.activate([
             pill.leadingAnchor.constraint(equalTo: wrap.leadingAnchor, constant: 6),
             pill.trailingAnchor.constraint(equalTo: wrap.trailingAnchor, constant: -6),
