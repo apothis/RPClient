@@ -366,12 +366,16 @@ Intimacy tab (between Persona and Greetings):
 
 | Field | Shape | Maps to fence key |
 |---|---|---|
-| Body | Multi-line — explicit physical traits, NSFW-specific | `body` |
-| Sensitivities | Multi-line — physical sensitivities | `sensitivities` |
+| Build | Multi-line — overall shape, height, weight, body type, athleticism | `build` |
+| Anatomy | Multi-line — explicit physical / sexual anatomy | `anatomy` |
+| Markings | Multi-line — tattoos, scars, piercings, distinguishing features | `markings` |
+| Sensitivities | Multi-line — where they're ticklish, what arouses | `sensitivities` |
 | Scent | Multi-line — what they smell like | `scent` |
 | Turn-ons | Multi-line — list-style, what arouses | `turn_ons` |
-| Kinks | Multi-line — specific fetishes | `kinks` |
+| Kinks | Multi-line — specific fetishes / preferences | `kinks` |
 | Limits | Multi-line — hard nos, dislikes | `limits` |
+
+The single-`body` shape was replaced by the `build` / `anatomy` / `markings` triad during §5.3c.2 smoke pass — splitting gives AI-assist (§5.4) narrower targets to draft and lets authors pick which axes matter for a given card. `CardIntimacy.fromJSONValue` and `parseIntimacy` migrate any legacy `body` key into `anatomy` so existing on-disk records repopulate without manual fixup.
 
 Each field gets bundled NSFW-realistic placeholder examples (not graphic; example shape illustrates the expected register).
 
@@ -388,7 +392,9 @@ Source of truth: `extensions["rpclient/details"]` and `extensions["rpclient/inti
     "appearance": "tall, lean, copper braid…"
   },
   "rpclient/intimacy": {
-    "body": "small chest, faint freckles…",
+    "build": "lean, runner's frame",
+    "anatomy": "small chest, freckled shoulders, narrow hips",
+    "markings": "dragon tattoo on left shoulder",
     "turn_ons": "praise, slow build",
     "limits": "nothing involving family roles"
   }
@@ -408,7 +414,9 @@ appearance: tall, lean, copper braid down her back
 [/character_details]
 
 [character_intimacy]
-body: small chest, faint freckles, sensitive at the nape
+build: lean, runner's frame
+anatomy: small chest, freckled shoulders, narrow hips
+markings: dragon tattoo on left shoulder
 turn_ons: praise, being read to, slow build
 limits: nothing involving family roles
 [/character_intimacy]
@@ -481,10 +489,12 @@ details.species      ←  tags
 details.orientation  ←  tags, details.species
 details.appearance   ←  name, tags, details.species, details.age
 details.mood         ←  name, personality, tags
-intimacy.body        ←  details.species, details.age, tags
-intimacy.sensitivities ← intimacy.body, tags
-intimacy.scent       ←  details.species, intimacy.body, tags
-intimacy.turn_ons    ←  personality, tags, intimacy.body
+intimacy.build       ←  details.species, details.age, tags
+intimacy.anatomy     ←  details.species, details.age, intimacy.build, tags
+intimacy.markings    ←  intimacy.build, tags
+intimacy.sensitivities ← intimacy.anatomy, tags
+intimacy.scent       ←  details.species, intimacy.build, tags
+intimacy.turn_ons    ←  personality, tags, intimacy.anatomy
 intimacy.kinks       ←  tags, intimacy.turn_ons
 intimacy.limits      ←  (cold-start; explicit author intent)
 ```

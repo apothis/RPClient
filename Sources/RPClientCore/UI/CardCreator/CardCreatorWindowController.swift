@@ -91,7 +91,7 @@ final class CardCreatorWindowController: NSWindowController, NSWindowDelegate {
                   event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
                   let chars = event.charactersIgnoringModifiers,
                   let digit = Int(chars),
-                  digit >= 1 && digit <= 7 else {
+                  digit >= 1 && digit <= 9 else {
                 return event
             }
             self.viewController.selectTab(at: digit - 1)

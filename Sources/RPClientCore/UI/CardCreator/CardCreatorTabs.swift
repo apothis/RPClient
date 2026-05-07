@@ -58,6 +58,239 @@ private func makeScrollingTab(fields: [NSView]) -> NSView {
     return wrapper
 }
 
+// MARK: - DetailsTabViewController (§5.3c.2)
+
+/// Details tab — RPClient-structured identity-and-appearance fields per §3.9.
+/// Six fields: Age, Pronouns, Species, Orientation (single-line), then
+/// Appearance and Mood (multi-line). All optional. Saved to
+/// `extensions["rpclient/details"]` and auto-folded into a fenced
+/// `[character_details]` block at the start of `description` on save.
+final class DetailsTabViewController: NSViewController {
+    private let draft: CharacterDraft
+    private let onDirty: () -> Void
+
+    private let ageField: SingleLineFieldView
+    private let pronounsField: SingleLineFieldView
+    private let speciesField: SingleLineFieldView
+    private let orientationField: SingleLineFieldView
+    private let appearanceField: MultilineFieldView
+    private let moodField: MultilineFieldView
+
+    init(draft: CharacterDraft, onDirty: @escaping () -> Void) {
+        self.draft = draft
+        self.onDirty = onDirty
+        // Resolution order:
+        //   1. extensions["rpclient/details"] (RPClient-edited cards, source of truth)
+        //   2. parse fence in description (cards from other tools, or hand-edited)
+        //   3. empty
+        // If extensions were absent but the fence was present, eagerly mirror
+        // the parsed values back into extensions so a save without edits
+        // doesn't strip the fence.
+        var seed = CardDetails()
+        if let fromExt = CardDetails.extractFrom(draft.character) {
+            seed = fromExt
+        } else if let fromFence = CardStructuredFence.parseDetails(in: draft.character.description) {
+            seed = fromFence
+            seed.applyTo(&draft.character)
+        }
+        let d = seed
+
+        self.ageField = SingleLineFieldView(label: "Age", initialValue: d.age, placeholder: CardCreatorPlaceholders.detailsAge)
+        self.pronounsField = SingleLineFieldView(label: "Pronouns", initialValue: d.pronouns, placeholder: CardCreatorPlaceholders.detailsPronouns)
+        self.speciesField = SingleLineFieldView(label: "Species", initialValue: d.species, placeholder: CardCreatorPlaceholders.detailsSpecies)
+        self.orientationField = SingleLineFieldView(label: "Orientation", initialValue: d.orientation, placeholder: CardCreatorPlaceholders.detailsOrientation)
+        self.appearanceField = MultilineFieldView(
+            label: "Appearance",
+            initialValue: d.appearance,
+            hint: "Height, build, hair, eyes, skin, clothing — what they look like.",
+            placeholder: CardCreatorPlaceholders.detailsAppearance,
+            minHeight: 80,
+            maxHeight: 220
+        )
+        self.moodField = MultilineFieldView(
+            label: "Mood",
+            initialValue: d.mood,
+            hint: "Default emotional state, baseline temperament. Distinct from Personality (behavior).",
+            placeholder: CardCreatorPlaceholders.detailsMood,
+            minHeight: 64,
+            maxHeight: 180
+        )
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        ageField.onChange = { [weak self] _ in self?.commit() }
+        pronounsField.onChange = { [weak self] _ in self?.commit() }
+        speciesField.onChange = { [weak self] _ in self?.commit() }
+        orientationField.onChange = { [weak self] _ in self?.commit() }
+        appearanceField.onChange = { [weak self] _ in self?.commit() }
+        moodField.onChange = { [weak self] _ in self?.commit() }
+
+        // Two columns of single-line identity fields (compact at top), then
+        // the two multi-line fields full-width below.
+        let identityRow1 = NSStackView(views: [ageField, pronounsField])
+        identityRow1.orientation = .horizontal
+        identityRow1.alignment = .top
+        identityRow1.spacing = DesignTokens.Spacing.md
+        identityRow1.distribution = .fillEqually
+        identityRow1.translatesAutoresizingMaskIntoConstraints = false
+
+        let identityRow2 = NSStackView(views: [speciesField, orientationField])
+        identityRow2.orientation = .horizontal
+        identityRow2.alignment = .top
+        identityRow2.spacing = DesignTokens.Spacing.md
+        identityRow2.distribution = .fillEqually
+        identityRow2.translatesAutoresizingMaskIntoConstraints = false
+
+        self.view = makeScrollingTab(fields: [
+            identityRow1, identityRow2, appearanceField, moodField,
+        ])
+    }
+
+    private func commit() {
+        let d = CardDetails(
+            age: ageField.stringValue,
+            pronouns: pronounsField.stringValue,
+            species: speciesField.stringValue,
+            orientation: orientationField.stringValue,
+            appearance: appearanceField.stringValue,
+            mood: moodField.stringValue
+        )
+        d.applyTo(&draft.character)
+        draft.markDirty()
+        onDirty()
+    }
+}
+
+// MARK: - IntimacyTabViewController (§5.3c.2)
+
+/// Intimacy tab — RPClient-structured NSFW-aware fields per §3.9. Six
+/// multi-line fields: Body, Sensitivities, Scent, Turn-ons, Kinks,
+/// Limits. All optional. Saved to `extensions["rpclient/intimacy"]` and
+/// auto-folded into a fenced `[character_intimacy]` block in
+/// `description` on save.
+final class IntimacyTabViewController: NSViewController {
+    private let draft: CharacterDraft
+    private let onDirty: () -> Void
+
+    private let buildField: MultilineFieldView
+    private let anatomyField: MultilineFieldView
+    private let markingsField: MultilineFieldView
+    private let sensitivitiesField: MultilineFieldView
+    private let scentField: MultilineFieldView
+    private let turnOnsField: MultilineFieldView
+    private let kinksField: MultilineFieldView
+    private let limitsField: MultilineFieldView
+
+    init(draft: CharacterDraft, onDirty: @escaping () -> Void) {
+        self.draft = draft
+        self.onDirty = onDirty
+        // Same resolution + eager-mirror as DetailsTab.
+        var seed = CardIntimacy()
+        if let fromExt = CardIntimacy.extractFrom(draft.character) {
+            seed = fromExt
+        } else if let fromFence = CardStructuredFence.parseIntimacy(in: draft.character.description) {
+            seed = fromFence
+            seed.applyTo(&draft.character)
+        }
+        let i = seed
+
+        self.buildField = MultilineFieldView(
+            label: "Build",
+            initialValue: i.build,
+            hint: "Overall shape, height, weight, body type, athleticism.",
+            placeholder: CardCreatorPlaceholders.intimacyBuild,
+            minHeight: 64, maxHeight: 160
+        )
+        self.anatomyField = MultilineFieldView(
+            label: "Anatomy",
+            initialValue: i.anatomy,
+            hint: "Explicit physical / sexual anatomy — chest, genitals, hips, sensitive areas.",
+            placeholder: CardCreatorPlaceholders.intimacyAnatomy,
+            minHeight: 80, maxHeight: 200
+        )
+        self.markingsField = MultilineFieldView(
+            label: "Markings",
+            initialValue: i.markings,
+            hint: "Tattoos, scars, piercings, distinguishing features.",
+            placeholder: CardCreatorPlaceholders.intimacyMarkings,
+            minHeight: 64, maxHeight: 160
+        )
+        self.sensitivitiesField = MultilineFieldView(
+            label: "Sensitivities",
+            initialValue: i.sensitivities,
+            hint: "Where they're ticklish, what arouses, neural-hot spots.",
+            placeholder: CardCreatorPlaceholders.intimacySensitivities,
+            minHeight: 64, maxHeight: 160
+        )
+        self.scentField = MultilineFieldView(
+            label: "Scent",
+            initialValue: i.scent,
+            hint: "What they smell like; scent associations.",
+            placeholder: CardCreatorPlaceholders.intimacyScent,
+            minHeight: 64, maxHeight: 140
+        )
+        self.turnOnsField = MultilineFieldView(
+            label: "Turn-ons",
+            initialValue: i.turnOns,
+            hint: "What arouses them. Often list-style.",
+            placeholder: CardCreatorPlaceholders.intimacyTurnOns,
+            minHeight: 80, maxHeight: 200
+        )
+        self.kinksField = MultilineFieldView(
+            label: "Kinks",
+            initialValue: i.kinks,
+            hint: "Specific fetishes / preferences. Distinct from broader Turn-ons.",
+            placeholder: CardCreatorPlaceholders.intimacyKinks,
+            minHeight: 80, maxHeight: 200
+        )
+        self.limitsField = MultilineFieldView(
+            label: "Limits",
+            initialValue: i.limits,
+            hint: "Hard nos, dislikes. AI-assist deliberately doesn't infer these — author intent.",
+            placeholder: CardCreatorPlaceholders.intimacyLimits,
+            minHeight: 64, maxHeight: 160
+        )
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        buildField.onChange = { [weak self] _ in self?.commit() }
+        anatomyField.onChange = { [weak self] _ in self?.commit() }
+        markingsField.onChange = { [weak self] _ in self?.commit() }
+        sensitivitiesField.onChange = { [weak self] _ in self?.commit() }
+        scentField.onChange = { [weak self] _ in self?.commit() }
+        turnOnsField.onChange = { [weak self] _ in self?.commit() }
+        kinksField.onChange = { [weak self] _ in self?.commit() }
+        limitsField.onChange = { [weak self] _ in self?.commit() }
+
+        self.view = makeScrollingTab(fields: [
+            buildField, anatomyField, markingsField, sensitivitiesField,
+            scentField, turnOnsField, kinksField, limitsField,
+        ])
+    }
+
+    private func commit() {
+        let i = CardIntimacy(
+            build: buildField.stringValue,
+            anatomy: anatomyField.stringValue,
+            markings: markingsField.stringValue,
+            sensitivities: sensitivitiesField.stringValue,
+            scent: scentField.stringValue,
+            turnOns: turnOnsField.stringValue,
+            kinks: kinksField.stringValue,
+            limits: limitsField.stringValue
+        )
+        i.applyTo(&draft.character)
+        draft.markDirty()
+        onDirty()
+    }
+}
+
 // MARK: - PersonaTabViewController (§5.3b)
 
 /// Persona tab — description / personality / scenario. Three multi-line
@@ -76,17 +309,20 @@ final class PersonaTabViewController: NSViewController {
         self.descriptionField = MultilineFieldView(
             label: "Description",
             initialValue: draft.character.description,
-            hint: "Background, appearance, role. Reaches the prompt as part of the read-only memory prefix."
+            hint: "Background, role, hooks. Reaches the prompt as part of the read-only memory prefix.",
+            placeholder: CardCreatorPlaceholders.personaDescription
         )
         self.personalityField = MultilineFieldView(
             label: "Personality",
             initialValue: draft.character.personality,
-            hint: "Disposition, tone, mannerisms. Often a list of traits."
+            hint: "Disposition, tone, mannerisms. Often a list of traits.",
+            placeholder: CardCreatorPlaceholders.personaPersonality
         )
         self.scenarioField = MultilineFieldView(
             label: "Scenario",
             initialValue: draft.character.scenario,
-            hint: "The setting at the moment the chat begins. {{user}} expands to the active persona."
+            hint: "The setting at the moment the chat begins. {{user}} expands to the active persona.",
+            placeholder: CardCreatorPlaceholders.personaScenario
         )
         super.init(nibName: nil, bundle: nil)
     }
@@ -133,7 +369,8 @@ final class GreetingsTabViewController: NSViewController {
         self.firstMessageField = MultilineFieldView(
             label: "First message",
             initialValue: draft.character.firstMessage,
-            hint: "The character's opening line. Seeded as turn 0 when a new chat is created."
+            hint: "The character's opening line. Seeded as turn 0 when a new chat is created.",
+            placeholder: CardCreatorPlaceholders.greetingsFirstMessage
         )
         self.alternateGreetingsEditor = GreetingListEditor(
             label: "Alternate greetings",
@@ -197,7 +434,8 @@ final class ExamplesTabViewController: NSViewController {
         self.exampleField = MultilineFieldView(
             label: "Example dialogue",
             initialValue: draft.character.messageExample,
-            hint: "Few-shot example exchanges. Helps the model match the character's voice."
+            hint: "Few-shot example exchanges. Helps the model match the character's voice.",
+            placeholder: CardCreatorPlaceholders.exampleDialogue
         )
         super.init(nibName: nil, bundle: nil)
     }
@@ -249,6 +487,14 @@ final class ExamplesTabViewController: NSViewController {
         refreshRestoreVisibility()
     }
 
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        // Re-check visibility on every tab activation — the description
+        // that gates the §3.5 affordance is edited on a different tab
+        // (Persona), so the Examples tab can't rely on its own onChange.
+        refreshRestoreVisibility()
+    }
+
     private func refreshRestoreVisibility() {
         let shouldShow = !dismissed
             && draft.character.messageExample.isEmpty
@@ -295,19 +541,22 @@ final class SystemTabViewController: NSViewController {
         self.systemPromptField = MultilineFieldView(
             label: "System prompt",
             initialValue: draft.character.systemPrompt ?? "",
-            hint: "Replaces the user's default system prompt. Use {{original}} to layer instead of replace."
+            hint: "Replaces the user's default system prompt. Use {{original}} to layer instead of replace.",
+            placeholder: CardCreatorPlaceholders.systemPrompt
         )
         self.postHistoryField = MultilineFieldView(
             label: "Post-history instructions",
             initialValue: draft.character.postHistoryInstructions ?? "",
-            hint: "Injected after history, near the response. Often used for tone or content-permission framing."
+            hint: "Injected after history, near the response. Often used for tone or content-permission framing.",
+            placeholder: CardCreatorPlaceholders.postHistoryInstructions
         )
         let extracted = DepthPrompt.extractFrom(draft.character)
         self.depthPromptControl = DepthPromptControl(initial: extracted)
         self.creatorNotesField = MultilineFieldView(
             label: "Creator notes",
             initialValue: draft.character.creatorNotes ?? "",
-            hint: "Display only — never reaches the prompt. Trigger warnings, kink list, content rating."
+            hint: "Display only — never reaches the prompt. Trigger warnings, kink list, content rating.",
+            placeholder: CardCreatorPlaceholders.creatorNotes
         )
         super.init(nibName: nil, bundle: nil)
     }

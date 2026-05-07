@@ -107,11 +107,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: "N"))
         fileMenu.addItem(NSMenuItem.separator())
         // Phase 9 §5.3a — Card Creator entry point. Full menu treatment
-        // (Edit Card…, Import & Edit Card…, plus Library integration) lands
-        // in §5.3d.
+        // (Import & Edit Card…, plus Library integration) lands in §5.3d.
         fileMenu.addItem(NSMenuItem(
             title: "New Character…",
             action: #selector(showCardCreator),
+            keyEquivalent: ""))
+        fileMenu.addItem(NSMenuItem(
+            title: "Edit Card…",
+            action: #selector(showCardEditPicker),
             keyEquivalent: ""))
         fileMenu.addItem(NSMenuItem(
             title: "Import Character…",
@@ -292,11 +295,38 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showCardCreator() {
-        let wc = CardCreatorWindowController()
+        openCardCreator(.init())
+    }
+
+    @objc private func showCardEditPicker() {
+        // Phase 9 §5.3c.2 smoke entry point — temporary until §5.3d wires
+        // the Library "Edit Card…" surface. Lists the in-memory characters
+        // and opens the picked one in the creator's edit mode so the
+        // bidirectional Details / Intimacy sync can be exercised.
+        let chars = AppState.shared.characters
+        guard !chars.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "No characters yet"
+            alert.informativeText = "Create one via File → New Character… first."
+            alert.runModal()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Edit which card?"
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        for c in chars { popup.addItem(withTitle: c.name) }
+        alert.accessoryView = popup
+        alert.addButton(withTitle: "Edit")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let picked = chars[popup.indexOfSelectedItem]
+        openCardCreator(.init(editing: picked))
+    }
+
+    private func openCardCreator(_ wc: CardCreatorWindowController) {
         cardCreatorWCs.append(wc)
         wc.showWindow(nil)
         wc.window?.makeKeyAndOrderFront(nil)
-        // Drop the reference when the window closes so the controller deinits.
         NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification,
             object: wc.window,

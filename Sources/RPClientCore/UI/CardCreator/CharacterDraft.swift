@@ -77,10 +77,27 @@ final class CharacterDraft {
 
     // MARK: - Persistence
 
+    /// Re-render the structured Details + Intimacy fence blocks into
+    /// `character.description` so the prompt-builder sees them. Called
+    /// just before `flush` writes to disk. Reads the live data from
+    /// `extensions["rpclient/details"]` and `extensions["rpclient/intimacy"]`,
+    /// merges them into the existing description (replacing any stale
+    /// fences). Idempotent — safe to call repeatedly.
+    func prepareForSave() {
+        let details = CardDetails.extractFrom(character)
+        let intimacy = CardIntimacy.extractFrom(character)
+        character.description = CardStructuredFence.mergeIntoDescription(
+            character.description,
+            details: details,
+            intimacy: intimacy
+        )
+    }
+
     /// Persist the draft. Returns the saved `Character.id` (newly-minted on
     /// `.created` / `.importing`, preserved on `.editing`).
     @discardableResult
     func flush(storage: CardStorage) -> UUID {
+        prepareForSave()
         let id: UUID
         switch origin {
         case .created, .importing:

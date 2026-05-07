@@ -223,6 +223,25 @@ private final class GreetingRowView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     private func buildUI(initialValue: String) {
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .bezelBorder
+
+        // Canonical NSTextView-in-NSScrollView setup — see MultilineFieldView
+        // for the long-form rationale. Without these, the textView's frame
+        // can extend beyond the scrollView clip and intercept clicks
+        // intended for sibling rows.
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         textView.font = DesignTokens.Typography.body
         textView.textColor = DesignTokens.Foreground.primary
         textView.isEditable = true
@@ -231,13 +250,8 @@ private final class GreetingRowView: NSView {
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.string = initialValue
         textView.delegate = self
-        textView.translatesAutoresizingMaskIntoConstraints = false
         textView.textContainerInset = NSSize(width: 4, height: 6)
 
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.hasVerticalScroller = true
-        scrollView.autohidesScrollers = true
-        scrollView.borderType = .bezelBorder
         scrollView.documentView = textView
 
         addSubview(scrollView)
@@ -359,7 +373,9 @@ private final class GreetingRowView: NSView {
 
 extension GreetingRowView: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
-        recalculateHeight()
         editor?.updateRow(at: index, to: textView.string)
+        DispatchQueue.main.async { [weak self] in
+            self?.recalculateHeight()
+        }
     }
 }

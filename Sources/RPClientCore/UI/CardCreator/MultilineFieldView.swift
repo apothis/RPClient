@@ -12,6 +12,42 @@ import AppKit
 /// authors a comfortable reading window without occupying the whole tab
 /// when the field is short. Width target is 480pt: roughly 80 chars at
 /// 13pt body, the readable-prose sweet spot.
+/// NSTextView subclass that renders a placeholder string when empty.
+/// AppKit doesn't ship a native multiline placeholder so we draw it
+/// directly. Refreshes on string changes; styled per V2_DESIGN_LANGUAGE
+/// §4 (`tertiaryLabelColor` for placeholder-inside-empty-field).
+final class PlaceholderTextView: NSTextView {
+    var placeholderString: String = "" {
+        didSet { needsDisplay = true }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty, !placeholderString.isEmpty else { return }
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font ?? NSFont.systemFont(ofSize: 13),
+            .foregroundColor: NSColor.placeholderTextColor,
+        ]
+        let inset = textContainerInset
+        let origin = NSPoint(x: inset.width + 5, y: inset.height)
+        let bounds = self.bounds
+        let drawRect = NSRect(
+            x: origin.x,
+            y: origin.y,
+            width: bounds.width - origin.x * 2,
+            height: bounds.height - origin.y * 2
+        )
+        (placeholderString as NSString).draw(in: drawRect, withAttributes: attrs)
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        // The placeholder shows when string is empty; redraw when content
+        // changes so toggling on / off is immediate.
+        needsDisplay = true
+    }
+}
+
 final class MultilineFieldView: NSView {
 
     var onChange: ((String) -> Void)?
@@ -19,7 +55,7 @@ final class MultilineFieldView: NSView {
     private let labelView = NSTextField(labelWithString: "")
     private let v3PillContainer = NSView()
     private let scrollView = NSScrollView()
-    private let textView = NSTextView()
+    private let textView = PlaceholderTextView()
     private let hintView = NSTextField(labelWithString: "")
 
     private let label: String
@@ -74,36 +110,48 @@ final class MultilineFieldView: NSView {
         }
         addSubview(header)
 
-        // Text view + scroll view.
+        // Text view + scroll view — canonical NSScrollView-with-NSTextView
+        // setup. Without minSize/maxSize/autoresizingMask, the textView's
+        // frame can extend beyond the scrollView's visible bounds and
+        // intercept clicks intended for sibling views below it (the
+        // "click on Personality, type lands in Description" bug from the
+        // smoke pass). See AppKit/NSTextView Programming Guide.
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .bezelBorder
+        scrollView.drawsBackground = true
+
+        // textView uses springs/struts (the AppKit canonical pattern for
+        // documentViews); width tracks the scrollView, vertical grows with
+        // content, height is clipped to the scrollView's frame.
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         textView.font = DesignTokens.Typography.body
         textView.textColor = DesignTokens.Foreground.primary
         textView.isEditable = true
         textView.isRichText = false
         textView.usesFontPanel = false
-        textView.usesFindBar = true
         textView.allowsUndo = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
+        textView.textContainerInset = NSSize(width: 4, height: 6)
         textView.string = initialValue
         textView.delegate = self
-        textView.translatesAutoresizingMaskIntoConstraints = false
-        // Vertical insets so text doesn't sit flush against the top edge.
-        textView.textContainerInset = NSSize(width: 4, height: 6)
         if let placeholder = placeholder {
-            // NSTextView doesn't have a built-in placeholder — fake it
-            // with attributed text rendered as caret guidance. We'll
-            // leave it empty for now and revisit; placeholder glyph is
-            // out of scope for §5.3b.
-            _ = placeholder
+            textView.placeholderString = placeholder
         }
 
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.hasVerticalScroller = true
-        scrollView.autohidesScrollers = true
-        scrollView.borderType = .bezelBorder
         scrollView.documentView = textView
-        scrollView.drawsBackground = true
 
         // Bezel-style background — `textBackgroundColor` adapts.
         addSubview(scrollView)
@@ -181,15 +229,26 @@ final class MultilineFieldView: NSView {
         let used = layoutManager.usedRect(for: container)
         let inset = textView.textContainerInset.height * 2
         let target = max(minHeight, min(maxHeight, used.height + inset + 8))
-        if abs(heightConstraint.constant - target) > 0.5 {
+        let prev = heightConstraint.constant
+        if abs(prev - target) > 0.5 {
             heightConstraint.constant = target
+            DebugLog.shared.write("multilineField[\(label)]: recalc \(Int(prev))→\(Int(target)) (used=\(Int(used.height)))")
         }
     }
 }
 
 extension MultilineFieldView: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
-        recalculateHeight()
+        let len = textView.string.count
+        DebugLog.shared.write("multilineField[\(label)]: textDidChange len=\(len)")
         onChange?(textView.string)
+        // Defer to next runloop so the resize doesn't fight the layout pass
+        // that's still in flight from the paste/insert. Synchronous resize
+        // during text-change can prevent first-responder transitions
+        // (clicking another field becomes a no-op) and interleave layout
+        // cycles.
+        DispatchQueue.main.async { [weak self] in
+            self?.recalculateHeight()
+        }
     }
 }

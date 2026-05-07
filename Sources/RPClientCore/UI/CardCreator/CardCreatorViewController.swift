@@ -135,17 +135,20 @@ final class CardCreatorViewController: NSViewController {
     private func buildTabView(in root: NSView) {
         tabView.tabViewType = .topTabsBezelBorder
         tabView.translatesAutoresizingMaskIntoConstraints = false
+        tabView.delegate = self
 
         let onDirty: () -> Void = { [weak self] in self?.handleDirtyChanged() }
 
         addTab(IdentityTabViewController(draft: draft, onDirty: onDirty), label: "Identity")
+        addTab(DetailsTabViewController(draft: draft, onDirty: onDirty), label: "Details")
         addTab(PersonaTabViewController(draft: draft, onDirty: onDirty), label: "Persona")
+        addTab(IntimacyTabViewController(draft: draft, onDirty: onDirty), label: "Intimacy")
         addTab(GreetingsTabViewController(draft: draft, onDirty: onDirty), label: "Greetings")
         addTab(ExamplesTabViewController(draft: draft, onDirty: onDirty), label: "Examples")
         addTab(SystemTabViewController(draft: draft, onDirty: onDirty), label: "System")
 
-        addPlaceholderTab(label: "Lorebook", body: "Read-only summary of imported character_book — §5.3c.")
-        addPlaceholderTab(label: "Advanced", body: "Source, multilingual notes, extensions JSON viewer — §5.3c.")
+        addPlaceholderTab(label: "Lorebook", body: "Read-only summary of imported character_book — §5.3c.3.")
+        addPlaceholderTab(label: "Advanced", body: "Source, multilingual notes, extensions JSON viewer — §5.3c.4.")
 
         root.addSubview(tabView)
 
@@ -246,7 +249,21 @@ final class CardCreatorViewController: NSViewController {
 
     func selectTab(at index: Int) {
         guard index >= 0, index < tabView.numberOfTabViewItems else { return }
+        DebugLog.shared.write("cardcreator: selectTab \(index) (cmd-shortcut)")
         tabView.selectTabViewItem(at: index)
+    }
+}
+
+extension CardCreatorViewController: NSTabViewDelegate {
+    func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        DebugLog.shared.write("cardcreator: tabView didSelect \(tabViewItem?.label ?? "nil")")
+    }
+    func tabView(_ tabView: NSTabView, willSelect tabViewItem: NSTabViewItem?) {
+        DebugLog.shared.write("cardcreator: tabView willSelect \(tabViewItem?.label ?? "nil")")
+    }
+    func tabView(_ tabView: NSTabView, shouldSelect tabViewItem: NSTabViewItem?) -> Bool {
+        DebugLog.shared.write("cardcreator: tabView shouldSelect? \(tabViewItem?.label ?? "nil")")
+        return true
     }
 }
 
