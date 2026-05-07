@@ -79,14 +79,35 @@ func phase9dCardFieldGraphTests() -> TestSuite {
 
     // MARK: - Field+tags upstream — narrative fields
 
-    s.test("description depends on [name] + tags") {
+    s.test("description depends on [name] + tags + identity facts") {
         let upstreams = CardFieldDependencies.upstreams(for: .description)
         try expectTrue(upstreams.contains(.tags))
         try expectTrue(upstreams.contains(.field(.name)))
-        let fieldCount = upstreams.compactMap { u -> CardField? in
-            if case .field(let f) = u { return f } else { return nil }
-        }.count
-        try expectEqual(fieldCount, 1, "description should depend on [name]")
+        // The Identity-tab facts are universal upstreams for narrative
+        // fields — a 28-year-old's description should differ from a
+        // 450-year-old's even with identical name + tags.
+        try expectTrue(upstreams.contains(.field(.detailsAge)))
+        try expectTrue(upstreams.contains(.field(.detailsPronouns)))
+        try expectTrue(upstreams.contains(.field(.detailsSpecies)))
+        try expectTrue(upstreams.contains(.field(.detailsOrientation)))
+    }
+
+    s.test("identity facts (age/pronouns/species/orientation) are upstream of every narrative field") {
+        // Catches future regressions if anyone removes the
+        // identityFacts bundle from a case.
+        let narrativeFields: [CardField] = [
+            .description, .personality, .scenario,
+            .firstMessage, .messageExample,
+            .alternateGreetings, .groupOnlyGreetings,
+            .systemPrompt, .creatorNotes,
+        ]
+        for field in narrativeFields {
+            let upstreams = CardFieldDependencies.upstreams(for: field)
+            try expectTrue(upstreams.contains(.field(.detailsAge)),
+                "\(field.rawValue) should have detailsAge upstream")
+            try expectTrue(upstreams.contains(.field(.detailsSpecies)),
+                "\(field.rawValue) should have detailsSpecies upstream")
+        }
     }
 
     s.test("personality depends on [name, description] + tags") {

@@ -66,6 +66,18 @@ public enum CardFieldUpstream: Hashable, Sendable {
 /// The graph is acyclic — each field can only depend on fields that
 /// come before it in the natural authoring order. Tests enforce this.
 public enum CardFieldDependencies {
+    /// The four short Identity-tab facts (age / pronouns / species /
+    /// orientation). Treated as a universal upstream bundle for the
+    /// narrative fields below — the prompt builder skips empty values
+    /// per `CardDraftSnapshotBuilder`, so cards that haven't filled
+    /// these in just don't see them in the upstream block.
+    private static let identityFacts: [CardFieldUpstream] = [
+        .field(.detailsAge),
+        .field(.detailsPronouns),
+        .field(.detailsSpecies),
+        .field(.detailsOrientation),
+    ]
+
     public static func upstreams(for field: CardField) -> [CardFieldUpstream] {
         switch field {
 
@@ -93,11 +105,11 @@ public enum CardFieldDependencies {
         case .nickname:
             return [.field(.name)]
         case .description:
-            return [.field(.name), .tags]
+            return [.field(.name), .tags] + identityFacts
         case .personality:
-            return [.field(.name), .field(.description), .tags]
+            return [.field(.name), .field(.description), .tags] + identityFacts
         case .scenario:
-            return [.field(.name), .field(.description), .field(.personality), .tags]
+            return [.field(.name), .field(.description), .field(.personality), .tags] + identityFacts
 
         // MARK: - Voice
 
@@ -105,27 +117,27 @@ public enum CardFieldDependencies {
             return [
                 .field(.name), .field(.description), .field(.personality),
                 .field(.scenario), .tags,
-            ]
+            ] + identityFacts
         case .messageExample:
             return [
                 .field(.name), .field(.description), .field(.personality),
                 .tags,
-            ]
+            ] + identityFacts
         case .alternateGreetings:
             return [
                 .field(.firstMessage), .field(.scenario), .field(.personality),
                 .tags,
-            ]
+            ] + identityFacts
         case .groupOnlyGreetings:
             return [
                 .field(.firstMessage), .field(.name), .field(.description),
                 .tags,
-            ]
+            ] + identityFacts
 
         // MARK: - System / Notes
 
         case .systemPrompt:
-            return [.field(.name), .field(.description), .field(.personality), .tags]
+            return [.field(.name), .field(.description), .field(.personality), .tags] + identityFacts
         case .postHistoryInstructions:
             return [.field(.systemPrompt), .field(.scenario)]
         case .depthPrompt:
@@ -134,7 +146,7 @@ public enum CardFieldDependencies {
             return [
                 .field(.name), .field(.description), .field(.personality),
                 .field(.scenario), .tags,
-            ]
+            ] + identityFacts
 
         // MARK: - §3.9 Details
 
