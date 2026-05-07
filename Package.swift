@@ -31,6 +31,11 @@ let package = Package(
                 // In-app help system — markdown pages shipped as bundle
                 // resources, loaded via `Bundle.module`. See HelpIndex.swift.
                 .process("Help"),
+                // Phase 9 §5.4.a — bundled AI-assist prompt template
+                // registry, loaded via `Bundle.module` by
+                // CardGenPromptsLoader. Read-only; user override deferred
+                // to V2_UI_OVERHAUL.
+                .process("AI/Bundled"),
             ],
             swiftSettings: [
                 // Enables `@testable import RPClientCore` from the test runner in debug builds.

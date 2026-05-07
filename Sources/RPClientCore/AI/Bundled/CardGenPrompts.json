@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "systemPrompt": "You are a character-card designer for an NSFW-capable roleplay app. Be vivid, concrete, and in-character. Use {{user}} for the player and {{char}} for the character. Explicit content is allowed when the scene calls for it. Output only the requested field content — no preamble, no headings, no commentary, no quotation around the entire output.",
+  "candidateDefaults": {
+    "literal": {
+      "temperature": 0.5,
+      "maxTokens": 512,
+      "instruction": "Write the {humanName} for this character. Stay close to the upstream details verbatim — pick the most direct interpretation. Aim for {wordCount} words."
+    },
+    "creative": {
+      "temperature": 0.85,
+      "maxTokens": 512,
+      "instruction": "Write the {humanName} for this character. Lean into the genre signals from the tags; pick something distinctive and surprising. Aim for {wordCount} words."
+    },
+    "terse": {
+      "temperature": 0.4,
+      "maxTokens": 200,
+      "instruction": "Write the {humanName} for this character. Be punchy and short — scaffolding for the author to expand. {wordCount} words max."
+    }
+  },
+  "fields": {
+    "name": {
+      "humanName": "character name",
+      "wordCount": 2
+    },
+    "nickname": {
+      "humanName": "nickname",
+      "wordCount": 2
+    },
+    "description": {
+      "humanName": "description (background, role, current circumstances)",
+      "wordCount": 60
+    },
+    "personality": {
+      "humanName": "personality (traits, manner, what catches people off guard)",
+      "wordCount": 30
+    },
+    "scenario": {
+      "humanName": "opening scenario (the situation when {{user}} meets {{char}})",
+      "wordCount": 50
+    },
+    "first_message": {
+      "humanName": "first message ({{char}}'s opening line, third-person past actions in *italics*)",
+      "wordCount": 30
+    },
+    "message_example": {
+      "humanName": "example dialogue (two short exchanges in <START>...{{user}}...{{char}}... format)",
+      "wordCount": 60
+    },
+    "alternate_greetings": {
+      "humanName": "an alternate greeting (different tone from the first message)",
+      "wordCount": 30
+    },
+    "group_only_greetings": {
+      "humanName": "a group-chat-only greeting (acknowledges other speakers)",
+      "wordCount": 30
+    },
+    "system_prompt": {
+      "humanName": "system prompt (instructions to the model about how to portray {{char}})",
+      "wordCount": 30
+    },
+    "post_history_instructions": {
+      "humanName": "post-history instructions (a brief reminder injected after the conversation history)",
+      "wordCount": 20
+    },
+    "depth_prompt": {
+      "humanName": "depth prompt (a short note that lives N turns deep in the prompt)",
+      "wordCount": 15
+    },
+    "creator_notes": {
+      "humanName": "creator notes (NSFW posture, content warnings, recommended models)",
+      "wordCount": 25
+    },
+    "details_age": {
+      "humanName": "age (a number or short descriptor like 'mid-30s' or 'immortal')",
+      "wordCount": 2
+    },
+    "details_pronouns": {
+      "humanName": "pronouns (e.g. she/her, they/them)",
+      "wordCount": 2
+    },
+    "details_species": {
+      "humanName": "species (e.g. Human, Elf, Lamia, Synthetic)",
+      "wordCount": 2
+    },
+    "details_orientation": {
+      "humanName": "orientation (e.g. straight, queer, pansexual)",
+      "wordCount": 2
+    },
+    "details_appearance": {
+      "humanName": "appearance (height, build, skin/hair, signature dress)",
+      "wordCount": 30
+    },
+    "details_mood": {
+      "humanName": "mood / disposition (default emotional register, what shifts it)",
+      "wordCount": 25
+    },
+    "intimacy_build": {
+      "humanName": "build (body shape, frame, how {{char}} carries themselves)",
+      "wordCount": 25
+    },
+    "intimacy_anatomy": {
+      "humanName": "anatomy (concrete, vivid; non-human anatomy described frankly when applicable)",
+      "wordCount": 30
+    },
+    "intimacy_markings": {
+      "humanName": "markings (tattoos, scars, piercings, jewelry rarely removed)",
+      "wordCount": 25
+    },
+    "intimacy_sensitivities": {
+      "humanName": "sensitivities (places that get a strong reaction)",
+      "wordCount": 25
+    },
+    "intimacy_scent": {
+      "humanName": "scent (day/work scent vs. fresh-out-of-bath; intimate scent)",
+      "wordCount": 20
+    },
+    "intimacy_turn_ons": {
+      "humanName": "turn-ons (a short bullet list of 3-4 items)",
+      "wordCount": 30
+    },
+    "intimacy_kinks": {
+      "humanName": "kinks (a short bullet list of 3-4 items)",
+      "wordCount": 25
+    },
+    "intimacy_limits": {
+      "humanName": "limits (a short bullet list of 3-4 hard nos — neutral, not character-specific)",
+      "wordCount": 20
+    }
+  }
+}
