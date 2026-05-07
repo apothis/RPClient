@@ -56,12 +56,14 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate {
 
 final class CharactersTabViewController: NSViewController {
 
+    private let newCardButton = NSButton(title: "+ New Card", target: nil, action: nil)
     private let importButton = NSButton(title: "+ Import…", target: nil, action: nil)
     private let startChatButton = NSButton(title: "Start Chat", target: nil, action: nil)
+    private let editButton = NSButton(title: "Edit Card…", target: nil, action: nil)
     private let deleteButton = NSButton(title: "Delete", target: nil, action: nil)
     private let detailLabel = NSTextField(wrappingLabelWithString: "")
     private let scrollView = NSScrollView()
-    private let collectionView = NSCollectionView()
+    private let collectionView = LibraryCollectionView()
     private let layout = NSCollectionViewFlowLayout()
 
     private var items: [Character] = []
@@ -70,6 +72,11 @@ final class CharactersTabViewController: NSViewController {
         let v = NSView()
         v.wantsLayer = true
         self.view = v
+
+        newCardButton.target = self
+        newCardButton.action = #selector(newCard)
+        newCardButton.bezelStyle = .rounded
+        newCardButton.translatesAutoresizingMaskIntoConstraints = false
 
         importButton.target = self
         importButton.action = #selector(importCharacter)
@@ -81,6 +88,12 @@ final class CharactersTabViewController: NSViewController {
         startChatButton.bezelStyle = .rounded
         startChatButton.isEnabled = false
         startChatButton.translatesAutoresizingMaskIntoConstraints = false
+
+        editButton.target = self
+        editButton.action = #selector(editSelection)
+        editButton.bezelStyle = .rounded
+        editButton.isEnabled = false
+        editButton.translatesAutoresizingMaskIntoConstraints = false
 
         deleteButton.target = self
         deleteButton.action = #selector(deleteSelection)
@@ -106,28 +119,42 @@ final class CharactersTabViewController: NSViewController {
         collectionView.allowsMultipleSelection = false
         collectionView.backgroundColors = [.clear]
         collectionView.register(CharacterCardView.self, forItemWithIdentifier: CharacterCardView.reuseId)
+        collectionView.contextMenuProvider = { [weak self] indexPath in
+            self?.contextMenu(for: indexPath)
+        }
+        collectionView.doubleClickHandler = { [weak self] indexPath in
+            self?.openCreatorForCharacter(at: indexPath)
+        }
 
         scrollView.documentView = collectionView
         scrollView.hasVerticalScroller = true
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
+        v.addSubview(newCardButton)
         v.addSubview(importButton)
         v.addSubview(startChatButton)
+        v.addSubview(editButton)
         v.addSubview(deleteButton)
         v.addSubview(scrollView)
         v.addSubview(detailLabel)
 
         NSLayoutConstraint.activate([
-            importButton.topAnchor.constraint(equalTo: v.topAnchor, constant: 8),
-            importButton.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 8),
+            newCardButton.topAnchor.constraint(equalTo: v.topAnchor, constant: 8),
+            newCardButton.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 8),
 
-            startChatButton.centerYAnchor.constraint(equalTo: importButton.centerYAnchor),
+            importButton.centerYAnchor.constraint(equalTo: newCardButton.centerYAnchor),
+            importButton.leadingAnchor.constraint(equalTo: newCardButton.trailingAnchor, constant: 8),
+
+            startChatButton.centerYAnchor.constraint(equalTo: newCardButton.centerYAnchor),
             startChatButton.leadingAnchor.constraint(equalTo: importButton.trailingAnchor, constant: 8),
 
-            deleteButton.centerYAnchor.constraint(equalTo: importButton.centerYAnchor),
-            deleteButton.leadingAnchor.constraint(equalTo: startChatButton.trailingAnchor, constant: 8),
+            editButton.centerYAnchor.constraint(equalTo: newCardButton.centerYAnchor),
+            editButton.leadingAnchor.constraint(equalTo: startChatButton.trailingAnchor, constant: 8),
 
-            scrollView.topAnchor.constraint(equalTo: importButton.bottomAnchor, constant: 8),
+            deleteButton.centerYAnchor.constraint(equalTo: newCardButton.centerYAnchor),
+            deleteButton.leadingAnchor.constraint(equalTo: editButton.trailingAnchor, constant: 8),
+
+            scrollView.topAnchor.constraint(equalTo: newCardButton.bottomAnchor, constant: 8),
             scrollView.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 8),
             scrollView.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -8),
 
@@ -164,6 +191,7 @@ final class CharactersTabViewController: NSViewController {
     private func updateButtons() {
         let selected = selectedCharacter()
         startChatButton.isEnabled = selected != nil
+        editButton.isEnabled = selected != nil
         deleteButton.isEnabled = selected != nil
         if let c = selected {
             var lines: [String] = []
@@ -206,6 +234,87 @@ final class CharactersTabViewController: NSViewController {
         guard let c = selectedCharacter() else { return }
         AppState.shared.newChat(withCharacter: c)
         view.window?.close()
+    }
+
+    @objc private func newCard() {
+        // Phase 9 §5.3d.1 — open the Card Creator empty. Posts via the
+        // App-level helper so all creator windows are tracked in one place.
+        (NSApp.delegate as? AppDelegate)?.openNewCardCreator()
+    }
+
+    @objc fileprivate func editSelection() {
+        guard let c = selectedCharacter() else { return }
+        (NSApp.delegate as? AppDelegate)?.openEditCardCreator(for: c)
+    }
+
+    /// Open the creator on the character at `indexPath` in the collection
+    /// view. Used by the right-click context menu and double-click handler
+    /// so the targeted card is edited even if the current selection is
+    /// something else.
+    fileprivate func openCreatorForCharacter(at indexPath: IndexPath) {
+        guard indexPath.item < items.count else { return }
+        let c = items[indexPath.item]
+        (NSApp.delegate as? AppDelegate)?.openEditCardCreator(for: c)
+    }
+
+    /// Build the right-click context menu for the character at `indexPath`,
+    /// or a card-less menu when the user right-clicks on empty space.
+    fileprivate func contextMenu(for indexPath: IndexPath?) -> NSMenu {
+        let menu = NSMenu()
+        if let path = indexPath, path.item < items.count {
+            let c = items[path.item]
+            let edit = NSMenuItem(title: "Edit Card…", action: #selector(contextMenuEdit(_:)), keyEquivalent: "")
+            edit.target = self
+            edit.representedObject = c.id
+            menu.addItem(edit)
+
+            let chat = NSMenuItem(title: "Start Chat", action: #selector(contextMenuStartChat(_:)), keyEquivalent: "")
+            chat.target = self
+            chat.representedObject = c.id
+            menu.addItem(chat)
+
+            menu.addItem(.separator())
+
+            let del = NSMenuItem(title: "Delete…", action: #selector(contextMenuDelete(_:)), keyEquivalent: "")
+            del.target = self
+            del.representedObject = c.id
+            menu.addItem(del)
+        } else {
+            let new = NSMenuItem(title: "New Card…", action: #selector(newCard), keyEquivalent: "")
+            new.target = self
+            menu.addItem(new)
+
+            let imp = NSMenuItem(title: "Import…", action: #selector(importCharacter), keyEquivalent: "")
+            imp.target = self
+            menu.addItem(imp)
+        }
+        return menu
+    }
+
+    @objc private func contextMenuEdit(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID,
+              let c = items.first(where: { $0.id == id }) else { return }
+        (NSApp.delegate as? AppDelegate)?.openEditCardCreator(for: c)
+    }
+
+    @objc private func contextMenuStartChat(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID,
+              let c = items.first(where: { $0.id == id }) else { return }
+        AppState.shared.newChat(withCharacter: c)
+        view.window?.close()
+    }
+
+    @objc private func contextMenuDelete(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID,
+              let c = items.first(where: { $0.id == id }) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Delete \"\(c.name)\"?"
+        alert.informativeText = "Chats that referenced this card will keep their history but lose the link."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            AppState.shared.deleteCharacter(id: id)
+        }
     }
 
     @objc private func deleteSelection() {
@@ -562,5 +671,41 @@ final class PersonaEditController: NSViewController {
 
     @objc private func cancel() {
         dismiss(nil)
+    }
+}
+
+
+// MARK: - LibraryCollectionView (Phase 9 §5.3d.1)
+
+/// `NSCollectionView` subclass that vends per-item right-click context
+/// menus and detects double-click on cards. Both behaviors flow back to
+/// the parent `CharactersTabViewController` through closures so the
+/// view-model logic stays in the controller and the subclass stays
+/// presentation-only.
+final class LibraryCollectionView: NSCollectionView {
+
+    /// Build a context menu for the item at `indexPath` (or for empty space
+    /// when `indexPath` is nil). The collection view returns the menu;
+    /// AppKit handles the rest.
+    var contextMenuProvider: ((IndexPath?) -> NSMenu?)?
+
+    /// Fired when the user double-clicks on an item.
+    var doubleClickHandler: ((IndexPath) -> Void)?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let pointInView = convert(event.locationInWindow, from: nil)
+        let path = indexPathForItem(at: pointInView)
+        return contextMenuProvider?(path)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            let pointInView = convert(event.locationInWindow, from: nil)
+            if let path = indexPathForItem(at: pointInView) {
+                doubleClickHandler?(path)
+                return
+            }
+        }
+        super.mouseDown(with: event)
     }
 }

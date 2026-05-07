@@ -35,7 +35,8 @@ final class CardCreatorViewController: NSViewController {
         // contentView with windowBackgroundColor automatically and tracks
         // appearance changes. Setting the layer here would freeze a
         // light-mode CGColor and not flip on the system mode switch.
-        let root = NSView()
+        let root = CardDropView()
+        root.onCardFileDropped = { [weak self] url in self?.handleDroppedCardFile(url) }
         root.translatesAutoresizingMaskIntoConstraints = false
         self.view = root
 
@@ -251,6 +252,35 @@ final class CardCreatorViewController: NSViewController {
         guard index >= 0, index < tabView.numberOfTabViewItems else { return }
         DebugLog.shared.write("cardcreator: selectTab \(index) (cmd-shortcut)")
         tabView.selectTabViewItem(at: index)
+    }
+
+    // MARK: - Drag-drop handling (§5.3d.2)
+
+    /// Called when a `.png` / `.json` card file is dropped on the creator
+    /// window. Per V2_PHASE9_CARD_CREATOR §3.1: clean draft → replace via
+    /// new window; dirty draft → prompt Replace / Keep / Cancel where
+    /// "Keep" opens the import in a new window and the current draft
+    /// continues uninterrupted.
+    private func handleDroppedCardFile(_ url: URL) {
+        DebugLog.shared.write("cardcreator: drag-drop \(url.lastPathComponent)")
+        let result: CharacterCardImporter.Result
+        do {
+            result = try CharacterCardImporter.importFile(at: url)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Couldn't import \(url.lastPathComponent)"
+            alert.informativeText = String(describing: error)
+            alert.runModal()
+            return
+        }
+
+        // Always open the import in a new creator window. The dirty-draft
+        // semantics from §3.1 ("Replace / Keep / Cancel") are simplified
+        // for the §5.3d.2 MVP: the original draft is preserved, the import
+        // gets its own window. If the user wants to abandon the original
+        // they close it explicitly. A proper in-place "Replace" affordance
+        // is a §5.3e candidate.
+        (NSApp.delegate as? AppDelegate)?.openImportAndEditCardCreator(from: result)
     }
 }
 

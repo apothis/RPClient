@@ -106,15 +106,19 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             action: #selector(newChatWithCharacter),
             keyEquivalent: "N"))
         fileMenu.addItem(NSMenuItem.separator())
-        // Phase 9 §5.3a — Card Creator entry point. Full menu treatment
-        // (Import & Edit Card…, plus Library integration) lands in §5.3d.
+        // Phase 9 §5.3d — Card Creator menu entry points. New Character
+        // opens an empty creator; Import & Edit Card… runs the file
+        // picker through CharacterCardImporter and opens the result in
+        // editing-without-save mode (Cancel discards the import). Edit-
+        // existing-card lives on the Library window's right-click menu
+        // and "Edit Card…" button.
         fileMenu.addItem(NSMenuItem(
             title: "New Character…",
             action: #selector(showCardCreator),
             keyEquivalent: ""))
         fileMenu.addItem(NSMenuItem(
-            title: "Edit Card…",
-            action: #selector(showCardEditPicker),
+            title: "Import & Edit Card…",
+            action: #selector(showImportAndEditCardPicker),
             keyEquivalent: ""))
         fileMenu.addItem(NSMenuItem(
             title: "Import Character…",
@@ -295,32 +299,44 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showCardCreator() {
+        openNewCardCreator()
+    }
+
+    @objc private func showImportAndEditCardPicker() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.png, .json]
+        panel.message = "Choose a SillyTavern card (.png or .json) to import and edit. Save in the creator to commit."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let result = try CharacterCardImporter.importFile(at: url)
+            DebugLog.shared.write("import-and-edit: \(url.lastPathComponent) → \(result.character.name)")
+            openImportAndEditCardCreator(from: result)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Couldn't import \(url.lastPathComponent)"
+            alert.informativeText = String(describing: error)
+            alert.runModal()
+        }
+    }
+
+    /// Public entry point — Library window's "+ New Card" button calls this.
+    func openNewCardCreator() {
         openCardCreator(.init())
     }
 
-    @objc private func showCardEditPicker() {
-        // Phase 9 §5.3c.2 smoke entry point — temporary until §5.3d wires
-        // the Library "Edit Card…" surface. Lists the in-memory characters
-        // and opens the picked one in the creator's edit mode so the
-        // bidirectional Details / Intimacy sync can be exercised.
-        let chars = AppState.shared.characters
-        guard !chars.isEmpty else {
-            let alert = NSAlert()
-            alert.messageText = "No characters yet"
-            alert.informativeText = "Create one via File → New Character… first."
-            alert.runModal()
-            return
-        }
-        let alert = NSAlert()
-        alert.messageText = "Edit which card?"
-        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        for c in chars { popup.addItem(withTitle: c.name) }
-        alert.accessoryView = popup
-        alert.addButton(withTitle: "Edit")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let picked = chars[popup.indexOfSelectedItem]
-        openCardCreator(.init(editing: picked))
+    /// Public entry point — Library window's "Edit Card…" button + the
+    /// right-click menu both route through here so the creator-window
+    /// lifecycle stays managed in one place.
+    func openEditCardCreator(for character: Character) {
+        openCardCreator(.init(editing: character))
+    }
+
+    /// Public entry point — File → Import & Edit Card… (§5.3d.2).
+    func openImportAndEditCardCreator(from result: CharacterCardImporter.Result) {
+        openCardCreator(.init(importing: result))
     }
 
     private func openCardCreator(_ wc: CardCreatorWindowController) {
