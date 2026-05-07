@@ -85,14 +85,20 @@ public enum CardFieldDependencies {
 
         case .intimacyLimits:
             // Hard nos are author intent, not derived. Generate produces
-            // a generic starting list that the author edits.
-            return []
-        case .detailsAge, .detailsPronouns:
-            // Usually author-set up front; AI-assist doesn't try to infer.
+            // a generic starting list that the author edits. Tags
+            // deliberately excluded — wrong inference cost is high
+            // here per V2_PHASE9_AI_ASSIST_RESEARCH §4.2.
             return []
 
         // MARK: - Tags-only upstream
 
+        case .detailsAge:
+            // Usually author-set, but if Generate fires, tags help —
+            // "elderly" / "teen" / "ageless" pull useful defaults.
+            return [.tags]
+        case .detailsPronouns:
+            // Tags like male/female/nonbinary/futa are direct signals.
+            return [.tags]
         case .name:
             // Cold-start: tags + bundled creative-license phrase.
             return [.tags]
@@ -103,7 +109,7 @@ public enum CardFieldDependencies {
         // MARK: - Identity / Persona
 
         case .nickname:
-            return [.field(.name)]
+            return [.field(.name), .tags]
         case .description:
             return [.field(.name), .tags] + identityFacts
         case .personality:
@@ -139,9 +145,9 @@ public enum CardFieldDependencies {
         case .systemPrompt:
             return [.field(.name), .field(.description), .field(.personality), .tags] + identityFacts
         case .postHistoryInstructions:
-            return [.field(.systemPrompt), .field(.scenario)]
+            return [.field(.systemPrompt), .field(.scenario), .tags]
         case .depthPrompt:
-            return [.field(.scenario), .field(.systemPrompt)]
+            return [.field(.scenario), .field(.systemPrompt), .tags]
         case .creatorNotes:
             return [
                 .field(.name), .field(.description), .field(.personality),

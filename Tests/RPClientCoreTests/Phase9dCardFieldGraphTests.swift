@@ -42,19 +42,32 @@ func phase9dCardFieldGraphTests() -> TestSuite {
     s.test("intimacy_limits has no upstream — explicit author intent only") {
         // Per §4.2: 'limits' deliberately gets a bundled-defaults
         // treatment; AI-assist doesn't try to infer limits from other
-        // fields because the cost of a wrong inference is high.
+        // fields (including tags) because the cost of a wrong
+        // inference is high.
         let upstreams = CardFieldDependencies.upstreams(for: .intimacyLimits)
         try expectEqual(upstreams.count, 0)
     }
 
-    s.test("details_age has no upstream — usually author-set") {
+    s.test("details_age has tags upstream — usually author-set, but tags help") {
         let upstreams = CardFieldDependencies.upstreams(for: .detailsAge)
-        try expectEqual(upstreams.count, 0)
+        try expectTrue(upstreams.contains(.tags))
     }
 
-    s.test("details_pronouns has no upstream — usually author-set") {
+    s.test("details_pronouns has tags upstream — male/female/nonbinary etc are direct signals") {
         let upstreams = CardFieldDependencies.upstreams(for: .detailsPronouns)
-        try expectEqual(upstreams.count, 0)
+        try expectTrue(upstreams.contains(.tags))
+    }
+
+    s.test("tags is upstream of every field except intimacy_limits") {
+        // Tags carry strong genre / tone / kink signals; almost every
+        // generated field benefits. The only deliberate exception is
+        // intimacy_limits per the cold-start design above.
+        let exceptions: Set<CardField> = [.intimacyLimits]
+        for field in CardField.allCases where !exceptions.contains(field) {
+            let upstreams = CardFieldDependencies.upstreams(for: field)
+            try expectTrue(upstreams.contains(.tags),
+                "\(field.rawValue) should have .tags as upstream")
+        }
     }
 
     // MARK: - Tags-only upstream
