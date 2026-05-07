@@ -177,6 +177,21 @@ Output of step 1: a design doc `V2_PHASE9_CARD_CREATOR.md` mirroring the Phase 7
 
 ---
 
+## 5.5 Phase 10 — Chat tuning + `ServerProbe` ⏸ queued (after Phase 9)
+
+Spun off the §5.4.0 research pass. Adds a `ServerProbe` subsystem that runs capability + behavior probes against any configured server (Qwen / Gemma / future models), caches results in `ServerCapabilities`, and lets the chat path read those instead of hardcoding behavior. Sub-step staging in [`V2_PHASE10_CHAT_TUNING_RESEARCH.md`](V2_PHASE10_CHAT_TUNING_RESEARCH.md):
+
+- §10.0 — Empirical probe pass + subsystem design (mandatory, mirrors §5.4.0 shape).
+- §10.a — `ServerProbe` runner + `ServerCapabilities` data model.
+- §10.b — Settings UI surface.
+- §10.c — Chat-path consumption points (thinking pre-fill, sampler defaults, stop sequences, max-ctx caps).
+- §10.d — Memory/retrieval observability (M1 hit-rate probe; addresses RAG context-neglect).
+- §10.e — Polish + smoke against multiple model families.
+
+**Status: scoping doc shipped 2026-05-07; gated on Phase 9 §5.4 completion.** ~9-13 days when picked up.
+
+---
+
 ## 6. Cross-cutting
 
 ### 6.1 Schema versioning forward-note
