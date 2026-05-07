@@ -1,6 +1,8 @@
-# Phase 10 — Chat tuning research (scoping doc)
+# Phase 10 — Chat tuning (scoping note)
 
-**Status: scoping only.** Defines the shape of Phase 10 work; no live probes run yet. Sub-step §10.0 (mandatory empirical pass) will run probes against Qwen3 + Gemma + future models when Phase 10 starts. This doc gates that work the same way [`V2_PHASE9_AI_ASSIST_RESEARCH.md`](V2_PHASE9_AI_ASSIST_RESEARCH.md) gated §5.4 — the empirical findings + the `ServerProbe` subsystem design land in §10.0; consumption-point work follows.
+**Status: scoping note only.** Defines the shape of Phase 10 work; no live probes, no implementation. **When Phase 10 picks up, it produces its own research + plan docs** (`V2_PHASE10_CHAT_TUNING_RESEARCH.md` + `V2_PHASE10_CHAT_TUNING_PLAN.md`) following the project convention used by Phase 7 / 8 / 9. This doc is a handoff: it captures the scoping conversation that produced the phase, the probe taxonomy candidates surfaced during the §5.4.0 digression, and the data-model + subsystem sketches so Phase 10's actual research pass starts from a known baseline rather than cold.
+
+The §1 sub-step staging below is *expected shape, not commitment* — Phase 10's own research doc will refine it.
 
 Origin: spun off the §5.4.0 research pass after live probing of the user's configured Qwen3.6 server incidentally surfaced things about the chat path the existing code probably isn't exploiting (KV-cache-prefix stability, sampler defaults, thinking-trap behavior under realistic chat assembly). The user's framing: *"have the whole probe process automated and built into the app which can reconfigure itself dependant on which model is loaded."*
 
