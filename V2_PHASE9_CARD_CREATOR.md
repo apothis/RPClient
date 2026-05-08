@@ -721,36 +721,34 @@ Three modes (per §4) staged behind a mandatory research pass. Each mode is inde
 
 All §5.4.0 topics covered: existing card-gen tools survey (Chub / bmen25124 / ewizza / cha1latte / Inktomi93 / sphiratrioth666), structured-output techniques (with 11 live probes, not just literature), prompt-chain + KV-cache reuse (measured warm vs. cold on the actual stack), few-shot conventions (3-archetype exemplar set), NSFW posture (current license phrase validated), diff/review UX precedent (Notion / Cursor / Inktomi93 distilled), cost/budget (KoboldCPP cache reuse + Anthropic forward-note), and refusal-detection failure modes (model-family patterns + uncensored-stack softening). See research doc for full detail and reproducible probe transcripts.
 
-#### §5.4.a — Mode 1: Per-field suggestions
+#### §5.4.a — Mode 1: Per-field suggestions ✅ shipped 2026-05-07 → 2026-05-08
 
-- `CardFieldGenerator` — owns the dependency graph, the prompts, the side-call dispatch, the candidate parser, the server-capability probe (json_schema support, cached per session), and the byte-deterministic prompt builder per research §3.2.
-- `Resources/CardGenPrompts.json` — prompt template registry (per-field × per-candidate-style instructions, per-pass schemas for §5.4.b/c). Schema in research §11.
-- `Sources/RPClientCore/UI/CardCreator/CardGenExemplars.swift` — three full-character archetypes (Mira / monstergirl / sci-fi) with every §4.4-graph field populated; tag-overlap selector per research §4.1. Distinct from `CardCreatorPlaceholders.swift` (which stays UI-only).
-- Suggestions strip per §4.1 wired into each multi-line field control.
-- Per-window server picker per §3.1 + `Settings.cardCreatorServerId` persistence (already shipped in §5.3a).
-- Refusal detection per §4.5 + model-family patterns per research §8.3 + uncensored-model softening per §8.4.
-- Diagnostic logging per §4.6 — from commit one.
-- Tests:
-  - Dependency graph: per-field upstream list, stale-on-edit propagation, no false-positive cycles.
-  - Prompt-builder determinism: same inputs → byte-identical output (KV-cache reuse correctness).
-  - Exemplar selection: tag-overlap → expected archetype with documented ties resolving to Mira.
-  - Candidate parser: refusal detection (5+ refusal-shaped fixtures across Qwen/Llama/Mistral families + 5+ false-positive baits), length-ratio heuristic, sanitization markers.
-  - Stub `KoboldGenerating` returning canned candidates + scripted refusals; verifies strip state machine end-to-end.
-- Smoke against the user's measured stack (Qwen3.6-Uncensored on KoboldCPP).
-- ~2–3 days.
+Six numbered slices + ~10 polish commits. End-to-end:
 
-#### §5.4.b — Mode 2: Multi-field fill
+- **Slice 1** (`95e3e74`): `CardGenExemplars` — Mira / monstergirl / sci-fi archetypes + tag-overlap selector with tie-resolves-to-Mira semantics.
+- **Slice 2** (`329895d`): `CardField` enum (28 cases) + `CardFieldDependencies` graph + acyclicity check.
+- **Slice 3** (`cbf31db`): `CardGenRefusalDetector` — 5-pattern regex set across Llama / Mistral / Qwen / generic-apology / sanitization-marker + uncensored-model softening via name detection.
+- **Slice 4** (`87ebbc3`): `CardGenPromptsRegistry` Codable + bundled `Resources/CardGenPrompts.json` (system prompt + literal/creative/terse defaults + per-field metadata + per-field overrides for list-shaped fields) + `CardFieldGenerator.buildPrompt(...)` byte-deterministic prompt builder per research §3.2.
+- **Slice 5a** (`3885321`): `CardGenSideCall` build/parse split + `CardCandidate` type with refusal-detector applied per parse.
+- **Slice 5b** (`017cb54`): `CardSuggestionsController` `@MainActor` state machine (`.idle / .generating / .ready / .stale / .failed`) with sequential triad firing + UUID-tagged in-flight guard + cancel-drops-late-arrivals + diagnostic logging.
+- TestKit upgrade (`1519dac`): `@MainActor`-isolated test bodies so MainActor-bound types can be tested without the actor-isolation workaround.
+- Smoke runner (`7cdfd8a`): `CardGenSmoke` debug executable for live-server probes.
+- **Slice 6** (`a9284fa`): `CardSuggestionsStripView` AppKit UI + `CardCreatorAIWiring` + `CardDraftSnapshotBuilder` + integration into PersonaTab + GreetingsTab.
+- Polish: drop disclosure (`b8e6033`), cross-tab stale propagation via `CardCreatorAIRegistry` (`fc23462`), sharper instruction templates + strips on every multi-line field across 6 tabs (`df917c8`), identity facts as universal upstream (`cd8ed2d`), tags as universal upstream (`c9d7f4c`).
 
-- `CardMultiFieldGenerator` — single-call `response_format: json_schema` strict mode via `/v1/chat/completions` per research §2.2.
-- Server-capability probe: tiny json_schema test call on first use, cached per session; fall back to sequential per-field if structured returns garbage.
-- "Fill missing fields" + "Fill this section" buttons per §4.7.
-- Per-field "Proposed" badge UI + accept/reject toggle.
-- Bulk Accept all / Reject all.
-- Cancellation (URLSession task cancel; per research §7.5).
-- Tests: stub generator producing canned multi-field proposals; per-field accept/reject state machine; cancellation mid-chain leaves consistent state; capability-probe fallback when stub server returns non-compliant JSON; `{{user}}` placeholder preservation across long-form description fields.
-- ~2–3 days.
+Plus session polish: novel-tag opt-in toggle (`80c9eca` `db30d52`), greeting list-shaped Generate (`02d3591`), tags scrolling reworks (`c550aff` `f6decbc` `681241a`), name-leak fix in greetings + spinner on Fill button (`c550aff` `681241a`), and the sex chooser on Identity tab (`9ba46b3`).
 
-#### §5.4.c — Mode 3: Full-card autopilot
+#### §5.4.b — Mode 2: Multi-field fill ✅ shipped 2026-05-08
+
+Three slices + polish:
+
+- **Slice 1** (`92ddced`): `CardFieldProposal` + `CardMultiFieldRequest` + `CardMultiFieldGenerator.buildRequest/parseResponse` + JSON schema builder + `ChatCompletionsClient` protocol with `KoboldClient.chatCompletions(...)` implementation against `/v1/chat/completions` + `CardMultiFieldOrchestrator` `@MainActor` state machine. `CardGenSmoke --multi` flag for live probes (4.57s for 5 schema-compliant prose fields measured).
+- **Slice 2** (`da5d8dc`): `MultilineFieldView` proposed-state UI — yellow Proposed pill in label row, Accept/Reject row replacing the strip while a proposal is pending, refusal warning chip, implicit-accept-on-edit per research §4.7.
+- **Slice 3** (`d7e4edd`): `AIAssistableTab` protocol on every multi-line tab; `CardCreatorViewController` collects all `(CardField, MultilineFieldView)` pairs; "Fill missing fields" button at trailing edge of header with spinner; `CardMultiFieldOrchestrator` dispatches proposals to the right field; bulk banner with Accept-all / Reject-all / Cancel.
+
+Polish in same window: spinner on Fill button (`c550aff`), prompt echo regression fix + per-field overrides for list-shaped fields (`c550aff`), tags wrap (`c550aff`), name-leak hardening for greetings/example-dialogue per-field overrides (`681241a`).
+
+#### §5.4.c — Mode 3: Full-card autopilot ⏳ next
 
 - "Generate full card" entry point on Identity tab (with seed input) or on a new top-bar action.
 - `CardAutopilotOrchestrator` — pass orchestration per §4.8 (Identity → Persona+Voice → Body+Intimacy → Disposition → System → Notes), each pass a single json_schema call composed via `CardFieldGenerator`.
