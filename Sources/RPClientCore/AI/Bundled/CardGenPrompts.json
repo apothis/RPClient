@@ -128,15 +128,15 @@
       "wordCount": 30
     },
     "post_history_instructions": {
-      "humanName": "post-history instructions (a brief reminder injected after the conversation history)",
-      "wordCount": 20
+      "humanName": "post-history instructions (a SHORT stage-direction reminder injected near the latest turn — e.g. 'stay in character', 'no fourth-wall breaks', 'keep responses under three paragraphs'. NOT a re-definition of the character; do not repeat traits or biography here)",
+      "wordCount": 18
     },
     "depth_prompt": {
       "humanName": "depth prompt (a short note that lives N turns deep in the prompt)",
       "wordCount": 15
     },
     "creator_notes": {
-      "humanName": "creator notes (NSFW posture, content warnings, recommended models)",
+      "humanName": "creator notes (a short note for the player who will use the card — content warnings, NSFW posture, intended audience, edge-case handling. NOT model recommendations and NOT a re-summary of the character)",
       "wordCount": 25
     },
     "details_sex": {

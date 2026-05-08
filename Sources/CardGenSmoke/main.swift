@@ -9,11 +9,16 @@ import Foundation
 // usage:
 //   swift run CardGenSmoke [serverURL] [templateId] [field] [tag1,tag2,...]
 //   swift run CardGenSmoke --multi [serverURL] [tag1,tag2,...] [field1,field2,...]
+//   swift run CardGenSmoke --autopilot [serverURL] [tag1,tag2,...] [hint]
 //
 // Mode 1 (default): drives a 3-candidate triad against one field
 // (description by default).
 // Mode 2 (--multi): drives a single-call json_schema fill across the
 // listed target fields (defaults to description+personality+scenario).
+// Mode 3 (--autopilot): drives all six §5.4.c passes end-to-end against
+// a cold-start draft (only tags + optional hint). Prints each pass's
+// targets, response, refusal flags, timing, and cumulative cost; ends
+// with the full proposal table and exits non-zero on abort.
 //
 // defaults match the user's typical setup:
 //   serverURL = http://192.168.1.201:5001
@@ -23,7 +28,8 @@ import Foundation
 
 var rawArgs = Array(CommandLine.arguments.dropFirst())
 let multiMode = rawArgs.first == "--multi"
-if multiMode { rawArgs.removeFirst() }
+let autopilotMode = rawArgs.first == "--autopilot"
+if multiMode || autopilotMode { rawArgs.removeFirst() }
 let args = rawArgs
 
 let serverURLString: String
@@ -31,6 +37,7 @@ let templateId: String
 let fieldName: String
 let tagListRaw: String
 let multiTargetsRaw: String
+let autopilotHint: String
 
 if multiMode {
     // --multi shape: [serverURL] [tags] [fields]
@@ -39,12 +46,22 @@ if multiMode {
     fieldName = "description"  // unused in multi mode
     tagListRaw = args.count >= 2 ? args[1] : "nsfw,fantasy,monstergirl,dom"
     multiTargetsRaw = args.count >= 3 ? args[2] : "description,personality,scenario,first_message,message_example"
+    autopilotHint = ""
+} else if autopilotMode {
+    // --autopilot shape: [serverURL] [tags] [hint]
+    serverURLString = args.count >= 1 ? args[0] : "http://192.168.1.201:5001"
+    templateId = "qwen"
+    fieldName = "description"  // unused in autopilot mode
+    tagListRaw = args.count >= 2 ? args[1] : "nsfw,fantasy,monstergirl,dom"
+    multiTargetsRaw = ""
+    autopilotHint = args.count >= 3 ? args[2] : ""
 } else {
     serverURLString = args.count >= 1 ? args[0] : "http://192.168.1.201:5001"
     templateId      = args.count >= 2 ? args[1] : "qwen"
     fieldName       = args.count >= 3 ? args[2] : "description"
     tagListRaw      = args.count >= 4 ? args[3] : "nsfw,fantasy,monstergirl,dom"
     multiTargetsRaw = ""
+    autopilotHint = ""
 }
 
 guard let serverURL = URL(string: serverURLString) else {
@@ -71,16 +88,23 @@ print("--------------------")
 
 // Representative draft. For Mode 1 the exemplar is selected from
 // tag overlap; the field-being-generated picks its upstreams from
-// the §4.4 dep graph and pulls those values from .fields.
-let draft = CardDraftSnapshot(
-    tags: tags,
-    fields: [
-        .name: "Vexara",
-        .description: "An ancient Lamia matriarch who keeps a stone hall at the river's bend.",
-        .personality: "Patient, watchful, indulgent of mortals; speaks softly.",
-        .scenario: "{{user}} arrives at the river hall with a request that requires Vexara's permission.",
-    ]
-)
+// the §4.4 dep graph and pulls those values from .fields. Mode 3
+// runs against a cold-start draft (just tags, possibly + hint) so
+// every pass actually generates content.
+let draft: CardDraftSnapshot
+if autopilotMode {
+    draft = CardDraftSnapshot(tags: tags, fields: [:])
+} else {
+    draft = CardDraftSnapshot(
+        tags: tags,
+        fields: [
+            .name: "Vexara",
+            .description: "An ancient Lamia matriarch who keeps a stone hall at the river's bend.",
+            .personality: "Patient, watchful, indulgent of mortals; speaks softly.",
+            .scenario: "{{user}} arrives at the river hall with a request that requires Vexara's permission.",
+        ]
+    )
+}
 
 let kobold = KoboldClient(baseURL: serverURL)
 let template = Templates.byId(templateId, qwenThinking: false)
@@ -187,9 +211,103 @@ func runMultiMode(draft: CardDraftSnapshot, kobold: KoboldClient, targets target
     }
 }
 
+@MainActor
+func runAutopilotMode(draft: CardDraftSnapshot, kobold: KoboldClient, hint: String) -> Int32 {
+    print("[autopilot] hint: \(hint.isEmpty ? "(none — pure cold-start from tags)" : "\"\(hint)\"")")
+
+    let semaphore = DispatchSemaphore(value: 0)
+    var finalState: CardAutopilotOrchestrator.State = .idle
+    var passStartTimes: [CardAutopilotPass: Date] = [:]
+    var passDurations: [CardAutopilotPass: TimeInterval] = [:]
+    var lastObservedPass: CardAutopilotPass?
+
+    let orch = CardAutopilotOrchestrator(generator: kobold)
+    let started = Date()
+    orch.onStateChange = { state in
+        let elapsed = Date().timeIntervalSince(started)
+        switch state {
+        case .idle:
+            print(String(format: "[%5.2fs] idle", elapsed))
+        case .running(let pass, let completed, let total, let calls, let tokens):
+            // Close out the previous pass timer, if any.
+            if let prev = lastObservedPass, prev != pass, let t0 = passStartTimes[prev] {
+                passDurations[prev] = Date().timeIntervalSince(t0)
+            }
+            if passStartTimes[pass] == nil {
+                passStartTimes[pass] = Date()
+            }
+            lastObservedPass = pass
+            print(String(format: "[%5.2fs] pass %d/%d → %@ (calls=%d, tok-budget=%d)",
+                         elapsed, completed + 1, total, "\(pass)", calls, tokens))
+        case .completed(let proposals):
+            if let last = lastObservedPass, let t0 = passStartTimes[last] {
+                passDurations[last] = Date().timeIntervalSince(t0)
+            }
+            print(String(format: "[%5.2fs] ✓ completed (%d proposals)", elapsed, proposals.count))
+            finalState = state
+            semaphore.signal()
+        case .aborted(let reason, let partial):
+            print(String(format: "[%5.2fs] ✗ aborted (%@) — partial=%d",
+                         elapsed, "\(reason)", partial.count))
+            finalState = state
+            semaphore.signal()
+        }
+    }
+
+    print("[ 0.00s] firing autopilot…")
+    orch.generate(draft: draft, hint: hint.isEmpty ? nil : hint)
+
+    // 6 passes × 35s upper bound + slack = 240s.
+    let timeoutDeadline = Date().addingTimeInterval(240)
+    while semaphore.wait(timeout: .now() + 0.05) == .timedOut {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        if Date() > timeoutDeadline {
+            print("[timeout] >240s elapsed, giving up")
+            return 1
+        }
+    }
+
+    print("--- per-pass timings ---")
+    for pass in CardAutopilotPass.allCases {
+        let dt = passDurations[pass].map { String(format: "%5.2fs", $0) } ?? "  skipped"
+        print("  \(pass): \(dt)")
+    }
+
+    print("--- final state ---")
+    switch finalState {
+    case .completed(let proposals):
+        printProposals(proposals)
+        return 0
+    case .aborted(let reason, let partial):
+        print("ABORTED: \(reason)")
+        if !partial.isEmpty {
+            print("--- partial proposals ---")
+            printProposals(partial)
+        }
+        return 1
+    default:
+        return 1
+    }
+}
+
+@MainActor
+func printProposals(_ proposals: [CardFieldProposal]) {
+    for (i, p) in proposals.enumerated() {
+        let header = "[\(i + 1)] \(p.field.rawValue) — exemplar=\(p.exemplarId)"
+            + (p.refusal.isRefusal ? " ⚠ refusal=\(p.refusal.pattern?.rawValue ?? "?")" : "")
+            + " (\(p.text.count) chars)"
+        print(header)
+        print(p.text)
+        print("---")
+    }
+}
+
 let exitCode: Int32 = MainActor.assumeIsolated {
     if multiMode {
         return runMultiMode(draft: draft, kobold: kobold, targets: multiTargetsRaw)
+    }
+    if autopilotMode {
+        return runAutopilotMode(draft: draft, kobold: kobold, hint: autopilotHint)
     }
 
     let semaphore = DispatchSemaphore(value: 0)
