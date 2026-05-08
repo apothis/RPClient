@@ -197,6 +197,19 @@ extension DetailsTabViewController: AIAssistableTab {
             (.detailsMood, moodField),
         ]
     }
+
+    /// Phase 9 §5.4.c — re-read the single-line Details fields after a
+    /// Mode 3 commit writes new values into `extensions["rpclient/details"]`
+    /// directly. Multi-line fields (appearance, mood) come through the
+    /// MultilineFieldView showProposal+acceptProposal path and don't
+    /// need rebinding here.
+    func rebindFromDraft() {
+        let d = CardDetails.extractFrom(draft.character) ?? CardDetails()
+        ageField.stringValue = d.age
+        pronounsField.stringValue = d.pronouns
+        speciesField.stringValue = d.species
+        orientationField.stringValue = d.orientation
+    }
 }
 
 // MARK: - IntimacyTabViewController (§5.3c.2)

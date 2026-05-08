@@ -527,6 +527,22 @@ extension IdentityTabViewController: NSTokenFieldDelegate {
     /// `draft.flush(...)`. Promotes every ✓-marked novel tag into
     /// `Settings.customTags`; clears the pending set. Does nothing if
     /// no tags are pending.
+    /// Phase 9 §5.4.c — re-read every Identity-tab control from the
+    /// draft. Called by the Mode 3 commit path after the autopilot
+    /// review sheet writes proposals into `draft.character` directly
+    /// (the multi-line tabs reach the field via MultilineFieldView,
+    /// but Identity's controls are bound at loadView and need an
+    /// explicit refresh).
+    func rebindFromDraft() {
+        nameField.stringValue = draft.character.name
+        nicknameField.stringValue = draft.character.nickname ?? ""
+        creatorField.stringValue = draft.character.creator ?? ""
+        versionField.stringValue = draft.character.characterVersion ?? ""
+        tagsField.objectValue = draft.character.tags
+        loadSexFromDraft()
+        refreshPendingTagsRow()
+    }
+
     func commitPendingTagPromotions() {
         guard !tagsToPromoteOnSave.isEmpty else { return }
         var settings = AppState.shared.settings

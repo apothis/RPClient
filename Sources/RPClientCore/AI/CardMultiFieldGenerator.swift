@@ -76,10 +76,17 @@ enum CardMultiFieldGenerator {
     /// Build a request that will populate every `field` in one
     /// chat-completions call. Empty `fields` returns a request with
     /// an empty schema — caller should guard before firing.
+    ///
+    /// `authorDirection` is the §5.4.c Mode 3 seed input: a free-form
+    /// one-liner describing the character ("an aging archivist who
+    /// keeps to themselves in a port town"). When non-empty it lands
+    /// at the top of the user message as an AUTHOR DIRECTION block so
+    /// every pass anchors on the same concept.
     static func buildRequest(
         for fields: [CardField],
         draft: CardDraftSnapshot,
-        registry: CardGenPromptsRegistry = CardGenPromptsLoader.bundled
+        registry: CardGenPromptsRegistry = CardGenPromptsLoader.bundled,
+        authorDirection: String? = nil
     ) -> CardMultiFieldRequest {
         let exemplar = CardGenExemplars.select(forTags: draft.tags)
         let exemplarBlock = CardFieldGenerator.renderExemplarBlock(exemplar: exemplar)
@@ -117,7 +124,12 @@ enum CardMultiFieldGenerator {
         // Compose the user message. Format is intentionally similar
         // to the Mode 1 single-call prompt so KV-cache reuse works
         // when the same prefix is sent.
+        let trimmedDirection = authorDirection?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let directionBlock = (trimmedDirection?.isEmpty == false)
+            ? "AUTHOR DIRECTION (anchor the character to this concept):\n\"\(trimmedDirection!)\""
+            : nil
         let userMessage = [
+            directionBlock,
             "EXAMPLE CHARACTER (anchor format and register):\n\(exemplarBlock)",
             upstreamBlock.isEmpty ? nil : "TARGET CHARACTER (current draft):\n\(upstreamBlock)",
             "Populate every field below in the JSON response. Each value should match the example's register and the target character's upstream details.\n\(targetsList)",

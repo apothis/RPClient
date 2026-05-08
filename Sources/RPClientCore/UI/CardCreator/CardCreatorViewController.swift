@@ -38,6 +38,17 @@ final class CardCreatorViewController: NSViewController {
     /// fills. Constructed lazily from the per-window cardCreatorClient.
     private var multiOrchestrator: CardMultiFieldOrchestrator?
 
+    /// Phase 9 §5.4.c — Mode 3 autopilot. Lazy; reset between runs.
+    private var autopilotOrchestrator: CardAutopilotOrchestrator?
+    /// Strong reference to the seed sheet while it's on screen.
+    private var seedSheet: AutopilotSeedSheetController?
+    /// Strong reference to the review sheet while it's on screen.
+    private var reviewSheet: ProposalReviewSheetController?
+    /// Strong references to one-off Mode 2 orchestrators spawned for
+    /// per-field re-rolls inside the review sheet. Each entry is
+    /// removed on completion.
+    private var rerollOrchestrators: [UUID: CardMultiFieldOrchestrator] = [:]
+
     /// Banner above the tab strip showing "N fields proposed" + Accept
     /// all / Reject all. Hidden when no field is in proposed state.
     private let proposalBanner = NSStackView()
@@ -47,6 +58,8 @@ final class CardCreatorViewController: NSViewController {
     private let cancelFillButton = NSButton(title: "Cancel", target: nil, action: nil)
     private let fillButton = NSButton(title: "Fill missing fields", target: nil, action: nil)
     private let fillSpinner = NSProgressIndicator()
+    private let autoButton = NSButton(title: "Generate full card", target: nil, action: nil)
+    private let autoSpinner = NSProgressIndicator()
 
     private let tabView = NSTabView()
     private let serverPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -112,6 +125,20 @@ final class CardCreatorViewController: NSViewController {
         fillSpinner.isDisplayedWhenStopped = false
         fillSpinner.translatesAutoresizingMaskIntoConstraints = false
 
+        // Phase 9 §5.4.c — "Generate full card" button to the LEFT of
+        // "Fill missing fields". Mode 3 entry point per §4.8.
+        autoButton.bezelStyle = .rounded
+        autoButton.controlSize = .regular
+        autoButton.target = self
+        autoButton.action = #selector(generateFullCardClicked)
+        autoButton.toolTip = "Walk every empty field through six coordinated AI passes — Identity, Persona+Voice, Body+Intimacy, Disposition, System, Notes. Review proposals before they land in the draft. Hard cap: 10 calls / 16k tokens."
+        autoButton.translatesAutoresizingMaskIntoConstraints = false
+
+        autoSpinner.style = .spinning
+        autoSpinner.controlSize = .small
+        autoSpinner.isDisplayedWhenStopped = false
+        autoSpinner.translatesAutoresizingMaskIntoConstraints = false
+
         let header = NSStackView(views: [serverLabel, serverPopup, modelLabel])
         header.orientation = .horizontal
         header.alignment = .firstBaseline
@@ -120,6 +147,8 @@ final class CardCreatorViewController: NSViewController {
         root.addSubview(header)
         root.addSubview(fillSpinner)
         root.addSubview(fillButton)
+        root.addSubview(autoSpinner)
+        root.addSubview(autoButton)
 
         // Hairline separator below the header.
         let separator = NSBox()
@@ -130,13 +159,19 @@ final class CardCreatorViewController: NSViewController {
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: root.topAnchor, constant: DesignTokens.Spacing.md),
             header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: DesignTokens.Spacing.lg),
-            header.trailingAnchor.constraint(lessThanOrEqualTo: fillButton.leadingAnchor, constant: -DesignTokens.Spacing.sm),
+            header.trailingAnchor.constraint(lessThanOrEqualTo: autoButton.leadingAnchor, constant: -DesignTokens.Spacing.sm),
 
             fillButton.firstBaselineAnchor.constraint(equalTo: serverLabel.firstBaselineAnchor),
             fillButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -DesignTokens.Spacing.lg),
 
             fillSpinner.centerYAnchor.constraint(equalTo: fillButton.centerYAnchor),
             fillSpinner.trailingAnchor.constraint(equalTo: fillButton.leadingAnchor, constant: -DesignTokens.Spacing.sm),
+
+            autoButton.firstBaselineAnchor.constraint(equalTo: serverLabel.firstBaselineAnchor),
+            autoButton.trailingAnchor.constraint(equalTo: fillSpinner.leadingAnchor, constant: -DesignTokens.Spacing.sm),
+
+            autoSpinner.centerYAnchor.constraint(equalTo: autoButton.centerYAnchor),
+            autoSpinner.trailingAnchor.constraint(equalTo: autoButton.leadingAnchor, constant: -DesignTokens.Spacing.sm),
 
             separator.topAnchor.constraint(equalTo: header.bottomAnchor, constant: DesignTokens.Spacing.md),
             separator.leadingAnchor.constraint(equalTo: root.leadingAnchor),
@@ -370,6 +405,222 @@ final class CardCreatorViewController: NSViewController {
             view.showProposal(text: p.text, refusal: p.refusal)
         }
         refreshProposalBanner()
+    }
+
+    // MARK: - Mode 3 autopilot (§5.4.c)
+
+    @objc private func generateFullCardClicked() {
+        let sheet = AutopilotSeedSheetController()
+        sheet.onGenerate = { [weak self] hint in
+            self?.seedSheet = nil
+            self?.startAutopilot(hint: hint)
+        }
+        sheet.onCancel = { [weak self] in self?.seedSheet = nil }
+        seedSheet = sheet
+        if let parent = view.window {
+            sheet.beginSheet(over: parent)
+        }
+    }
+
+    private func startAutopilot(hint: String) {
+        let snapshot = CardDraftSnapshotBuilder.snapshot(of: draft)
+        let kobold = AppState.shared.registry.cardCreatorClient(
+            chatOverride: AppState.shared.currentChat?.serverId
+        )
+        let orch = CardAutopilotOrchestrator(generator: kobold)
+        orch.onStateChange = { [weak self] state in
+            self?.handleAutopilotState(state)
+        }
+        autopilotOrchestrator = orch
+        autoButton.isEnabled = false
+        autoButton.title = "Generating…"
+        autoSpinner.startAnimation(nil)
+        fillButton.isEnabled = false  // don't allow Mode 2 to race Mode 3
+        orch.generate(draft: snapshot, hint: hint.isEmpty ? nil : hint)
+    }
+
+    private func handleAutopilotState(_ state: CardAutopilotOrchestrator.State) {
+        switch state {
+        case .idle:
+            resetAutopilotChrome()
+        case .running(let pass, let completed, let total, let calls, let tokens):
+            autoButton.title = "Pass \(completed + 1)/\(total): \(passLabel(pass))…"
+            autoButton.toolTip = "calls: \(calls), max-tokens budget: \(tokens)"
+        case .completed(let proposals):
+            DebugLog.shared.write("cardgen: mode3 ✓ run done — \(proposals.count) proposals")
+            resetAutopilotChrome()
+            presentReviewSheet(proposals: proposals)
+        case .aborted(let reason, let partial):
+            DebugLog.shared.write("cardgen: mode3 aborted — \(reason). partial=\(partial.count)")
+            resetAutopilotChrome()
+            // Even on abort, surface what we got — author can salvage
+            // the partial proposals via the same review sheet.
+            if !partial.isEmpty {
+                presentReviewSheet(proposals: partial, abortReason: reason)
+            } else {
+                presentAutopilotErrorAlert(reason: reason)
+            }
+        }
+    }
+
+    private func resetAutopilotChrome() {
+        autoButton.isEnabled = true
+        autoButton.title = "Generate full card"
+        autoButton.toolTip = nil
+        autoSpinner.stopAnimation(nil)
+        fillButton.isEnabled = true
+    }
+
+    private func passLabel(_ pass: CardAutopilotPass) -> String {
+        switch pass {
+        case .identity: return "Identity"
+        case .personaVoice: return "Persona+Voice"
+        case .bodyIntimacy: return "Body+Intimacy"
+        case .disposition: return "Disposition"
+        case .system: return "System"
+        case .notes: return "Notes"
+        }
+    }
+
+    private func presentAutopilotErrorAlert(reason: CardAutopilotAbortReason) {
+        guard let parent = view.window else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Mode 3 aborted"
+        switch reason {
+        case .callsExceeded:
+            alert.informativeText = "Hit the 10-call ceiling before any pass completed. Adjust the budget or pre-fill more fields, then try again."
+        case .tokensExceeded:
+            alert.informativeText = "Hit the 16k-token ceiling before any pass completed."
+        case .userCancelled:
+            alert.informativeText = "Cancelled before any results came back."
+        case .passFailure(let pass, let msg):
+            alert.informativeText = "Pass \(passLabel(pass)) failed: \(msg)"
+        }
+        alert.beginSheetModal(for: parent) { _ in }
+    }
+
+    private func presentReviewSheet(
+        proposals: [CardFieldProposal],
+        abortReason: CardAutopilotAbortReason? = nil
+    ) {
+        let model = ProposalReviewModel(initial: proposals)
+        let sheet = ProposalReviewSheetController(model: model)
+        sheet.onCommit = { [weak self] accepted in
+            self?.commitAutopilotProposals(accepted)
+            self?.reviewSheet = nil
+        }
+        sheet.onCancel = { [weak self] in
+            self?.reviewSheet = nil
+        }
+        sheet.onRerollField = { [weak self] field in
+            self?.spawnReroll(for: [field], sheet: sheet)
+        }
+        sheet.onRerollAllUnlocked = { [weak self] fields in
+            // Sequentially fire one orchestrator per field so each
+            // re-roll is independent (and the cost ceiling stays the
+            // user's responsibility — Mode 3 budget doesn't track
+            // post-completion re-rolls).
+            for f in fields { self?.spawnReroll(for: [f], sheet: sheet) }
+        }
+        reviewSheet = sheet
+        if let parent = view.window {
+            sheet.beginSheet(over: parent)
+        }
+    }
+
+    private func spawnReroll(
+        for fields: [CardField],
+        sheet: ProposalReviewSheetController
+    ) {
+        guard let field = fields.first else { return }
+        let snapshot = CardDraftSnapshotBuilder.snapshot(of: draft)
+        let kobold = AppState.shared.registry.cardCreatorClient(
+            chatOverride: AppState.shared.currentChat?.serverId
+        )
+        let orch = CardMultiFieldOrchestrator(generator: kobold)
+        let id = UUID()
+        orch.onStateChange = { [weak self, weak sheet] state in
+            switch state {
+            case .ready(let proposals):
+                if let p = proposals.first {
+                    sheet?.didReceiveRerolledCandidate(field: field, text: p.text)
+                }
+                self?.rerollOrchestrators[id] = nil
+            case .failed(let m):
+                DebugLog.shared.write("cardgen: mode3 reroll ✗ \(field.rawValue) — \(m)")
+                self?.rerollOrchestrators[id] = nil
+            default:
+                break
+            }
+        }
+        rerollOrchestrators[id] = orch
+        DebugLog.shared.write("cardgen: mode3 reroll fire \(field.rawValue)")
+        orch.fill(fields: [field], draft: snapshot)
+    }
+
+    private func commitAutopilotProposals(_ proposals: [CardFieldProposal]) {
+        DebugLog.shared.write("cardgen: mode3 commit \(proposals.count) → draft")
+        let multilineLookup: [CardField: MultilineFieldView] = Dictionary(
+            uniqueKeysWithValues: aiAssistableFields
+        )
+        var touchedIdentity = false
+        var touchedDetails = false
+        for p in proposals {
+            if let view = multilineLookup[p.field] {
+                view.showProposal(text: p.text, refusal: p.refusal)
+                view.acceptProposal()
+                continue
+            }
+            // Direct-write path: fields without a MultilineFieldView.
+            switch p.field {
+            case .name:
+                draft.character.name = p.text
+                touchedIdentity = true
+            case .nickname:
+                draft.character.nickname = p.text.isEmpty ? nil : p.text
+                touchedIdentity = true
+            case .alternateGreetings:
+                if draft.character.alternateGreetings.isEmpty {
+                    draft.character.alternateGreetings = [p.text]
+                } else {
+                    draft.character.alternateGreetings[0] = p.text
+                }
+            case .detailsSex, .detailsAge, .detailsPronouns,
+                 .detailsSpecies, .detailsOrientation:
+                var d = CardDetails.extractFrom(draft.character) ?? CardDetails()
+                switch p.field {
+                case .detailsSex: d.sex = p.text
+                case .detailsAge: d.age = p.text
+                case .detailsPronouns: d.pronouns = p.text
+                case .detailsSpecies: d.species = p.text
+                case .detailsOrientation: d.orientation = p.text
+                default: break
+                }
+                d.applyTo(&draft.character)
+                touchedIdentity = true
+                touchedDetails = true
+            case .depthPrompt:
+                // depth_prompt lives in extensions and is owned by
+                // DepthPromptControl. Direct write deferred to §5.4.d
+                // polish — for now, log and skip so the rest of the
+                // commit lands.
+                DebugLog.shared.write("cardgen: mode3 skip depth_prompt commit (deferred to §5.4.d)")
+            default:
+                DebugLog.shared.write("cardgen: mode3 commit — unhandled field \(p.field.rawValue)")
+            }
+        }
+        if touchedIdentity { identityTab.rebindFromDraft() }
+        if touchedDetails {
+            // Walk the tab list and rebind any DetailsTab.
+            for item in tabView.tabViewItems {
+                if let detailsVC = item.viewController as? DetailsTabViewController {
+                    detailsVC.rebindFromDraft()
+                }
+            }
+        }
+        draft.markDirty()
+        handleDirtyChanged()
     }
 
     private func refreshProposalBanner() {

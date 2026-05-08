@@ -132,6 +132,7 @@ final class CardAutopilotOrchestrator {
     private struct RunContext {
         let id: UUID
         let budget: CardAutopilotBudget
+        let hint: String?
         var runningDraft: CardDraftSnapshot
         var collected: [CardFieldProposal] = []
         var callsUsed: Int = 0
@@ -152,12 +153,15 @@ final class CardAutopilotOrchestrator {
 
     func generate(
         draft: CardDraftSnapshot,
+        hint: String? = nil,
         budget: CardAutopilotBudget = .default
     ) {
-        let ctx = RunContext(id: UUID(), budget: budget, runningDraft: draft)
+        let ctx = RunContext(id: UUID(), budget: budget, hint: hint, runningDraft: draft)
         inFlight = ctx
+        let hintLog = (hint?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            ? " hint=\"\(hint!.prefix(60))…\"" : ""
         DebugLog.shared.write(
-            "cardgen: mode3 start tags=\(draft.tags.joined(separator: ",")) maxCalls=\(budget.maxCalls) maxTokens=\(budget.maxTokens)"
+            "cardgen: mode3 start tags=\(draft.tags.joined(separator: ","))\(hintLog) maxCalls=\(budget.maxCalls) maxTokens=\(budget.maxTokens)"
         )
         runNextPass()
     }
@@ -201,7 +205,8 @@ final class CardAutopilotOrchestrator {
         let request = CardMultiFieldGenerator.buildRequest(
             for: targets,
             draft: ctx.runningDraft,
-            registry: registry
+            registry: registry,
+            authorDirection: ctx.hint
         )
 
         // Pre-flight budget check. Calls counter is incremented optimistically;
