@@ -128,8 +128,8 @@
       "wordCount": 30
     },
     "post_history_instructions": {
-      "humanName": "post-history instructions (a SHORT stage-direction reminder injected near the latest turn — e.g. 'stay in character', 'no fourth-wall breaks', 'keep responses under three paragraphs'. NOT a re-definition of the character; do not repeat traits or biography here)",
-      "wordCount": 18
+      "humanName": "post-history instructions (generic stage-direction text only — pure formatting/tone guidance with NO mention of the character's name, traits, profession, or biography. ✅ Good: 'Stay in character. Respond in third person past tense. Keep responses under three paragraphs.' ❌ Bad: 'Maintain Sarah's dry humor and observant eye.' ❌ Bad: 'Channel the warm, professional agency companion tone.' If unsure, output only generic directives that would apply to ANY character)",
+      "wordCount": 12
     },
     "depth_prompt": {
       "humanName": "depth prompt (a short note that lives N turns deep in the prompt)",

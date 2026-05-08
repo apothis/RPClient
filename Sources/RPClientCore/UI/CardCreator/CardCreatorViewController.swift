@@ -444,8 +444,16 @@ final class CardCreatorViewController: NSViewController {
         case .idle:
             resetAutopilotChrome()
         case .running(let pass, let completed, let total, let calls, let tokens):
-            autoButton.title = "Pass \(completed + 1)/\(total): \(passLabel(pass))…"
-            autoButton.toolTip = "calls: \(calls), max-tokens budget: \(tokens)"
+            // Cost bar in the title per V2_PHASE9_CARD_CREATOR §4.8 ask
+            // ("Mode 3: 4 of 7 passes, 2.3k tokens"). 16k is the default
+            // ceiling; when authors raise the budget the denominator
+            // updates automatically since we read it from the running
+            // ctx via .running's tokens param. Format: "Pass N/M
+            // (label) · 4.8k/16k tok · 4/10 calls".
+            let tokK = String(format: "%.1fk", Double(tokens) / 1000.0)
+            let ceilK = String(format: "%.0fk", Double(CardAutopilotBudget.default.maxTokens) / 1000.0)
+            autoButton.title = "Pass \(completed + 1)/\(total) (\(passLabel(pass))) · \(tokK)/\(ceilK) tok · \(calls)/\(CardAutopilotBudget.default.maxCalls) calls"
+            autoButton.toolTip = "Mode 3 autopilot in flight. Sequential json_schema passes against the per-window card-gen server."
         case .completed(let proposals):
             DebugLog.shared.write("cardgen: mode3 ✓ run done — \(proposals.count) proposals")
             resetAutopilotChrome()
@@ -600,12 +608,6 @@ final class CardCreatorViewController: NSViewController {
                 d.applyTo(&draft.character)
                 touchedIdentity = true
                 touchedDetails = true
-            case .depthPrompt:
-                // depth_prompt lives in extensions and is owned by
-                // DepthPromptControl. Direct write deferred to §5.4.d
-                // polish — for now, log and skip so the rest of the
-                // commit lands.
-                DebugLog.shared.write("cardgen: mode3 skip depth_prompt commit (deferred to §5.4.d)")
             default:
                 DebugLog.shared.write("cardgen: mode3 commit — unhandled field \(p.field.rawValue)")
             }

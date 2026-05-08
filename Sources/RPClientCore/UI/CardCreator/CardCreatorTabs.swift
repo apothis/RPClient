@@ -768,6 +768,10 @@ extension SystemTabViewController: AIAssistableTab {
             (.systemPrompt, systemPromptField),
             (.postHistoryInstructions, postHistoryField),
             (.creatorNotes, creatorNotesField),
+            // Phase 9 §5.4.c follow-up — depth_prompt joins the
+            // multi-line dispatch path. Mode 3 commit writes via the
+            // existing onChange chain into extensions["depth_prompt"].
+            (.depthPrompt, depthPromptControl.promptField),
         ]
     }
 }
@@ -1675,7 +1679,14 @@ final class DepthPromptControl: NSView {
 
     private let labelView = NSTextField(labelWithString: "Depth prompt")
     private let hintView = NSTextField(labelWithString: "Injected at a fixed depth near the response (community 'depth_prompt' convention). Round-trips through extensions for ST/Risu compatibility; engine integration is a follow-up.")
-    private let promptField: MultilineFieldView
+    /// Phase 9 §5.4.c follow-up — exposed so the System tab can include
+    /// it in its `aiAssistableFields` list. The autopilot's
+    /// showProposal+acceptProposal commit path then handles depth_prompt
+    /// like any other multi-line field; the existing
+    /// `promptField.onChange → notify() → outer onChange` wiring writes
+    /// to `extensions["depth_prompt"]` via `DepthPrompt.applyTo` (see
+    /// SystemTabViewController.depthPromptControl.onChange).
+    let promptField: MultilineFieldView
     private let depthStepper = NSStepper()
     private let depthValueLabel = NSTextField(labelWithString: "4")
     private let roleLabel = NSTextField(labelWithString: "Role")
