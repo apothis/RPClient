@@ -118,14 +118,21 @@ public enum CardFieldGenerator {
     }
 
     static func renderUpstreamBlock(field: CardField, draft: CardDraftSnapshot) -> String {
-        // Only fields the dep graph lists as upstream for the target;
-        // tags are special-cased.
-        let upstreams = CardFieldDependencies.upstreams(for: field)
+        let upstreams = Set(CardFieldDependencies.upstreams(for: field))
+        return renderUpstreams(upstreams, draft: draft)
+    }
+
+    /// Render an arbitrary set of upstream signals as the prompt
+    /// upstream block. Used by Mode 1 (single field's upstreams) and
+    /// Mode 2/3 (the union of multiple targets' upstreams, with the
+    /// targets themselves removed). Byte-stable for byte-stable
+    /// inputs.
+    static func renderUpstreams(_ upstreams: Set<CardFieldUpstream>, draft: CardDraftSnapshot) -> String {
         var lines: [String] = []
 
         // Tags first — they carry strong genre signals and the dep
         // graph treats them as universal upstream for narrative
-        // fields. Sorted for byte-stability.
+        // fields. Sorted + lowercased for byte-stability.
         if upstreams.contains(.tags), !draft.tags.isEmpty {
             let sortedTags = draft.tags.map { $0.lowercased() }.sorted()
             lines.append("  tags: \(sortedTags.joined(separator: ", "))")
@@ -150,7 +157,7 @@ public enum CardFieldGenerator {
     /// structure from the field name; visual line-by-line parity with
     /// the exemplar block matters more than preserving paragraph
     /// breaks inside individual upstream values.
-    private static func escapedSingleLine(_ value: String) -> String {
+    static func escapedSingleLine(_ value: String) -> String {
         let collapsed = value
             .replacingOccurrences(of: "\r\n", with: " ")
             .replacingOccurrences(of: "\n", with: " ")

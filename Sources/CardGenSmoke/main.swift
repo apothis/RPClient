@@ -8,6 +8,12 @@ import Foundation
 //
 // usage:
 //   swift run CardGenSmoke [serverURL] [templateId] [field] [tag1,tag2,...]
+//   swift run CardGenSmoke --multi [serverURL] [tag1,tag2,...] [field1,field2,...]
+//
+// Mode 1 (default): drives a 3-candidate triad against one field
+// (description by default).
+// Mode 2 (--multi): drives a single-call json_schema fill across the
+// listed target fields (defaults to description+personality+scenario).
 //
 // defaults match the user's typical setup:
 //   serverURL = http://192.168.1.201:5001
@@ -15,12 +21,31 @@ import Foundation
 //   field = description
 //   tags = nsfw,fantasy,monstergirl,dom
 
-let args = Array(CommandLine.arguments.dropFirst())
+var rawArgs = Array(CommandLine.arguments.dropFirst())
+let multiMode = rawArgs.first == "--multi"
+if multiMode { rawArgs.removeFirst() }
+let args = rawArgs
 
-let serverURLString = args.count >= 1 ? args[0] : "http://192.168.1.201:5001"
-let templateId      = args.count >= 2 ? args[1] : "qwen"
-let fieldName       = args.count >= 3 ? args[2] : "description"
-let tagListRaw      = args.count >= 4 ? args[3] : "nsfw,fantasy,monstergirl,dom"
+let serverURLString: String
+let templateId: String
+let fieldName: String
+let tagListRaw: String
+let multiTargetsRaw: String
+
+if multiMode {
+    // --multi shape: [serverURL] [tags] [fields]
+    serverURLString = args.count >= 1 ? args[0] : "http://192.168.1.201:5001"
+    templateId = "qwen"
+    fieldName = "description"  // unused in multi mode
+    tagListRaw = args.count >= 2 ? args[1] : "nsfw,fantasy,monstergirl,dom"
+    multiTargetsRaw = args.count >= 3 ? args[2] : "description,personality,scenario,first_message,message_example"
+} else {
+    serverURLString = args.count >= 1 ? args[0] : "http://192.168.1.201:5001"
+    templateId      = args.count >= 2 ? args[1] : "qwen"
+    fieldName       = args.count >= 3 ? args[2] : "description"
+    tagListRaw      = args.count >= 4 ? args[3] : "nsfw,fantasy,monstergirl,dom"
+    multiTargetsRaw = ""
+}
 
 guard let serverURL = URL(string: serverURLString) else {
     FileHandle.standardError.write(Data("error: bad server URL: \(serverURLString)\n".utf8))
@@ -96,7 +121,77 @@ print("--------------------")
 // hopping back to main), so we run a runloop pump until the state
 // settles.
 
+@MainActor
+func runMultiMode(draft: CardDraftSnapshot, kobold: KoboldClient, targets targetsRaw: String) -> Int32 {
+    let targets: [CardField] = targetsRaw
+        .split(separator: ",")
+        .compactMap { CardField(rawValue: String($0).trimmingCharacters(in: .whitespaces)) }
+    guard !targets.isEmpty else {
+        print("error: no valid target fields in '\(targetsRaw)'")
+        return 2
+    }
+    print("[multi] targets: \(targets.map(\.rawValue).joined(separator: ", "))")
+
+    let semaphore = DispatchSemaphore(value: 0)
+    var finalState: CardMultiFieldOrchestrator.State = .idle
+
+    let orch = CardMultiFieldOrchestrator(generator: kobold)
+    let started = Date()
+    orch.onStateChange = { state in
+        let elapsed = Date().timeIntervalSince(started)
+        switch state {
+        case .idle:
+            print(String(format: "[%5.2fs] idle", elapsed))
+        case .fetching(let n):
+            print(String(format: "[%5.2fs] fetching %d-field json_schema…", elapsed, n))
+        case .ready(let proposals):
+            print(String(format: "[%5.2fs] ready (%d proposals)", elapsed, proposals.count))
+            finalState = state
+            semaphore.signal()
+        case .failed(let m):
+            print(String(format: "[%5.2fs] failed: %@", elapsed, m))
+            finalState = state
+            semaphore.signal()
+        }
+    }
+
+    print("[ 0.00s] firing multi-field fill…")
+    orch.fill(fields: targets, draft: draft)
+
+    let timeoutDeadline = Date().addingTimeInterval(120)
+    while semaphore.wait(timeout: .now() + 0.05) == .timedOut {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        if Date() > timeoutDeadline {
+            print("[timeout] >120s elapsed, giving up")
+            return 1
+        }
+    }
+
+    print("--- final state ---")
+    switch finalState {
+    case .ready(let proposals):
+        for (i, p) in proposals.enumerated() {
+            let header = "[\(i + 1)] \(p.field.rawValue) — exemplar=\(p.exemplarId)"
+                + (p.refusal.isRefusal ? " ⚠ refusal=\(p.refusal.pattern?.rawValue ?? "?")" : "")
+                + " (\(p.text.count) chars)"
+            print(header)
+            print(p.text)
+            print("---")
+        }
+        return 0
+    case .failed(let m):
+        print("FAILED: \(m)")
+        return 1
+    default:
+        return 1
+    }
+}
+
 let exitCode: Int32 = MainActor.assumeIsolated {
+    if multiMode {
+        return runMultiMode(draft: draft, kobold: kobold, targets: multiTargetsRaw)
+    }
+
     let semaphore = DispatchSemaphore(value: 0)
     var finalState: CardSuggestionsController.State = .idle
 

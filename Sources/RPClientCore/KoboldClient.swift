@@ -56,7 +56,24 @@ protocol KoboldEmbedding: AnyObject {
     )
 }
 
-final class KoboldClient: NSObject, URLSessionDataDelegate, KoboldGenerating, KoboldEmbedding {
+/// Phase 9 §5.4.b — strict-mode JSON-schema chat completions, used by
+/// Mode 2 / Mode 3 of card-gen per V2_PHASE9_AI_ASSIST_RESEARCH §3.4.
+/// Hits `/v1/chat/completions` with `response_format: json_schema`;
+/// returns the raw `message.content` string (which the call site
+/// parses against its own schema).
+protocol ChatCompletionsClient: AnyObject {
+    func chatCompletions(
+        systemMessage: String,
+        userMessage: String,
+        responseSchema: Data,
+        schemaName: String,
+        temperature: Double,
+        maxTokens: Int,
+        completion: @escaping (Result<String, Error>) -> Void
+    )
+}
+
+final class KoboldClient: NSObject, URLSessionDataDelegate, KoboldGenerating, KoboldEmbedding, ChatCompletionsClient {
     private(set) var baseURL: URL
     private lazy var session: URLSession = {
         let cfg = URLSessionConfiguration.default
@@ -404,6 +421,86 @@ final class KoboldClient: NSObject, URLSessionDataDelegate, KoboldGenerating, Ko
                     return raw.compactMap { ($0 as? NSNumber)?.floatValue }
                 }
                 completion(.success(vecs))
+            } catch {
+                completion(.failure(error))
+            }
+        }.resume()
+    }
+
+    /// Phase 9 §5.4.b — strict-mode json-schema chat completion.
+    /// POSTs `/v1/chat/completions` with the given system + user
+    /// messages and a `response_format: json_schema` strict-mode
+    /// directive. Returns the raw `message.content` string on
+    /// success — caller parses it against the schema (same one
+    /// passed in here).
+    ///
+    /// `responseSchema` is already-serialised JSON; we deserialise
+    /// to splice into the body, then re-serialise. JSON round-trip
+    /// is safe; the model only ever sees the byte form anyway.
+    func chatCompletions(
+        systemMessage: String,
+        userMessage: String,
+        responseSchema: Data,
+        schemaName: String,
+        temperature: Double,
+        maxTokens: Int,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        guard let url = URL(string: "/v1/chat/completions", relativeTo: baseURL)?.absoluteURL else {
+            completion(.failure(KoboldError.badURL)); return
+        }
+        let schemaObj: Any
+        do {
+            schemaObj = try JSONSerialization.jsonObject(with: responseSchema)
+        } catch {
+            completion(.failure(error)); return
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "model": "local",
+            "messages": [
+                ["role": "system", "content": systemMessage],
+                ["role": "user", "content": userMessage],
+            ],
+            "temperature": temperature,
+            "max_tokens": maxTokens,
+            "response_format": [
+                "type": "json_schema",
+                "json_schema": [
+                    "name": schemaName,
+                    "strict": true,
+                    "schema": schemaObj,
+                ],
+            ],
+        ]
+        do {
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            completion(.failure(error)); return
+        }
+        URLSession.shared.dataTask(with: req) { data, resp, err in
+            if let err = err { completion(.failure(err)); return }
+            guard let data = data else {
+                completion(.failure(KoboldError.http(0, "no body"))); return
+            }
+            if let http = resp as? HTTPURLResponse, http.statusCode != 200 {
+                let msg = String(data: data, encoding: .utf8) ?? ""
+                completion(.failure(KoboldError.http(http.statusCode, msg)))
+                return
+            }
+            do {
+                guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let choices = obj["choices"] as? [[String: Any]],
+                      let first = choices.first,
+                      let message = first["message"] as? [String: Any],
+                      let content = message["content"] as? String
+                else {
+                    completion(.failure(KoboldError.http(0, "unexpected shape")))
+                    return
+                }
+                completion(.success(content))
             } catch {
                 completion(.failure(error))
             }
