@@ -612,7 +612,10 @@ final class ProposalReviewRowView: NSView {
         }
 
         isLocked = row.locked
-        lockButton.title = row.locked ? "🔒" : "🔓"
+        lockButton.title = row.locked ? "🔒 Locked" : "🔓 Unlocked"
+        // Tinted bezel makes the lock state immediately legible at
+        // a glance — emoji alone wasn't enough contrast.
+        lockButton.bezelColor = row.locked ? NSColor.systemRed : NSColor.systemGreen
         lockButton.toolTip = row.locked
             ? "Locked — Re-roll all unlocked will skip this field. Click to unlock."
             : "Unlocked — Re-roll all unlocked will regenerate this field. Click to lock."

@@ -401,5 +401,114 @@ func phase9eMultiFieldTests() -> TestSuite {
         }
     }
 
+    // MARK: - Plaintext fallback parser (live failure mode where Qwen3.6
+    // ignores the json_schema and emits newline-separated values instead)
+
+    s.test("parseResponseAsPlaintext maps newline-separated values to fields in order") {
+        let r = CardMultiFieldGenerator.buildRequest(
+            for: [.name, .nickname, .detailsSex, .detailsAge,
+                  .detailsPronouns, .detailsSpecies, .detailsOrientation],
+            draft: draft
+        )
+        // Exact response shape captured from the live failure: 7 lines
+        // matching the 7 Identity-pass targets in declaration order.
+        let raw = "Gemma\nGem\nFemale\n19\nshe/her\nHuman\nbisexual"
+        let result = CardMultiFieldGenerator.parseResponseAsPlaintext(rawContent: raw, request: r)
+        guard case .success(let proposals) = result else {
+            try expectTrue(false, "expected success, got \(result)")
+            return
+        }
+        try expectEqual(proposals.count, 7)
+        try expectEqual(proposals[0].field, .name)
+        try expectEqual(proposals[0].text, "Gemma")
+        try expectEqual(proposals[1].field, .nickname)
+        try expectEqual(proposals[1].text, "Gem")
+        try expectEqual(proposals[3].field, .detailsAge)
+        try expectEqual(proposals[3].text, "19")
+        try expectEqual(proposals[6].field, .detailsOrientation)
+        try expectEqual(proposals[6].text, "bisexual")
+    }
+
+    s.test("parseResponseAsPlaintext strips a thinking trace before parsing") {
+        let r = CardMultiFieldGenerator.buildRequest(for: [.name, .nickname], draft: draft)
+        let raw = "<think>Let me decide on names</think>\nGemma\nGem"
+        let result = CardMultiFieldGenerator.parseResponseAsPlaintext(rawContent: raw, request: r)
+        guard case .success(let proposals) = result else {
+            try expectTrue(false, "expected success, got \(result)")
+            return
+        }
+        try expectEqual(proposals.count, 2)
+        try expectEqual(proposals[0].text, "Gemma")
+        try expectEqual(proposals[1].text, "Gem")
+    }
+
+    s.test("parseResponseAsPlaintext strips a `field: value` prefix when the model adds one") {
+        let r = CardMultiFieldGenerator.buildRequest(for: [.name, .nickname], draft: draft)
+        let raw = "name: Gemma\nnickname: Gem"
+        let result = CardMultiFieldGenerator.parseResponseAsPlaintext(rawContent: raw, request: r)
+        guard case .success(let proposals) = result else {
+            try expectTrue(false, "expected success, got \(result)")
+            return
+        }
+        try expectEqual(proposals[0].text, "Gemma")
+        try expectEqual(proposals[1].text, "Gem")
+    }
+
+    s.test("parseResponseAsPlaintext fails when there are fewer non-empty lines than fields") {
+        let r = CardMultiFieldGenerator.buildRequest(
+            for: [.name, .nickname, .detailsSex],
+            draft: draft
+        )
+        // Only 2 lines for 3 requested fields.
+        let raw = "Gemma\nGem"
+        let result = CardMultiFieldGenerator.parseResponseAsPlaintext(rawContent: raw, request: r)
+        guard case .failure = result else {
+            try expectTrue(false, "expected failure, got \(result)")
+            return
+        }
+    }
+
+    s.test("buildRequest emits draft.tags into the upstream block for tag-dependent fields") {
+        // Re-rolls of narrative fields like description / personality
+        // depend on .tags upstream — without this, a re-roll of
+        // description loses the genre signal and the model drifts.
+        let drafted = CardDraftSnapshot(
+            tags: ["fantasy", "monstergirl", "queer"],
+            fields: [.name: "Vexara"]
+        )
+        let r = CardMultiFieldGenerator.buildRequest(for: [.description], draft: drafted)
+        try expectTrue(r.userMessage.contains("tags:"), "userMessage should carry a tags: line")
+        try expectTrue(r.userMessage.contains("fantasy"), "userMessage should carry the 'fantasy' tag")
+        try expectTrue(r.userMessage.contains("monstergirl"), "userMessage should carry 'monstergirl'")
+        try expectTrue(r.userMessage.contains("queer"), "userMessage should carry 'queer'")
+    }
+
+    s.test("buildRequest preserves authorDirection's name in a single-field re-roll request") {
+        // Live failure: re-roll of description without authorDirection
+        // saw the model invent a fresh name. With authorDirection
+        // threaded through, the AUTHOR DIRECTION block must appear in
+        // the userMessage so the model anchors on the seed name.
+        let drafted = CardDraftSnapshot(tags: ["fantasy"], fields: [.name: "Gemma"])
+        let r = CardMultiFieldGenerator.buildRequest(
+            for: [.description],
+            draft: drafted,
+            authorDirection: "Gemma is a 19-year-old courtesan in a seedy bar"
+        )
+        try expectTrue(r.userMessage.contains("AUTHOR DIRECTION"), "userMessage should carry an AUTHOR DIRECTION block")
+        try expectTrue(r.userMessage.contains("Gemma is a 19-year-old courtesan"), "AUTHOR DIRECTION text should be preserved")
+    }
+
+    s.test("parseResponseAsPlaintext skips blank lines between values") {
+        let r = CardMultiFieldGenerator.buildRequest(for: [.name, .nickname], draft: draft)
+        let raw = "Gemma\n\n\nGem\n"
+        let result = CardMultiFieldGenerator.parseResponseAsPlaintext(rawContent: raw, request: r)
+        guard case .success(let proposals) = result else {
+            try expectTrue(false, "expected success, got \(result)")
+            return
+        }
+        try expectEqual(proposals[0].text, "Gemma")
+        try expectEqual(proposals[1].text, "Gem")
+    }
+
     return s
 }

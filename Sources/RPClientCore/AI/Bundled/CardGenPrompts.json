@@ -20,7 +20,7 @@
   },
   "fields": {
     "name": {
-      "humanName": "character's given name ONLY — no occupation, title, age, descriptor, or 'the X' suffix. Just the name (e.g. 'Vexara', 'Gemma', 'Mira Vance'). One or two words.",
+      "humanName": "character's given name ONLY — no occupation, title, age, descriptor, or 'the X' suffix. Just the name (e.g. 'Vexara', 'Mira Vance', 'Kaspar'). One or two words. If the AUTHOR DIRECTION names the character explicitly, USE THAT NAME exactly — don't substitute a different one.",
       "wordCount": 2
     },
     "nickname": {

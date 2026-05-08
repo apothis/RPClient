@@ -281,11 +281,18 @@ func phase9fAutopilotOrchestratorTests() -> TestSuite {
         }
     }
 
-    s.test("malformed-JSON in a pass aborts with .passFailure") {
+    s.test("malformed-JSON in a pass aborts with .passFailure after retries + fallback exhausted") {
+        // The orchestrator retries JSON parsing up to 2 times then
+        // falls back to plaintext. Provide 3 garbage responses (so
+        // both retries fail) and a single bad token (so plaintext
+        // fallback also fails — plaintext requires N lines for N
+        // requested fields, and identity needs 7).
         let firstTargets = CardAutopilotPass.identity.targets(in: coldDraft)
         let stub = StubChatCompletionsClient(responses: [
             .success(responseForTargets(firstTargets)),
             .success("garbage not json"),
+            .success("still not json"),
+            .success("not json one more time"),
         ])
         let orch = CardAutopilotOrchestrator(generator: stub)
         orch.generate(draft: coldDraft)
@@ -298,6 +305,71 @@ func phase9fAutopilotOrchestratorTests() -> TestSuite {
             // ok
         } else {
             try expectTrue(false, "expected .passFailure, got \(reason)")
+        }
+    }
+
+    s.test("malformed-JSON retries up to 2 times then advances if next attempt parses") {
+        // Splice 2 garbage responses BEFORE pass2's normal success
+        // response. Pass1 succeeds → pass2 fires → garbage (retry 1)
+        // → garbage (retry 2) → valid JSON → advances. Remaining
+        // passes use the original full-run responses so the run can
+        // complete (proves the retry doesn't desync the response queue).
+        var responses = responsesForFullRun(coldDraft: coldDraft)
+        responses.insert(.success("garbage one"), at: 1)
+        responses.insert(.success("garbage two"), at: 2)
+        let stub = StubChatCompletionsClient(responses: responses)
+        let orch = CardAutopilotOrchestrator(generator: stub)
+        orch.generate(draft: coldDraft)
+        pump()
+        guard case .completed = orch.state else {
+            try expectTrue(false, "expected .completed after retry recovers, got \(orch.state)")
+            return
+        }
+    }
+
+    s.test("plaintext fallback recovers when JSON retries exhausted but newline-shaped response parses") {
+        // Pass2 returns garbage 3 times in a row (initial + 2 retries),
+        // then the orchestrator falls back to a plaintext parser. We
+        // give it a newline-separated response as the third attempt
+        // so the plaintext path activates and the run completes.
+        var driver = coldDraft
+        let pass1Targets = CardAutopilotPass.identity.targets(in: coldDraft)
+        var fields = driver.fields
+        for f in pass1Targets { fields[f] = "filled" }
+        driver = CardDraftSnapshot(tags: driver.tags, fields: fields)
+        let pass2Targets = CardAutopilotPass.allCases[1].targets(in: driver)
+        let plaintext = pass2Targets
+            .map { _ in "Generated content for this field — long enough to satisfy any minimum." }
+            .joined(separator: "\n")
+        // Build all of: pass1 success, 3 garbage attempts (which exhaust
+        // retries and hand the third response to plaintext fallback),
+        // then pass3..N normally.
+        var responses: [Result<String, Error>] = [
+            .success(responseForTargets(pass1Targets)),
+            .success("garbage one"),
+            .success("garbage two"),
+            .success(plaintext),   // attempt #3 → JSON fails → plaintext recovers
+        ]
+        // Continue building responses for pass3..N from the merged
+        // running draft (assumes plaintext recovery filled pass2 fields).
+        var fields2 = driver.fields
+        for f in pass2Targets { fields2[f] = "filled" }
+        driver = CardDraftSnapshot(tags: driver.tags, fields: fields2)
+        for i in 2..<CardAutopilotPass.allCases.count {
+            let pass = CardAutopilotPass.allCases[i]
+            let targets = pass.targets(in: driver)
+            responses.append(.success(responseForTargets(targets)))
+            var nextFields = driver.fields
+            for f in targets { nextFields[f] = "filled" }
+            driver = CardDraftSnapshot(tags: driver.tags, fields: nextFields)
+        }
+        let stub = StubChatCompletionsClient(responses: responses)
+        let orch = CardAutopilotOrchestrator(generator: stub)
+        orch.generate(draft: coldDraft)
+        pump()
+        guard case .completed = orch.state else {
+            try expectTrue(false, "expected plaintext fallback to complete the run, got \(orch.state)")
+            return
         }
     }
 

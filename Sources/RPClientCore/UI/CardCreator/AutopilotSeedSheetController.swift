@@ -8,24 +8,35 @@ import AppKit
 ///   - a name + a few tags
 ///   - just tags (cold-start; the model invents everything)
 ///
-/// The author types into a single multi-line field and clicks
-/// Generate. The text is passed through to the orchestrator as the
-/// `hint` (lands in every pass's prompt as an AUTHOR DIRECTION block).
-/// Tags + name are read from the draft, not duplicated here.
+/// The author types into the description field and optionally edits
+/// the tags before clicking Generate. Both flow through to the
+/// orchestrator: the description as `hint` (lands in every pass's
+/// prompt as an AUTHOR DIRECTION block), the tags as the snapshot's
+/// `tags` array. Tags entered here are NOT promoted into the global
+/// custom-tags vocabulary — they stay scoped to this card.
 
 @MainActor
 final class AutopilotSeedSheetController: NSWindowController {
 
-    var onGenerate: ((String) -> Void)?
+    /// Called when the author confirms. `hint` is the trimmed prose
+    /// from the description field; `tags` is the comma-separated list
+    /// from the token field. Either may be empty — the orchestrator
+    /// handles cold-start.
+    var onGenerate: ((_ hint: String, _ tags: [String]) -> Void)?
     var onCancel: (() -> Void)?
 
     private let textView = NSTextView()
+    private let tagsField = NSTokenField()
     private let generateButton = NSButton(title: "Generate full card", target: nil, action: nil)
     private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
 
-    init() {
+    /// Seed values from the current draft so the author can edit
+    /// rather than retype. The caller passes the draft's tags so the
+    /// sheet shows what's already on the card; if the author commits,
+    /// the edited list is fed back into the draft.
+    init(initialTags: [String] = []) {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 540, height: 260),
+            contentRect: NSRect(x: 0, y: 0, width: 540, height: 320),
             styleMask: [.titled, .resizable, .closable],
             backing: .buffered,
             defer: false
@@ -33,6 +44,7 @@ final class AutopilotSeedSheetController: NSWindowController {
         panel.title = "Generate full card"
         super.init(window: panel)
         buildUI()
+        tagsField.objectValue = initialTags
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -53,10 +65,31 @@ final class AutopilotSeedSheetController: NSWindowController {
         title.textColor = DesignTokens.Foreground.primary
         title.translatesAutoresizingMaskIntoConstraints = false
 
-        let hint = NSTextField(wrappingLabelWithString: "A one-line concept anchors every pass — \"an aging archivist who keeps to themselves in a port town.\" Leave blank to let the model invent everything from your tags. Name and tags from the Identity tab are always included.")
+        let hint = NSTextField(wrappingLabelWithString: "A one-line concept anchors every pass — \"an aging archivist who keeps to themselves in a port town.\" Leave blank to let the model invent everything from your tags.")
         hint.font = DesignTokens.Typography.subheadline
         hint.textColor = DesignTokens.Foreground.secondary
         hint.translatesAutoresizingMaskIntoConstraints = false
+
+        let tagsLabel = NSTextField(labelWithString: "Tags")
+        tagsLabel.font = DesignTokens.Typography.headline
+        tagsLabel.textColor = DesignTokens.Foreground.primary
+        tagsLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let tagsHint = NSTextField(wrappingLabelWithString: "Steers the genre and archetype (e.g. fantasy, monstergirl). Autocompletes from the global tag list; you can type new tags. Anything entered here flows into the new card's tags on commit, but isn't added to the global autocomplete list.")
+        tagsHint.font = DesignTokens.Typography.caption1
+        tagsHint.textColor = DesignTokens.Foreground.tertiary
+        tagsHint.translatesAutoresizingMaskIntoConstraints = false
+
+        // NSTokenField mirrors the Identity tab's tags widget — comma-
+        // separated entry, autocomplete via the delegate below. Frame
+        // size is required for NSTokenField to render initial tokens
+        // without flicker.
+        tagsField.tokenStyle = .rounded
+        tagsField.controlSize = .regular
+        tagsField.placeholderString = "Add tags…"
+        tagsField.delegate = self
+        tagsField.font = DesignTokens.Typography.body
+        tagsField.translatesAutoresizingMaskIntoConstraints = false
 
         textView.font = DesignTokens.Typography.body
         textView.textColor = DesignTokens.Foreground.primary
@@ -99,6 +132,9 @@ final class AutopilotSeedSheetController: NSWindowController {
         content.addSubview(title)
         content.addSubview(hint)
         content.addSubview(scroll)
+        content.addSubview(tagsLabel)
+        content.addSubview(tagsField)
+        content.addSubview(tagsHint)
         content.addSubview(footer)
 
         NSLayoutConstraint.activate([
@@ -113,9 +149,20 @@ final class AutopilotSeedSheetController: NSWindowController {
             scroll.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: DesignTokens.Spacing.sm),
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: DesignTokens.Spacing.lg),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -DesignTokens.Spacing.lg),
-            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 100),
+            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 80),
 
-            footer.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: DesignTokens.Spacing.md),
+            tagsLabel.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: DesignTokens.Spacing.md),
+            tagsLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: DesignTokens.Spacing.lg),
+
+            tagsField.topAnchor.constraint(equalTo: tagsLabel.bottomAnchor, constant: DesignTokens.Spacing.xs),
+            tagsField.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: DesignTokens.Spacing.lg),
+            tagsField.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -DesignTokens.Spacing.lg),
+
+            tagsHint.topAnchor.constraint(equalTo: tagsField.bottomAnchor, constant: DesignTokens.Spacing.xs),
+            tagsHint.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: DesignTokens.Spacing.lg),
+            tagsHint.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -DesignTokens.Spacing.lg),
+
+            footer.topAnchor.constraint(equalTo: tagsHint.bottomAnchor, constant: DesignTokens.Spacing.md),
             footer.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: DesignTokens.Spacing.lg),
             footer.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -DesignTokens.Spacing.lg),
             footer.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -DesignTokens.Spacing.md),
@@ -124,14 +171,36 @@ final class AutopilotSeedSheetController: NSWindowController {
 
     @objc private func generateClicked() {
         let hint = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        DebugLog.shared.write("cardgen: mode3 seed submitted (\(hint.count)c)")
+        let tags = (tagsField.objectValue as? [String])?
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty } ?? []
+        DebugLog.shared.write("cardgen: mode3 seed submitted (\(hint.count)c, \(tags.count) tags=\(tags.joined(separator: ",")))")
         if let parent = window?.sheetParent { parent.endSheet(window!, returnCode: .OK) }
-        onGenerate?(hint)
+        onGenerate?(hint, tags)
     }
 
     @objc private func cancelClicked() {
         DebugLog.shared.write("cardgen: mode3 seed cancelled")
         if let parent = window?.sheetParent { parent.endSheet(window!, returnCode: .cancel) }
         onCancel?()
+    }
+}
+
+extension AutopilotSeedSheetController: NSTokenFieldDelegate {
+    /// Autocomplete from the bundled tag vocabulary + the user's
+    /// custom tags list. Identical to the Identity tab's tag field
+    /// behavior — but tokens entered here are NOT promoted into
+    /// `Settings.customTags` (per the spec for the seed sheet: this
+    /// is per-card seed input, not vocabulary curation).
+    func tokenField(
+        _ tokenField: NSTokenField,
+        completionsForSubstring substring: String,
+        indexOfToken tokenIndex: Int,
+        indexOfSelectedItem selectedIndex: UnsafeMutablePointer<Int>?
+    ) -> [Any]? {
+        let needle = substring.lowercased()
+        guard !needle.isEmpty else { return [] }
+        let custom = AppState.shared.settings.customTags
+        return TagVocabulary.shared.matches(prefix: needle, customTags: custom).map { $0 as Any }
     }
 }

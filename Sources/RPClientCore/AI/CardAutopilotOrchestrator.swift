@@ -138,8 +138,18 @@ final class CardAutopilotOrchestrator {
         var callsUsed: Int = 0
         var tokensUsed: Int = 0
         var passIndex: Int = 0
+        /// JSON parse retries used by the *current* pass. Resets to 0
+        /// each time the pass advances. Bounded at `maxParseRetries`;
+        /// when exhausted the orchestrator falls back to a plaintext
+        /// parser before aborting.
+        var parseRetries: Int = 0
     }
     private var inFlight: RunContext?
+
+    /// Maximum JSON-parse retries per pass before the plaintext fallback
+    /// kicks in. Live failure mode: Qwen3.6 occasionally drops the JSON
+    /// envelope and emits newline-separated values.
+    private static let maxParseRetries = 2
 
     init(
         generator: ChatCompletionsClient,
@@ -246,9 +256,19 @@ final class CardAutopilotOrchestrator {
         DebugLog.shared.write(
             "cardgen: mode3 → pass=\(pass.logTag) targets=\(targetsStr) exemplar=\(request.exemplarId)"
         )
-        let started = Date()
-        let runId = ctx.id
+        dispatchPass(pass: pass, request: request, runId: ctx.id)
+    }
 
+    /// Fires the chat-completions call for a pass and routes the
+    /// response back through `handlePassResult`. Extracted so the parse-
+    /// failure retry path can re-fire the same request without
+    /// re-running budget gates or re-counting calls.
+    private func dispatchPass(
+        pass: CardAutopilotPass,
+        request: CardMultiFieldRequest,
+        runId: UUID
+    ) {
+        let started = Date()
         generator.chatCompletions(
             systemMessage: request.systemMessage,
             userMessage: request.userMessage,
@@ -301,38 +321,80 @@ final class CardAutopilotOrchestrator {
             switch parsed {
             case .failure(let parseErr):
                 let msg = parseErr.description
+                // Retry the same pass up to `maxParseRetries` times
+                // before falling back. Live failure mode: Qwen3.6
+                // sometimes ignores json_schema on first try and emits
+                // raw values; a second attempt usually returns proper
+                // JSON. Retries don't count against the budget — the
+                // 2-retry cap is the cost ceiling.
+                if ctx.parseRetries < Self.maxParseRetries {
+                    var next = ctx
+                    next.parseRetries += 1
+                    inFlight = next
+                    DebugLog.shared.write(
+                        "cardgen: mode3 ⟳ pass=\(pass.logTag) JSON parse failed (retry \(next.parseRetries)/\(Self.maxParseRetries)) — \(msg) in \(String(format: "%.1f", dt))s"
+                    )
+                    dispatchPass(pass: pass, request: request, runId: runId)
+                    return
+                }
+                // Retries exhausted — try the plaintext fallback parser.
                 DebugLog.shared.write(
-                    "cardgen: mode3 ✗ pass=\(pass.logTag) parse \(msg) in \(String(format: "%.1f", dt))s"
+                    "cardgen: mode3 ⤷ pass=\(pass.logTag) plaintext fallback after \(Self.maxParseRetries) JSON retries"
                 )
-                inFlight = nil
-                setState(.aborted(
-                    .passFailure(pass: pass, message: msg),
-                    partialProposals: ctx.collected
-                ))
+                let plain = CardMultiFieldGenerator.parseResponseAsPlaintext(rawContent: raw, request: request)
+                switch plain {
+                case .success(let proposals):
+                    DebugLog.shared.write(
+                        "cardgen: mode3 ✓ pass=\(pass.logTag) plaintext fallback recovered \(proposals.count) fields"
+                    )
+                    advanceWithProposals(ctx: ctx, pass: pass, proposals: proposals, dt: dt)
+                case .failure(let plainErr):
+                    let combined = "json: \(msg) | plaintext: \(plainErr.description)"
+                    DebugLog.shared.write(
+                        "cardgen: mode3 ✗ pass=\(pass.logTag) parse \(combined) in \(String(format: "%.1f", dt))s"
+                    )
+                    inFlight = nil
+                    setState(.aborted(
+                        .passFailure(pass: pass, message: combined),
+                        partialProposals: ctx.collected
+                    ))
+                }
 
             case .success(let proposals):
-                var next = ctx
-                next.collected.append(contentsOf: proposals)
-                // Merge proposals into running draft for next-pass upstream.
-                var fields = next.runningDraft.fields
-                for p in proposals {
-                    fields[p.field] = p.text
-                }
-                next.runningDraft = CardDraftSnapshot(
-                    tags: next.runningDraft.tags,
-                    fields: fields
-                )
-                next.passIndex += 1
-                inFlight = next
-
-                let refusalCount = proposals.filter(\.refusal.isRefusal).count
-                let totalChars = proposals.reduce(0) { $0 + $1.text.count }
-                DebugLog.shared.write(
-                    "cardgen: mode3 ✓ pass=\(pass.logTag) → \(proposals.count) proposals (\(totalChars)c, \(refusalCount) refusals) in \(String(format: "%.1f", dt))s"
-                )
-                runNextPass()
+                advanceWithProposals(ctx: ctx, pass: pass, proposals: proposals, dt: dt)
             }
         }
+    }
+
+    /// Shared success path for JSON-parse and plaintext-fallback parses.
+    /// Merges proposals into the running draft, advances the pass index,
+    /// resets the parse-retry counter, and fires the next pass.
+    private func advanceWithProposals(
+        ctx: RunContext,
+        pass: CardAutopilotPass,
+        proposals: [CardFieldProposal],
+        dt: TimeInterval
+    ) {
+        var next = ctx
+        next.collected.append(contentsOf: proposals)
+        var fields = next.runningDraft.fields
+        for p in proposals {
+            fields[p.field] = p.text
+        }
+        next.runningDraft = CardDraftSnapshot(
+            tags: next.runningDraft.tags,
+            fields: fields
+        )
+        next.passIndex += 1
+        next.parseRetries = 0
+        inFlight = next
+
+        let refusalCount = proposals.filter(\.refusal.isRefusal).count
+        let totalChars = proposals.reduce(0) { $0 + $1.text.count }
+        DebugLog.shared.write(
+            "cardgen: mode3 ✓ pass=\(pass.logTag) → \(proposals.count) proposals (\(totalChars)c, \(refusalCount) refusals) in \(String(format: "%.1f", dt))s"
+        )
+        runNextPass()
     }
 
     private func setState(_ new: State) {

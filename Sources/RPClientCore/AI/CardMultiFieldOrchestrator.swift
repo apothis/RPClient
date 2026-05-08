@@ -53,11 +53,12 @@ final class CardMultiFieldOrchestrator {
     /// section"). Empty `fields` is a no-op.
     func fill(
         fields: [CardField],
-        draft: CardDraftSnapshot
+        draft: CardDraftSnapshot,
+        authorDirection: String? = nil
     ) {
         guard !fields.isEmpty else { return }
         let request = CardMultiFieldGenerator.buildRequest(
-            for: fields, draft: draft, registry: registry
+            for: fields, draft: draft, registry: registry, authorDirection: authorDirection
         )
         let ctx = GenerationContext(id: UUID(), request: request)
         inFlight = ctx

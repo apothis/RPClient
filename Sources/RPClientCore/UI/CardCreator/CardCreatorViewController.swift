@@ -48,6 +48,13 @@ final class CardCreatorViewController: NSViewController {
     /// per-field re-rolls inside the review sheet. Each entry is
     /// removed on completion.
     private var rerollOrchestrators: [UUID: CardMultiFieldOrchestrator] = [:]
+    /// AUTHOR DIRECTION captured at the start of the current Mode 3
+    /// run. Re-rolls fired from the review sheet thread this back into
+    /// `CardMultiFieldGenerator.buildRequest` so the load-bearing
+    /// concept (e.g. "Gemma is a 19-year-old courtesan") anchors every
+    /// re-rolled field — without this, re-rolls drop the hint and the
+    /// model invents fresh names / occupations.
+    private var lastAutopilotHint: String?
 
     /// Banner above the tab strip showing "N fields proposed" + Accept
     /// all / Reject all. Hidden when no field is in proposed state.
@@ -410,10 +417,15 @@ final class CardCreatorViewController: NSViewController {
     // MARK: - Mode 3 autopilot (§5.4.c)
 
     @objc private func generateFullCardClicked() {
-        let sheet = AutopilotSeedSheetController()
-        sheet.onGenerate = { [weak self] hint in
+        // Seed the sheet with whatever tags the draft already has so
+        // the author can edit rather than retype. On commit, the sheet
+        // returns the (possibly edited) tag list, which gets pushed
+        // back into the draft AND used as the autopilot snapshot's
+        // tags for upstream context.
+        let sheet = AutopilotSeedSheetController(initialTags: draft.character.tags)
+        sheet.onGenerate = { [weak self] hint, tags in
             self?.seedSheet = nil
-            self?.startAutopilot(hint: hint)
+            self?.startAutopilot(hint: hint, tags: tags)
         }
         sheet.onCancel = { [weak self] in self?.seedSheet = nil }
         seedSheet = sheet
@@ -422,7 +434,20 @@ final class CardCreatorViewController: NSViewController {
         }
     }
 
-    private func startAutopilot(hint: String) {
+    private func startAutopilot(hint: String, tags: [String]) {
+        // Push the seed sheet's tag list back into the draft so the
+        // editor reflects them and the persisted card has them on
+        // save. Per spec these tags do NOT get promoted into the
+        // global custom-tags vocabulary — that's only an Identity-tab
+        // action via the per-tag promote-to-vocab toggle.
+        if tags != draft.character.tags {
+            draft.character.tags = tags
+            draft.markDirty()
+            handleDirtyChanged()
+            aiRegistry.markTagsChanged()
+        }
+        // Snapshot AFTER the tag mutation so the autopilot prompt sees
+        // the seed's tags as upstream.
         let snapshot = CardDraftSnapshotBuilder.snapshot(of: draft)
         let kobold = AppState.shared.registry.cardCreatorClient(
             chatOverride: AppState.shared.currentChat?.serverId
@@ -436,7 +461,9 @@ final class CardCreatorViewController: NSViewController {
         autoButton.title = "Generating…"
         autoSpinner.startAnimation(nil)
         fillButton.isEnabled = false  // don't allow Mode 2 to race Mode 3
-        orch.generate(draft: snapshot, hint: hint.isEmpty ? nil : hint)
+        let trimmedHint = hint.isEmpty ? nil : hint
+        lastAutopilotHint = trimmedHint   // reused on re-rolls
+        orch.generate(draft: snapshot, hint: trimmedHint)
     }
 
     private func handleAutopilotState(_ state: CardAutopilotOrchestrator.State) {
@@ -548,7 +575,14 @@ final class CardCreatorViewController: NSViewController {
         sheet: ProposalReviewSheetController
     ) {
         guard let field = fields.first else { return }
-        let snapshot = CardDraftSnapshotBuilder.snapshot(of: draft)
+        // Layer the review sheet's current proposal values on top of
+        // the draft snapshot. Without this, re-rolling description
+        // sees `name=<empty>` as upstream (because the proposed
+        // name=Gemma hasn't been committed to the draft yet) and
+        // the model invents a fresh name in the prose. Caught live
+        // §5.4.c smoke when description re-roll mentioned "Jade"
+        // while the locked name row still said "Gemma".
+        let snapshot = mergedRerollSnapshot(sheetModel: sheet.model)
         let kobold = AppState.shared.registry.cardCreatorClient(
             chatOverride: AppState.shared.currentChat?.serverId
         )
@@ -569,8 +603,28 @@ final class CardCreatorViewController: NSViewController {
             }
         }
         rerollOrchestrators[id] = orch
-        DebugLog.shared.write("cardgen: mode3 reroll fire \(field.rawValue)")
-        orch.fill(fields: [field], draft: snapshot)
+        let hintPreview = lastAutopilotHint?.prefix(40) ?? ""
+        let tagsList = snapshot.tags.joined(separator: ",")
+        DebugLog.shared.write("cardgen: mode3 reroll fire \(field.rawValue) — upstream name=\"\(snapshot.fields[.name] ?? "")\" tags=[\(tagsList)] hint=\"\(hintPreview)\"")
+        orch.fill(fields: [field], draft: snapshot, authorDirection: lastAutopilotHint)
+    }
+
+    /// Build a draft snapshot for re-roll prompts that layers the
+    /// review sheet's current proposal values over the underlying
+    /// draft. Without this, re-rolls send `name=<empty>` upstream
+    /// (the proposed name lives in the model, not the draft, until
+    /// the user commits) and the model invents a fresh name in the
+    /// re-rolled prose. Rejected rows are skipped — the user has
+    /// signaled they don't want that value influencing other fields.
+    private func mergedRerollSnapshot(sheetModel: ProposalReviewModel) -> CardDraftSnapshot {
+        let base = CardDraftSnapshotBuilder.snapshot(of: draft)
+        var fields = base.fields
+        for row in sheetModel.rows where row.status != .rejected {
+            let trimmed = row.current.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            fields[row.field] = trimmed
+        }
+        return CardDraftSnapshot(tags: base.tags, fields: fields)
     }
 
     private func commitAutopilotProposals(_ proposals: [CardFieldProposal]) {

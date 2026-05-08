@@ -126,7 +126,7 @@ enum CardMultiFieldGenerator {
         // when the same prefix is sent.
         let trimmedDirection = authorDirection?.trimmingCharacters(in: .whitespacesAndNewlines)
         let directionBlock = (trimmedDirection?.isEmpty == false)
-            ? "AUTHOR DIRECTION (anchor the character to this concept):\n\"\(trimmedDirection!)\""
+            ? "AUTHOR DIRECTION (load-bearing — match it exactly):\n\"\(trimmedDirection!)\"\n\nIf the direction names a specific character (e.g. \"Gemma is a 19-year-old courtesan…\"), the `name` field MUST use that exact name. Do NOT invent a substitute. Other concrete facts (age, occupation, setting) stated in the direction are also load-bearing — preserve them in their respective fields."
             : nil
         // Exemplar's name — surfaced explicitly in the rules so the
         // model has a clear "do NOT copy this" anchor. Caught on §5.4.c
@@ -145,7 +145,7 @@ enum CardMultiFieldGenerator {
             // The companion/domestic lanes also copied the exemplar's
             // name and description verbatim when the hint described
             // the same archetype.
-            "Populate every field below in the JSON response. Rules:\n  - Generate a NEW character. The example character is named \"\(exemplarName)\"; the TARGET character must have a different name.\n  - Each JSON value contains ONLY that field's content — no field-name prefix, no other fields' content, no `key: value` lines copied from the example.\n  - Match the example's REGISTER (voice, level of detail, NSFW posture) but invent fresh content. Reword every sentence; do not paraphrase the example.\n  - REPLACE every concrete detail from the example with a freshly-invented one. This includes proper nouns (ship names, station names, neighborhoods, agencies), specific numbers/schedules ('two nights a week', 'three years', 'four hundred and fifty years'), specific habits ('two espresso shots before any meeting', 'pottery class'), and specific phrases. NO sequence of more than four consecutive words may appear verbatim from the example. Borrow the SHAPE ('orbital hospital ship NAME-N', 'has worked at AGENCY for SOME years'), not the specifics.\n  - Each value matches the upstream details and the AUTHOR DIRECTION (if any).\n\nFields to populate:\n\(targetsList)",
+            "Populate every field below in the JSON response. Rules:\n  - Generate a NEW character. The example character is named \"\(exemplarName)\"; the TARGET character must have a different name (UNLESS the AUTHOR DIRECTION specifies a name — then use the direction's name verbatim, even if it happens to match the example).\n  - Each JSON value contains ONLY that field's content — no field-name prefix, no other fields' content, no `key: value` lines copied from the example.\n  - Match the example's REGISTER (voice, level of detail, NSFW posture) but invent fresh content. Reword every sentence; do not paraphrase the example.\n  - REPLACE every concrete detail from the example with a freshly-invented one. This includes proper nouns (ship names, station names, neighborhoods, agencies), specific numbers/schedules ('two nights a week', 'three years', 'four hundred and fifty years'), specific habits ('two espresso shots before any meeting', 'pottery class'), and specific phrases. NO sequence of more than four consecutive words may appear verbatim from the example. Borrow the SHAPE ('orbital hospital ship NAME-N', 'has worked at AGENCY for SOME years'), not the specifics.\n  - The AUTHOR DIRECTION is load-bearing. Names, ages, occupations, and settings stated in it MUST appear in the corresponding fields verbatim — do not invent substitutes.\n\nFields to populate:\n\(targetsList)",
         ]
         .compactMap { $0 }
         .joined(separator: "\n\n")
@@ -218,6 +218,61 @@ enum CardMultiFieldGenerator {
             proposals.append(CardFieldProposal(
                 field: field,
                 text: str,
+                refusal: refusal,
+                exemplarId: request.exemplarId
+            ))
+        }
+        return .success(proposals)
+    }
+
+    /// Plaintext fallback when the model ignores the json_schema and
+    /// returns newline-separated values (live failure mode caught with
+    /// Qwen3.6: response was `Gemma\nGem\nFemale\n19\nshe/her\nHuman\n
+    /// bisexual` for the 7 Identity-pass targets). Used by the autopilot
+    /// orchestrator after JSON parsing has been retried twice without
+    /// success — better to recover with a degraded parse than abort the
+    /// entire run.
+    ///
+    /// Strategy: strip a thinking trace, split on newlines, drop blank
+    /// lines, strip a leading `fieldname:` prefix per line if present,
+    /// then map line N → request.fields[N]. Fails if there are fewer
+    /// non-empty lines than requested fields.
+    static func parseResponseAsPlaintext(
+        rawContent: String,
+        request: CardMultiFieldRequest
+    ) -> Result<[CardFieldProposal], CardMultiFieldParseError> {
+        let cleaned = Markdown.stripThinking(rawContent)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = cleaned
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard lines.count >= request.fields.count else {
+            return .failure(.malformedJSON(
+                "plaintext fallback: \(lines.count) non-empty lines < \(request.fields.count) requested fields"
+            ))
+        }
+
+        var proposals: [CardFieldProposal] = []
+        for (i, field) in request.fields.enumerated() {
+            var line = lines[i]
+            // Strip a leading `field: ` prefix if the model decided to
+            // add one. Match against the rawValue exactly (case-sensitive,
+            // followed by optional whitespace and a colon).
+            let prefix = "\(field.rawValue):"
+            if line.lowercased().hasPrefix(prefix.lowercased()) {
+                line = String(line.dropFirst(prefix.count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            let expectedLen = request.expectedLengths[field] ?? 0
+            let refusal = CardGenRefusalDetector.detect(
+                candidate: line,
+                expectedLengthChars: expectedLen
+            )
+            proposals.append(CardFieldProposal(
+                field: field,
+                text: line,
                 refusal: refusal,
                 exemplarId: request.exemplarId
             ))
