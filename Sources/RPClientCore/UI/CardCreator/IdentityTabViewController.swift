@@ -82,13 +82,14 @@ final class IdentityTabViewController: NSViewController {
                                      v3Only: true)
         fieldStack.addArrangedSubview(nicknameRow)
 
-        // Tags (token field). Embed in an NSScrollView with vertical
-        // scrolling so a busy tag list (10+ tokens) is visibly
-        // scrollable rather than clipping silently at the field
-        // edge. NSTokenField's cell.wraps + isScrollable=false +
-        // preferredMaxLayoutWidth force tokens to wrap to additional
-        // lines; the surrounding scrollView caps the visible height
-        // and shows a scroll thumb when content overflows.
+        // Tags (token field). Inline wrap — busy tag lists grow the
+        // field vertically rather than clipping at the right edge.
+        // NSTokenField's cell.wraps + isScrollable=false +
+        // preferredMaxLayoutWidth let it wrap; AppKit recomputes the
+        // intrinsic height as tokens flow onto additional lines.
+        // (Earlier attempt at wrapping in an NSScrollView broke
+        // click/focus handling — NSTokenField doesn't behave
+        // cleanly as a documentView. Reverted to inline.)
         tagsField.translatesAutoresizingMaskIntoConstraints = false
         tagsField.tokenStyle = .rounded
         tagsField.controlSize = .small
@@ -96,31 +97,15 @@ final class IdentityTabViewController: NSViewController {
         tagsField.objectValue = draft.character.tags
         tagsField.delegate = self
         tagsField.font = DesignTokens.Typography.body
-        tagsField.isBordered = false
-        tagsField.drawsBackground = false
         tagsField.cell?.wraps = true
         tagsField.cell?.usesSingleLineMode = false
         tagsField.cell?.isScrollable = false
         tagsField.lineBreakMode = .byWordWrapping
         tagsField.maximumNumberOfLines = 0
-        tagsField.preferredMaxLayoutWidth = 352  // 360 minus scrollView's bezel insets
-        tagsField.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        tagsField.setContentHuggingPriority(.defaultLow, for: .vertical)
-
-        let tagsScroll = NSScrollView()
-        tagsScroll.translatesAutoresizingMaskIntoConstraints = false
-        tagsScroll.hasVerticalScroller = true
-        tagsScroll.autohidesScrollers = true
-        tagsScroll.borderType = .bezelBorder
-        tagsScroll.drawsBackground = true
-        tagsScroll.documentView = tagsField
-        tagsScroll.widthAnchor.constraint(equalToConstant: 360).isActive = true
-        // Min-height fits one row + a bit; scroll kicks in past three.
-        tagsScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 36).isActive = true
-        tagsScroll.heightAnchor.constraint(lessThanOrEqualToConstant: 96).isActive = true
-
+        tagsField.preferredMaxLayoutWidth = 360
+        tagsField.widthAnchor.constraint(equalToConstant: 360).isActive = true
         let tagsRow = labeledRow("Tags",
-                                 control: tagsScroll,
+                                 control: tagsField,
                                  hint: "Comma-separated. Used by the library for filtering. Common tags autocomplete.",
                                  width: 360)
         fieldStack.addArrangedSubview(tagsRow)
