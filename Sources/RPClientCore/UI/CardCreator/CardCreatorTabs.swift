@@ -175,14 +175,15 @@ final class DetailsTabViewController: NSViewController {
     }
 
     private func commit() {
-        let d = CardDetails(
-            age: ageField.stringValue,
-            pronouns: pronounsField.stringValue,
-            species: speciesField.stringValue,
-            orientation: orientationField.stringValue,
-            appearance: appearanceField.stringValue,
-            mood: moodField.stringValue
-        )
+        // Read-modify-write so we don't clobber the `sex` field
+        // owned by the Identity tab (Phase 9 §5.4 sex chooser).
+        var d = CardDetails.extractFrom(draft.character) ?? CardDetails()
+        d.age = ageField.stringValue
+        d.pronouns = pronounsField.stringValue
+        d.species = speciesField.stringValue
+        d.orientation = orientationField.stringValue
+        d.appearance = appearanceField.stringValue
+        d.mood = moodField.stringValue
         d.applyTo(&draft.character)
         draft.markDirty()
         onDirty()

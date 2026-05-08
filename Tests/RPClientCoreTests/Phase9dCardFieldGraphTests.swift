@@ -105,7 +105,18 @@ func phase9dCardFieldGraphTests() -> TestSuite {
         try expectTrue(upstreams.contains(.field(.detailsOrientation)))
     }
 
-    s.test("identity facts (age/pronouns/species/orientation) are upstream of every narrative field") {
+    s.test("details_sex has [tags, species] upstream (auto-derive when Generate fires)") {
+        let upstreams = CardFieldDependencies.upstreams(for: .detailsSex)
+        try expectTrue(upstreams.contains(.tags))
+        try expectTrue(upstreams.contains(.field(.detailsSpecies)))
+    }
+
+    s.test("details_pronouns has sex as upstream (pronouns often fall out of sex)") {
+        let upstreams = CardFieldDependencies.upstreams(for: .detailsPronouns)
+        try expectTrue(upstreams.contains(.field(.detailsSex)))
+    }
+
+    s.test("identity facts (sex/age/pronouns/species/orientation) are upstream of every narrative field") {
         // Catches future regressions if anyone removes the
         // identityFacts bundle from a case.
         let narrativeFields: [CardField] = [
@@ -116,6 +127,8 @@ func phase9dCardFieldGraphTests() -> TestSuite {
         ]
         for field in narrativeFields {
             let upstreams = CardFieldDependencies.upstreams(for: field)
+            try expectTrue(upstreams.contains(.field(.detailsSex)),
+                "\(field.rawValue) should have detailsSex upstream")
             try expectTrue(upstreams.contains(.field(.detailsAge)),
                 "\(field.rawValue) should have detailsAge upstream")
             try expectTrue(upstreams.contains(.field(.detailsSpecies)),

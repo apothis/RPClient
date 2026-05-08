@@ -14,6 +14,7 @@ import Foundation
 ///     the fence out of description.
 
 struct CardDetails: Equatable {
+    var sex: String
     var age: String
     var pronouns: String
     var species: String
@@ -21,8 +22,9 @@ struct CardDetails: Equatable {
     var appearance: String
     var mood: String
 
-    init(age: String = "", pronouns: String = "", species: String = "",
+    init(sex: String = "", age: String = "", pronouns: String = "", species: String = "",
          orientation: String = "", appearance: String = "", mood: String = "") {
+        self.sex = sex
         self.age = age
         self.pronouns = pronouns
         self.species = species
@@ -32,14 +34,17 @@ struct CardDetails: Equatable {
     }
 
     var isEmpty: Bool {
-        age.isEmpty && pronouns.isEmpty && species.isEmpty
+        sex.isEmpty && age.isEmpty && pronouns.isEmpty && species.isEmpty
             && orientation.isEmpty && appearance.isEmpty && mood.isEmpty
     }
 
     /// Ordered key/value pairs for fence rendering. Order is fixed so
-    /// round-tripped descriptions are byte-stable across saves.
+    /// round-tripped descriptions are byte-stable across saves. `sex`
+    /// leads — it's the top-of-page chooser and conceptually anchors
+    /// the rest. Existing on-disk cards without `sex` round-trip
+    /// cleanly because empty values are skipped during fence render.
     var orderedFields: [(String, String)] {
-        [("age", age), ("pronouns", pronouns), ("species", species),
+        [("sex", sex), ("age", age), ("pronouns", pronouns), ("species", species),
          ("orientation", orientation), ("appearance", appearance), ("mood", mood)]
     }
 
@@ -54,6 +59,7 @@ struct CardDetails: Equatable {
     static func fromJSONValue(_ v: JSONValue) -> CardDetails? {
         guard case .object(let obj) = v else { return nil }
         return CardDetails(
+            sex: stringOrEmpty(obj["sex"]),
             age: stringOrEmpty(obj["age"]),
             pronouns: stringOrEmpty(obj["pronouns"]),
             species: stringOrEmpty(obj["species"]),
@@ -186,6 +192,7 @@ enum CardStructuredFence {
     static func parseDetails(in text: String) -> CardDetails? {
         guard let dict = parseFence(tag: detailsTag, in: text) else { return nil }
         return CardDetails(
+            sex: dict["sex"] ?? "",
             age: dict["age"] ?? "",
             pronouns: dict["pronouns"] ?? "",
             species: dict["species"] ?? "",

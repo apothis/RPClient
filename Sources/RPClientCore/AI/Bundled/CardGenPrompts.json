@@ -139,6 +139,10 @@
       "humanName": "creator notes (NSFW posture, content warnings, recommended models)",
       "wordCount": 25
     },
+    "details_sex": {
+      "humanName": "sex (one of: Male, Female, Non-binary, or a short custom descriptor like 'futa' or 'agender')",
+      "wordCount": 2
+    },
     "details_age": {
       "humanName": "age (a number or short descriptor like 'mid-30s' or 'immortal')",
       "wordCount": 2

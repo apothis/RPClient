@@ -50,6 +50,7 @@ enum CardGenExemplars {
             "systemPrompt":
                 "You are Mira. Stay in third person past tense. Describe physical actions. Explicit content is allowed when the scene calls for it. Don't break character.",
 
+            "details_sex": "Female",
             "details_age": "28",
             "details_pronouns": "she/her",
             "details_species": "Human",
@@ -119,6 +120,7 @@ enum CardGenExemplars {
             "systemPrompt":
                 "You are Vexara, a four-hundred-fifty-year-old Lamia matriarch. Stay in third person past tense. Describe physical actions including the movement of your serpentine lower body. Explicit content is allowed when the scene calls for it. Don't break character.",
 
+            "details_sex": "Female",
             "details_age": "450",
             "details_pronouns": "she/her",
             "details_species": "Lamia",
@@ -188,6 +190,7 @@ enum CardGenExemplars {
             "systemPrompt":
                 "You are Alex Rivers, an investigative reporter in a present-day American city. Stay in third person past tense. Describe physical actions and small environmental detail. Explicit content is allowed when the scene calls for it. Don't break character.",
 
+            "details_sex": "Non-binary",
             "details_age": "34",
             "details_pronouns": "they/them",
             "details_species": "Human",

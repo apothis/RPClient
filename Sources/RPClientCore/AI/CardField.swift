@@ -29,6 +29,7 @@ public enum CardField: String, CaseIterable, Hashable, Sendable, Codable {
     case creatorNotes = "creator_notes"
 
     // §3.9 Details
+    case detailsSex = "details_sex"
     case detailsAge = "details_age"
     case detailsPronouns = "details_pronouns"
     case detailsSpecies = "details_species"
@@ -66,12 +67,14 @@ public enum CardFieldUpstream: Hashable, Sendable {
 /// The graph is acyclic — each field can only depend on fields that
 /// come before it in the natural authoring order. Tests enforce this.
 public enum CardFieldDependencies {
-    /// The four short Identity-tab facts (age / pronouns / species /
-    /// orientation). Treated as a universal upstream bundle for the
-    /// narrative fields below — the prompt builder skips empty values
-    /// per `CardDraftSnapshotBuilder`, so cards that haven't filled
-    /// these in just don't see them in the upstream block.
+    /// The five short Identity-tab facts (sex / age / pronouns /
+    /// species / orientation). Treated as a universal upstream
+    /// bundle for the narrative fields below — the prompt builder
+    /// skips empty values per `CardDraftSnapshotBuilder`, so cards
+    /// that haven't filled these in just don't see them in the
+    /// upstream block.
     private static let identityFacts: [CardFieldUpstream] = [
+        .field(.detailsSex),
         .field(.detailsAge),
         .field(.detailsPronouns),
         .field(.detailsSpecies),
@@ -92,13 +95,21 @@ public enum CardFieldDependencies {
 
         // MARK: - Tags-only upstream
 
+        case .detailsSex:
+            // Usually author-set up front (it's the new top-of-page
+            // chooser); if the author fires Generate, tags + species
+            // are the natural signals (e.g. monstergirl tag pulls
+            // "female", futa tag pulls "other").
+            return [.tags, .field(.detailsSpecies)]
         case .detailsAge:
             // Usually author-set, but if Generate fires, tags help —
             // "elderly" / "teen" / "ageless" pull useful defaults.
             return [.tags]
         case .detailsPronouns:
-            // Tags like male/female/nonbinary/futa are direct signals.
-            return [.tags]
+            // Tags like male/female/nonbinary/futa are direct signals;
+            // sex is also a strong upstream — pronouns often fall
+            // out of the chosen sex.
+            return [.tags, .field(.detailsSex)]
         case .name:
             // Cold-start: tags + bundled creative-license phrase.
             return [.tags]

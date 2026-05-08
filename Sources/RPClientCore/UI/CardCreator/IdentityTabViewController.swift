@@ -17,6 +17,18 @@ final class IdentityTabViewController: NSViewController {
     private let creatorField = NSTextField()
     private let versionField = NSTextField()
 
+    /// Phase 9 §5.4 — sex chooser. NSPopUpButton with the four common
+    /// options + Other. Distinct from pronouns (the linguistic form);
+    /// this is the biological / identity attribute that informs
+    /// AI-assist generation across the card. Stored as
+    /// `extensions["rpclient/details"].sex` alongside the rest of
+    /// CardDetails (which is otherwise edited on the Details tab).
+    private let sexPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let sexCustomField = NSTextField()
+    private static let sexStandardOptions = ["Male", "Female", "Non-binary"]
+    private static let sexUnsetTitle = "—"
+    private static let sexOtherTitle = "Other"
+
     /// Row of small per-tag pills shown below the tags field for any
     /// tag that isn't in the bundled vocabulary OR the persistent
     /// custom-tags list. Each pill carries a toggle: ✗ (default —
@@ -81,6 +93,36 @@ final class IdentityTabViewController: NSViewController {
                                      hint: "Replaces {{char}} in v3 prompts. Falls back to Name. Optional.",
                                      v3Only: true)
         fieldStack.addArrangedSubview(nicknameRow)
+
+        // Sex chooser (Phase 9 §5.4 — identity attribute that plumbs
+        // into AI-assist generation across the card; distinct from
+        // pronouns).
+        sexPopup.translatesAutoresizingMaskIntoConstraints = false
+        sexPopup.bezelStyle = .rounded
+        sexPopup.controlSize = .small
+        sexPopup.removeAllItems()
+        sexPopup.addItem(withTitle: Self.sexUnsetTitle)
+        for opt in Self.sexStandardOptions { sexPopup.addItem(withTitle: opt) }
+        sexPopup.addItem(withTitle: Self.sexOtherTitle)
+        sexPopup.target = self
+        sexPopup.action = #selector(sexPopupChanged)
+
+        configureField(sexCustomField, placeholder: "futa, agender, …", width: 200)
+        sexCustomField.delegate = self
+        sexCustomField.isHidden = true
+
+        let sexRowControls = NSStackView(views: [sexPopup, sexCustomField])
+        sexRowControls.orientation = .horizontal
+        sexRowControls.alignment = .firstBaseline
+        sexRowControls.spacing = DesignTokens.Spacing.sm
+        sexRowControls.translatesAutoresizingMaskIntoConstraints = false
+
+        let sexRow = labeledRow("Sex",
+                                control: sexRowControls,
+                                hint: "Distinct from pronouns. Plumbed into AI-assist as universal context.")
+        fieldStack.addArrangedSubview(sexRow)
+
+        loadSexFromDraft()
 
         // Tags (token field). NSTokenField's wrap-to-multi-line mode
         // is unreliable in current AppKit — settings (cell.wraps +
@@ -266,6 +308,11 @@ extension IdentityTabViewController: NSTextFieldDelegate {
         case nicknameField: draft.character.nickname = nonEmpty(field.stringValue)
         case creatorField: draft.character.creator = nonEmpty(field.stringValue)
         case versionField: draft.character.characterVersion = nonEmpty(field.stringValue)
+        case sexCustomField:
+            // "Other" mode — every keystroke writes through to
+            // extensions and propagates stale.
+            commitSex()
+            return  // commitSex already markDirty + onDirty
         case tagsField:
             // NSTokenField fires controlTextDidChange both on raw
             // character entry (still-being-typed input) AND on token
@@ -287,6 +334,68 @@ extension IdentityTabViewController: NSTextFieldDelegate {
     private func nonEmpty(_ s: String) -> String? {
         let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    // MARK: - Sex chooser (Phase 9 §5.4)
+
+    /// Read the persisted sex value off the draft and reflect it in
+    /// the popup + custom-field state. Empty → "—". Standard option
+    /// → that option. Otherwise → "Other" + custom-field text.
+    private func loadSexFromDraft() {
+        let current = (CardDetails.extractFrom(draft.character)?.sex ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if current.isEmpty {
+            sexPopup.selectItem(withTitle: Self.sexUnsetTitle)
+            sexCustomField.stringValue = ""
+            sexCustomField.isHidden = true
+        } else if Self.sexStandardOptions.contains(current) {
+            sexPopup.selectItem(withTitle: current)
+            sexCustomField.stringValue = ""
+            sexCustomField.isHidden = true
+        } else {
+            sexPopup.selectItem(withTitle: Self.sexOtherTitle)
+            sexCustomField.stringValue = current
+            sexCustomField.isHidden = false
+        }
+    }
+
+    /// Read the current chooser state into the canonical string value
+    /// (empty if "—"; the option title for standard; the custom
+    /// field's value for "Other").
+    private func currentSexValue() -> String {
+        guard let title = sexPopup.titleOfSelectedItem else { return "" }
+        switch title {
+        case Self.sexUnsetTitle: return ""
+        case Self.sexOtherTitle:
+            return sexCustomField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        default: return title
+        }
+    }
+
+    @objc private func sexPopupChanged() {
+        // Toggle the custom-field visibility based on the new choice.
+        let isOther = sexPopup.titleOfSelectedItem == Self.sexOtherTitle
+        sexCustomField.isHidden = !isOther
+        if isOther {
+            // Focus the custom field for the typing flow.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.view.window?.makeFirstResponder(self.sexCustomField)
+            }
+        }
+        commitSex()
+    }
+
+    /// Read-modify-write to extensions["rpclient/details"].sex so the
+    /// rest of CardDetails (age/pronouns/species/orientation/
+    /// appearance/mood — owned by the Details tab) stays intact.
+    private func commitSex() {
+        var d = CardDetails.extractFrom(draft.character) ?? CardDetails()
+        d.sex = currentSexValue()
+        d.applyTo(&draft.character)
+        draft.markDirty()
+        onDirty()
+        aiRegistry.markDownstreamStale(of: .detailsSex)
     }
 }
 

@@ -10,6 +10,7 @@ func phase9cStructuredDetailsTests() -> TestSuite {
 
     s.test("CardDetails round-trips through JSONValue") {
         let d = CardDetails(
+            sex: "Female",
             age: "28",
             pronouns: "she/her",
             species: "Human",
@@ -20,6 +21,25 @@ func phase9cStructuredDetailsTests() -> TestSuite {
         let v = d.toJSONValue()
         let back = try expectNotNil(CardDetails.fromJSONValue(v))
         try expectEqual(back, d)
+    }
+
+    s.test("CardDetails round-trips Other-sex (free-text custom value)") {
+        let d = CardDetails(sex: "futa", age: "21")
+        let v = d.toJSONValue()
+        let back = try expectNotNil(CardDetails.fromJSONValue(v))
+        try expectEqual(back.sex, "futa")
+    }
+
+    s.test("CardDetails fromJSONValue tolerates missing 'sex' key (existing on-disk cards)") {
+        // Existing cards saved before §5.4 added sex don't have the
+        // key. Loading should produce sex="" (not crash).
+        let v: JSONValue = .object([
+            "age": .string("28"),
+            "pronouns": .string("she/her"),
+        ])
+        let d = try expectNotNil(CardDetails.fromJSONValue(v))
+        try expectEqual(d.sex, "")
+        try expectEqual(d.age, "28")
     }
 
     s.test("CardDetails toJSONValue omits empty fields") {

@@ -13,6 +13,7 @@ enum CardCreatorPlaceholders {
 
     // MARK: - Details tab
 
+    static let detailsSex = "Female"
     static let detailsAge = "28"
     static let detailsPronouns = "she/her"
     static let detailsSpecies = "Human"

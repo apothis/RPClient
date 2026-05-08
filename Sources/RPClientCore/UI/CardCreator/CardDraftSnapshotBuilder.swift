@@ -18,7 +18,7 @@ enum CardDraftSnapshotBuilder {
         // fence carry the structured block; treat that as "no values"
         // rather than error.
         let details = CardDetails.extractFrom(c)
-            ?? CardDetails(age: "", pronouns: "", species: "", orientation: "", appearance: "", mood: "")
+            ?? CardDetails()
         let intimacy = CardIntimacy.extractFrom(c)
             ?? CardIntimacy(build: "", anatomy: "", markings: "", sensitivities: "", scent: "", turnOns: "", kinks: "", limits: "")
 
@@ -45,6 +45,7 @@ enum CardDraftSnapshotBuilder {
         // pollute the upstream block with default values.
 
         // §3.9 Details.
+        write(&fields, .detailsSex, details.sex)
         write(&fields, .detailsAge, details.age)
         write(&fields, .detailsPronouns, details.pronouns)
         write(&fields, .detailsSpecies, details.species)
