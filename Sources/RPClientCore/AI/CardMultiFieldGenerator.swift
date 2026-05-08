@@ -128,11 +128,24 @@ enum CardMultiFieldGenerator {
         let directionBlock = (trimmedDirection?.isEmpty == false)
             ? "AUTHOR DIRECTION (anchor the character to this concept):\n\"\(trimmedDirection!)\""
             : nil
+        // Exemplar's name — surfaced explicitly in the rules so the
+        // model has a clear "do NOT copy this" anchor. Caught on §5.4.c
+        // smoke where the companion/domestic lanes copied "Rae Lindhart"
+        // / "Cass Wheeler" verbatim because the hint described the
+        // same archetype as the exemplar.
+        let exemplarName = exemplar.fields["name"] ?? exemplar.id
         let userMessage = [
             directionBlock,
-            "EXAMPLE CHARACTER (anchor format and register):\n\(exemplarBlock)",
+            "EXAMPLE CHARACTER (a DIFFERENT character — study format and register; do NOT copy names, descriptions, or any other content verbatim):\n\(exemplarBlock)",
             upstreamBlock.isEmpty ? nil : "TARGET CHARACTER (current draft):\n\(upstreamBlock)",
-            "Populate every field below in the JSON response. Each value should match the example's register and the target character's upstream details.\n\(targetsList)",
+            // Explicit anti-leak instructions — caught on §5.4.c live
+            // smoke (biopunk lane) where the model emitted the exemplar
+            // block's "key: value" lines as the JSON value of the first
+            // field, including all other fields' content stuffed in.
+            // The companion/domestic lanes also copied the exemplar's
+            // name and description verbatim when the hint described
+            // the same archetype.
+            "Populate every field below in the JSON response. Rules:\n  - Generate a NEW character. The example character is named \"\(exemplarName)\"; the TARGET character must have a different name.\n  - Each JSON value contains ONLY that field's content — no field-name prefix, no other fields' content, no `key: value` lines copied from the example.\n  - Match the example's register (voice, level of detail, NSFW posture) but invent fresh content. Reword every sentence; do not paraphrase the example.\n  - Each value matches the upstream details and the AUTHOR DIRECTION (if any).\n\nFields to populate:\n\(targetsList)",
         ]
         .compactMap { $0 }
         .joined(separator: "\n\n")
@@ -178,10 +191,26 @@ enum CardMultiFieldGenerator {
             guard let raw = object[field.rawValue] else {
                 return .failure(.missingRequiredField(field))
             }
-            guard let str = raw as? String else {
+            guard let raw = raw as? String else {
                 return .failure(.wrongShape("\(field.rawValue) is not a string"))
             }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             let expectedLen = request.expectedLengths[field] ?? 0
+            // Models occasionally pad short-field outputs to hit the
+            // schema's maxLength ceiling — observed on §5.4.c biopunk
+            // (`name` = "Anya Sorel\n\n\n…" with 198 newlines) and
+            // companion (`name` = "Nyla Voss\n\nMila Chen\n\nElara
+            // Vance\n\n…" listing five candidates). Two-stage clean:
+            // first strip leading/trailing whitespace, then for short
+            // fields (wordCount ≤ 4 ⇒ expectedLen ≤ 20) take only the
+            // first non-empty line. Prose fields keep their full text
+            // (legitimate multi-line content like message_example).
+            let str: String
+            if expectedLen <= 20, let firstLine = trimmed.split(separator: "\n").first {
+                str = String(firstLine).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                str = trimmed
+            }
             let refusal = CardGenRefusalDetector.detect(
                 candidate: str,
                 expectedLengthChars: expectedLen
@@ -215,11 +244,28 @@ enum CardMultiFieldGenerator {
         var expectedLengths: [CardField: Int] = [:]
         for field in fields {
             let wordCount = registry.fields[field.rawValue]?.wordCount ?? 30
-            // Loose bounds — minLength generous (the model can land
-            // shorter than the target without us treating it as broken),
-            // maxLength generous (8x word count covers verbose styles).
+            // minLength generous (the model can land shorter than the
+            // target without us treating it as broken).
             let minLen = max(8, wordCount / 2)
-            let maxLen = max(minLen + 200, wordCount * 8)
+            // maxLength tightened on §5.4.c smoke: the previous formula
+            // (max(minLen + 200, wordCount * 8)) gave wordCount=2 fields
+            // a 208-char ceiling, and Qwen3.6 padded short answers
+            // ("Elara Vance" repeated 14× separated by \n\n) to fill
+            // the bound. Bracket short fields against repetition; keep
+            // generous slack for prose.
+            let maxLen: Int
+            if wordCount <= 4 {
+                // Names, single-word identity facts (sex, age, pronouns,
+                // species, orientation). 50 chars covers "Vexara, Crimson
+                // Matriarch of the Vale" and the model can't pad-by-
+                // repetition into anything resembling that.
+                maxLen = 50
+            } else {
+                // Prose / list-shaped fields. wordCount × 10 covers
+                // verbose styles; 100-char floor keeps borderline-short
+                // fields (depth_prompt at wordCount=15) from clipping.
+                maxLen = max(minLen + 100, wordCount * 10)
+            }
             properties[field.rawValue] = [
                 "type": "string",
                 "minLength": minLen,

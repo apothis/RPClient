@@ -15,9 +15,12 @@ func phase9dExemplarsTests() -> TestSuite {
 
     // MARK: - Set membership
 
-    s.test("all exemplars include mira / monstergirl / modern") {
+    s.test("all exemplars include the seven shipped archetypes") {
         let ids = Set(CardGenExemplars.all.map(\.id))
-        try expectEqual(ids, ["mira", "monstergirl", "modern"])
+        try expectEqual(ids, [
+            "mira", "monstergirl", "modern",
+            "spacer", "biopunk", "companion", "domestic",
+        ])
     }
 
     s.test("each exemplar populates every §4.4 graph field") {
@@ -60,8 +63,39 @@ func phase9dExemplarsTests() -> TestSuite {
     }
 
     s.test("tags entirely matching modern resolve to modern") {
-        let pick = CardGenExemplars.select(forTags: ["nsfw", "modern", "sci-fi"])
+        // The previous fixture used `sci-fi` as a non-archetype tag, but
+        // the spacer/biopunk additions made it ambiguous. Use modern's
+        // own archetype-specific tags instead.
+        let pick = CardGenExemplars.select(forTags: ["nsfw", "modern", "urban"])
         try expectEqual(pick.id, "modern")
+    }
+
+    s.test("hard-sci-fi tag set resolves to spacer") {
+        let pick = CardGenExemplars.select(forTags: ["sci-fi", "starship", "spacer"])
+        try expectEqual(pick.id, "spacer")
+    }
+
+    s.test("biopunk tag set resolves to biopunk") {
+        let pick = CardGenExemplars.select(forTags: ["sci-fi", "biopunk", "wetware"])
+        try expectEqual(pick.id, "biopunk")
+    }
+
+    s.test("escort/companion tag set resolves to companion") {
+        let pick = CardGenExemplars.select(forTags: ["nsfw", "adult", "escort"])
+        try expectEqual(pick.id, "companion")
+    }
+
+    s.test("girlfriend / domestic tag set resolves to domestic") {
+        let pick = CardGenExemplars.select(forTags: ["nsfw", "girlfriend", "domestic", "sweet"])
+        try expectEqual(pick.id, "domestic")
+    }
+
+    s.test("ambiguous companion-vs-domestic resolves to Mira (tie-break baseline)") {
+        // ["nsfw", "human", "modern", "femme"] hits companion + domestic
+        // equally — the author hasn't disambiguated. Tie → Mira per
+        // research-doc contract.
+        let pick = CardGenExemplars.select(forTags: ["nsfw", "human", "modern", "femme"])
+        try expectEqual(pick.id, "mira")
     }
 
     s.test("partial overlap picks the highest-scoring archetype") {

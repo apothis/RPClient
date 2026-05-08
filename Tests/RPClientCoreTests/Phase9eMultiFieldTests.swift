@@ -138,6 +138,39 @@ func phase9eMultiFieldTests() -> TestSuite {
         try expectGreaterThan(maxLen, minLen)
     }
 
+    s.test("short-field maxLength is small enough to block padding-by-repetition") {
+        // Live smoke on §5.4.c caught Qwen3.6 padding "Elara Vance" 14×
+        // to fill a 208-char maxLength. wordCount<=4 fields (name,
+        // nickname, details_sex/age/pronouns/species/orientation) cap
+        // at 50 chars so repetition can't fit.
+        let r = CardMultiFieldGenerator.buildRequest(
+            for: [.name, .nickname, .detailsSex, .detailsAge,
+                  .detailsPronouns, .detailsSpecies, .detailsOrientation],
+            draft: draft
+        )
+        let obj = try JSONSerialization.jsonObject(with: r.schemaJSON) as! [String: Any]
+        let properties = obj["properties"] as! [String: Any]
+        for fieldName in ["name", "nickname", "details_sex", "details_age",
+                          "details_pronouns", "details_species", "details_orientation"] {
+            let prop = try expectNotNil(properties[fieldName] as? [String: Any])
+            let maxLen = try expectNotNil(prop["maxLength"] as? Int)
+            try expectEqual(maxLen, 50, "\(fieldName) maxLength should cap at 50, got \(maxLen)")
+        }
+    }
+
+    s.test("prose-field maxLength stays generous (no over-tight clipping)") {
+        // Description, personality, scenario, etc. need room for
+        // verbose styles. Ensure wordCount=60 (description) gets at
+        // least 600 chars — covers the 275-381 char range observed
+        // on §5.4.c smoke + slack.
+        let r = CardMultiFieldGenerator.buildRequest(for: [.description], draft: draft)
+        let obj = try JSONSerialization.jsonObject(with: r.schemaJSON) as! [String: Any]
+        let properties = obj["properties"] as! [String: Any]
+        let descProp = try expectNotNil(properties["description"] as? [String: Any])
+        let maxLen = try expectNotNil(descProp["maxLength"] as? Int)
+        try expectGreaterThan(maxLen, 500)
+    }
+
     s.test("expectedLengths populated per field for refusal detector") {
         let r = CardMultiFieldGenerator.buildRequest(
             for: [.description, .intimacyScent],
@@ -172,6 +205,55 @@ func phase9eMultiFieldTests() -> TestSuite {
         try expectEqual(proposals[0].field, .description)
         try expectEqual(proposals[1].field, .personality)
         try expectEqual(proposals[0].text, "Vexara is the Crimson Matriarch of the lower vale.")
+    }
+
+    s.test("parseResponse takes only first line for short fields (anti-padding)") {
+        // §5.4.c smoke caught Qwen3.6 padding short-field outputs with
+        // repetition or multi-candidate listings: e.g. `name` came back
+        // as "Nyla Voss\n\nMila Chen\n\nElara Vance\n\nLyra Kade\n\nKira"
+        // — five names stuffed into one field. Parser strips to first
+        // line for fields with expectedLength ≤ 20 chars (wordCount ≤ 4).
+        let r = CardMultiFieldGenerator.buildRequest(for: [.name], draft: draft)
+        let raw = "{\"name\": \"Nyla Voss\\n\\nMila Chen\\n\\nElara Vance\\n\\nLyra Kade\"}"
+        let result = CardMultiFieldGenerator.parseResponse(rawContent: raw, request: r)
+        guard case .success(let proposals) = result else {
+            try expectTrue(false, "expected success, got \(result)")
+            return
+        }
+        try expectEqual(proposals[0].text, "Nyla Voss")
+    }
+
+    s.test("parseResponse keeps multi-line content for prose fields") {
+        // message_example legitimately uses <START> markers + multi-line
+        // content. The first-line-only short-field fix must NOT clip it.
+        let r = CardMultiFieldGenerator.buildRequest(for: [.messageExample], draft: draft)
+        let raw = """
+            {"message_example": "<START>\\n{{user}}: hi\\n{{char}}: hello\\n<START>\\n{{user}}: again\\n{{char}}: yes"}
+            """
+        let result = CardMultiFieldGenerator.parseResponse(rawContent: raw, request: r)
+        guard case .success(let proposals) = result else {
+            try expectTrue(false, "expected success, got \(result)")
+            return
+        }
+        try expectTrue(proposals[0].text.contains("<START>"))
+        try expectTrue(proposals[0].text.contains("hello"))
+    }
+
+    s.test("parseResponse trims trailing whitespace/newlines from each value") {
+        // Live-smoke on the biopunk lane (§5.4.c) caught the model
+        // padding short fields with trailing newlines to fill the
+        // schema's loose maxLength ceiling (e.g. `name` came back as
+        // "Anya Sorel\n\n\n…" with 198 trailing \n). Parser must trim
+        // before downstream commits land the padding into the draft.
+        let r = CardMultiFieldGenerator.buildRequest(for: [.name], draft: draft)
+        let raw = "{\"name\": \"Anya Sorel\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\"}"
+        let result = CardMultiFieldGenerator.parseResponse(rawContent: raw, request: r)
+        guard case .success(let proposals) = result else {
+            try expectTrue(false, "expected success, got \(result)")
+            return
+        }
+        try expectEqual(proposals.count, 1)
+        try expectEqual(proposals[0].text, "Anya Sorel")
     }
 
     s.test("parseResponse strips a thinking trace before parsing") {
