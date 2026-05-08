@@ -788,7 +788,7 @@ All §5.4.0 topics covered: existing card-gen tools survey (Chub / bmen25124 / e
 
 - **`assets[]` editing.** Multi-portrait + emotion-set authoring is its own UI surface. Round-trip preservation only.
 - **CHARX (`.charx`) read/write.** PNG remains primary; JSON remains secondary. CHARX is the v3 spec's recommended format for cards-with-assets and lands when assets do.
-- **Card-bound lorebook editing.** Phase 1's `WorldInfoPane` covers per-chat lore; card-bound editing is a follow-up that pairs with v3 decorator support in `WorldInfoEntry`.
+- **Card-bound lorebook editing.** Phase 1's `WorldInfoPane` covers per-chat lore; card-bound editing is a follow-up that pairs with v3 decorator support in `WorldInfoEntry`. **Queued as a §5.4-adjacent slice** — when picked up, also wires AI-generation of lorebook entries (single-shot json_schema returning `{name, keys, content}`, then optionally a multi-entry "build me a lore set" pass). Prereq: a lorebook editor surface on the Lorebook tab (currently read-only per §5.3c.3).
 - **Backyard `.byaf` import.** Different format family. Users convert via existing third-party tools.
 - **Persona creator window.** Phase 9 is character-side only.
 - **Live card preview.** Optional polish.

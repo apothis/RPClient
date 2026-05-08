@@ -509,10 +509,22 @@ final class GreetingsTabViewController: NSViewController {
             self?.draft.markDirty()
             self?.onDirty()
         }
+        alternateGreetingsEditor.onGenerate = { [weak self] completion in
+            guard let self else { completion(nil); return }
+            CardCreatorAIWiring.generateOnce(
+                field: .alternateGreetings, draft: self.draft, completion: completion
+            )
+        }
         groupOnlyEditor.onChange = { [weak self] arr in
             self?.draft.character.groupOnlyGreetings = arr
             self?.draft.markDirty()
             self?.onDirty()
+        }
+        groupOnlyEditor.onGenerate = { [weak self] completion in
+            guard let self else { completion(nil); return }
+            CardCreatorAIWiring.generateOnce(
+                field: .groupOnlyGreetings, draft: self.draft, completion: completion
+            )
         }
 
         CardCreatorAIWiring.attachStrip(to: firstMessageField, field: .firstMessage, aiRegistry: aiRegistry, draft: draft)

@@ -67,4 +67,61 @@ enum CardCreatorAIWiring {
             controller.generate(draft: snapshot)
         }
     }
+
+    /// Phase 9 §5.4.b — single-shot generation for list-shaped fields
+    /// (alternate greetings, group-only greetings). Fires ONE
+    /// candidate (no triad), parses, calls completion with the text
+    /// or nil on failure.
+    ///
+    /// Used by `GreetingListEditor.onGenerate` — clicking the
+    /// Generate button appends one new entry.
+    @MainActor
+    static func generateOnce(
+        field: CardField,
+        style: CardCandidateStyle = .literal,
+        draft: CharacterDraft,
+        completion: @escaping (String?) -> Void
+    ) {
+        let app = AppState.shared
+        let chat = app.currentChat
+        let kobold = app.registry.cardCreatorClient(chatOverride: chat?.serverId)
+        let templateId = chat?.templateId ?? QwenTemplate().id
+        let template = Templates.byId(templateId, qwenThinking: false)
+
+        let snapshot = CardDraftSnapshotBuilder.snapshot(of: draft)
+        let request = CardGenSideCall.buildRequest(for: field, style: style, draft: snapshot)
+        let body = request.prompt
+        let assembled = template.assemble(
+            memoryBlock: nil, summary: nil, worldInfoHits: [],
+            authorsNote: nil,
+            turns: [Turn(role: .user, text: body)]
+        )
+
+        DebugLog.shared.write("cardgen: generateOnce \(field.rawValue) [\(style.rawValue)] ← exemplar=\(request.exemplarId)")
+        let started = Date()
+
+        kobold.generate(
+            prompt: assembled,
+            stopSequences: template.stopSequences,
+            preset: request.preset,
+            maxContextLength: 16384
+        ) { result in
+            DispatchQueue.main.async {
+                let dt = Date().timeIntervalSince(started)
+                switch result {
+                case .failure(let e):
+                    DebugLog.shared.write("cardgen: generateOnce \(field.rawValue) ✗ \(e) in \(String(format: "%.1f", dt))s")
+                    completion(nil)
+                case .success(let raw):
+                    let candidate = CardGenSideCall.parseResponse(raw: raw, request: request)
+                    if candidate.refusal.isRefusal {
+                        DebugLog.shared.write("cardgen: generateOnce \(field.rawValue) ⚠ refusal in \(String(format: "%.1f", dt))s")
+                    } else {
+                        DebugLog.shared.write("cardgen: generateOnce \(field.rawValue) → \(candidate.text.count)c in \(String(format: "%.1f", dt))s")
+                    }
+                    completion(candidate.text.isEmpty ? nil : candidate.text)
+                }
+            }
+        }
+    }
 }

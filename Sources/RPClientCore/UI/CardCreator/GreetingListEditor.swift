@@ -11,6 +11,14 @@ final class GreetingListEditor: NSView {
 
     var onChange: (([String]) -> Void)?
 
+    /// Phase 9 §5.4.b — wires AI single-shot generation. The editor
+    /// calls this when the author clicks Generate; the parent tab
+    /// fires a side-call against the active chat's template + the
+    /// per-window cardCreatorClient and invokes the completion with
+    /// the generated text (or nil on failure). The editor handles
+    /// spinner state + appending the new entry.
+    var onGenerate: ((@escaping (String?) -> Void) -> Void)?
+
     private let label: String
     private let hint: String?
     private let v3Only: Bool
@@ -18,6 +26,8 @@ final class GreetingListEditor: NSView {
     private let labelView = NSTextField(labelWithString: "")
     private let stack = NSStackView()
     private let addButton = NSButton(title: "+ Add greeting", target: nil, action: nil)
+    private let generateButton = NSButton()
+    private let generateSpinner = NSProgressIndicator()
     private let emptyState = NSTextField(labelWithString: "")
 
     private(set) var values: [String] = []
@@ -75,7 +85,31 @@ final class GreetingListEditor: NSView {
         addButton.keyEquivalent = "a"
         addButton.keyEquivalentModifierMask = [.command, .shift]
         addButton.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(addButton)
+
+        // Phase 9 §5.4.b — Generate button alongside Add. Fires a
+        // single-shot side-call via onGenerate; result appends as a
+        // new row. Spinner shows while the call is in flight.
+        generateButton.bezelStyle = .rounded
+        generateButton.controlSize = .small
+        generateButton.target = self
+        generateButton.action = #selector(generateGreetingClicked)
+        generateButton.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Generate")
+        generateButton.imagePosition = .imageLeading
+        generateButton.title = "Generate"
+        generateButton.toolTip = "Append an AI-generated greeting based on the rest of this card."
+        generateButton.translatesAutoresizingMaskIntoConstraints = false
+
+        generateSpinner.style = .spinning
+        generateSpinner.controlSize = .small
+        generateSpinner.isDisplayedWhenStopped = false
+        generateSpinner.translatesAutoresizingMaskIntoConstraints = false
+
+        let footerRow = NSStackView(views: [addButton, generateButton, generateSpinner])
+        footerRow.orientation = .horizontal
+        footerRow.alignment = .centerY
+        footerRow.spacing = DesignTokens.Spacing.sm
+        footerRow.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(footerRow)
 
         var topConstraint: NSLayoutConstraint
         var hintConstraints: [NSLayoutConstraint] = []
@@ -110,9 +144,9 @@ final class GreetingListEditor: NSView {
             emptyState.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             emptyState.topAnchor.constraint(equalTo: stack.topAnchor),
 
-            addButton.topAnchor.constraint(equalTo: stack.bottomAnchor, constant: DesignTokens.Spacing.sm),
-            addButton.leadingAnchor.constraint(equalTo: leadingAnchor),
-            addButton.bottomAnchor.constraint(equalTo: bottomAnchor),
+            footerRow.topAnchor.constraint(equalTo: stack.bottomAnchor, constant: DesignTokens.Spacing.sm),
+            footerRow.leadingAnchor.constraint(equalTo: leadingAnchor),
+            footerRow.bottomAnchor.constraint(equalTo: bottomAnchor),
         ] + hintConstraints)
 
         // Seed.
@@ -129,6 +163,31 @@ final class GreetingListEditor: NSView {
         // Focus the new row's text view.
         if let lastRow = stack.arrangedSubviews.last as? GreetingRowView {
             window?.makeFirstResponder(lastRow.textView)
+        }
+    }
+
+    @objc private func generateGreetingClicked() {
+        guard let onGenerate = onGenerate else {
+            DebugLog.shared.write("greetingList[\(label)]: generate clicked with no onGenerate handler")
+            return
+        }
+        generateButton.isEnabled = false
+        generateSpinner.startAnimation(nil)
+        onGenerate { [weak self] text in
+            guard let self else { return }
+            self.generateButton.isEnabled = true
+            self.generateSpinner.stopAnimation(nil)
+            guard let text, !text.isEmpty else {
+                NSSound.beep()
+                return
+            }
+            self.values.append(text)
+            self.rebuildRows()
+            self.onChange?(self.values)
+            // Scroll the new row into view + focus it for inline edit.
+            if let lastRow = self.stack.arrangedSubviews.last as? GreetingRowView {
+                self.window?.makeFirstResponder(lastRow.textView)
+            }
         }
     }
 
