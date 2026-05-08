@@ -456,6 +456,12 @@ final class CardCreatorViewController: NSViewController {
             autoButton.toolTip = "Mode 3 autopilot in flight. Sequential json_schema passes against the per-window card-gen server."
         case .completed(let proposals):
             DebugLog.shared.write("cardgen: mode3 ✓ run done — \(proposals.count) proposals")
+            for p in proposals {
+                let preview = p.text
+                    .replacingOccurrences(of: "\n", with: " ⏎ ")
+                    .prefix(80)
+                DebugLog.shared.write("cardgen: mode3 proposal[\(p.field.rawValue)] (\(p.text.count)c) = \(preview)")
+            }
             resetAutopilotChrome()
             presentReviewSheet(proposals: proposals)
         case .aborted(let reason, let partial):

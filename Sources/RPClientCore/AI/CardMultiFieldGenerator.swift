@@ -244,9 +244,24 @@ enum CardMultiFieldGenerator {
         var expectedLengths: [CardField: Int] = [:]
         for field in fields {
             let wordCount = registry.fields[field.rawValue]?.wordCount ?? 30
-            // minLength generous (the model can land shorter than the
-            // target without us treating it as broken).
-            let minLen = max(8, wordCount / 2)
+            // minLength: prose fields keep an 8-char floor so blank /
+            // refusal-shaped output gets rejected by the schema, but
+            // short Identity facts (wordCount <= 4) drop to 1.
+            // §5.4.c live smoke caught the 8-char floor forcing
+            // padding — `details_sex` came back as "Female: she/her"
+            // (15c) and `nickname` duplicated `name` to fill the
+            // bound. The bare values ("Female", "Gem", "22", "Elf")
+            // are legitimate single-word answers the schema must
+            // accept without coercing the model into adding context.
+            let minLen: Int
+            if wordCount <= 4 {
+                // 2-char floor: bare values like "22" (age), "Elf"
+                // (species), "Gem" (nickname) still pass; single-char
+                // garbage ("," observed live) gets rejected.
+                minLen = 2
+            } else {
+                minLen = max(8, wordCount / 2)
+            }
             // maxLength tightened on §5.4.c smoke: the previous formula
             // (max(minLen + 200, wordCount * 8)) gave wordCount=2 fields
             // a 208-char ceiling, and Qwen3.6 padded short answers
@@ -266,11 +281,25 @@ enum CardMultiFieldGenerator {
                 // fields (depth_prompt at wordCount=15) from clipping.
                 maxLen = max(minLen + 100, wordCount * 10)
             }
-            properties[field.rawValue] = [
+            var prop: [String: Any] = [
                 "type": "string",
                 "minLength": minLen,
                 "maxLength": maxLen,
-            ] as [String: Any]
+            ]
+            // Per-field schema overrides for shapes minLength/maxLength
+            // alone can't enforce.
+            if field == .detailsAge {
+                // Age can legitimately be a single character ("8") or a
+                // short descriptor ("mid-30s", "ancient", "immortal").
+                // Live smoke caught both failure modes — minLength=8
+                // forced padding, minLength=2 let "," through. Pattern
+                // accepts: bare integer (1+ digits) OR a token starting
+                // with a letter then 0-30 chars of letters/digits/space/
+                // hyphen/apostrophe.
+                prop["minLength"] = 1
+                prop["pattern"] = "^([0-9]+|[A-Za-z][A-Za-z0-9 \\-']{0,30})$"
+            }
+            properties[field.rawValue] = prop
             // expectedLengthChars for refusal detector ≈ words × 5.
             expectedLengths[field] = wordCount * 5
         }

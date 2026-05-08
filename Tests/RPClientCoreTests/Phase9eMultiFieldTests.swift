@@ -158,6 +158,74 @@ func phase9eMultiFieldTests() -> TestSuite {
         }
     }
 
+    s.test("short-field minLength must allow bare 1-word answers (no forced padding)") {
+        // Live smoke on §5.4.c follow-up caught the model emitting
+        // `Female: she/her` for details_sex (15c) and `Gemma, the
+        // courtesan` for nickname (20c) — duplicates of `name` —
+        // because the prior `max(8, wordCount/2)` floor was 8 chars,
+        // forcing padding. Identity facts can legitimately be one
+        // short word ("Female", "Human", "she/her", "22", "Gem").
+        let r = CardMultiFieldGenerator.buildRequest(
+            for: [.name, .nickname, .detailsSex, .detailsAge,
+                  .detailsPronouns, .detailsSpecies, .detailsOrientation],
+            draft: draft
+        )
+        let obj = try JSONSerialization.jsonObject(with: r.schemaJSON) as! [String: Any]
+        let properties = obj["properties"] as! [String: Any]
+        // details_age is allowed minLength=1 because it has a regex
+        // pattern that rejects punctuation noise — see the dedicated
+        // age test below. The other short Identity fields rely on
+        // a 2-char floor to keep out single-char garbage.
+        for fieldName in ["nickname", "details_sex",
+                          "details_pronouns", "details_species", "details_orientation"] {
+            let prop = try expectNotNil(properties[fieldName] as? [String: Any])
+            let minLen = try expectNotNil(prop["minLength"] as? Int)
+            // Allow up to 4 chars — covers "Gem" (nickname),
+            // "Male" / "Elf" / "Lamia" — without forcing 8-char padding.
+            try expectLessThan(minLen, 5)
+            // But block 1-char garbage.
+            try expectGreaterThan(minLen, 1)
+        }
+    }
+
+    s.test("details_age schema accepts single-digit ages but rejects punctuation noise") {
+        // Live smoke caught two failure modes:
+        //   - minLength=8 forced "22" → "22 years old" (padding)
+        //   - minLength=1 let the model emit "," (single comma)
+        // Real ages can be one char ("8") or a short descriptor
+        // ("mid-30s", "ancient", "immortal"). A regex pattern is the
+        // only constraint that captures both shapes.
+        let r = CardMultiFieldGenerator.buildRequest(for: [.detailsAge], draft: draft)
+        let obj = try JSONSerialization.jsonObject(with: r.schemaJSON) as! [String: Any]
+        let properties = obj["properties"] as! [String: Any]
+        let ageProp = try expectNotNil(properties["details_age"] as? [String: Any])
+        let patternStr = try expectNotNil(ageProp["pattern"] as? String)
+        let regex = try NSRegularExpression(pattern: patternStr)
+        func matches(_ s: String) -> Bool {
+            let r = NSRange(s.startIndex..., in: s)
+            guard let m = regex.firstMatch(in: s, range: r) else { return false }
+            return m.range == r   // full-string match required
+        }
+        for good in ["8", "22", "150", "mid-30s", "ancient", "immortal", "early 20s", "unknown"] {
+            try expectTrue(matches(good), "age '\(good)' should be accepted by pattern")
+        }
+        for bad in [",", ".", " ", "", "?"] {
+            try expectFalse(matches(bad), "age '\(bad)' should be rejected by pattern")
+        }
+    }
+
+    s.test("prose-field minLength stays generous so refusal detector still fires") {
+        // For long-prose fields (description, scenario, intimacy_*),
+        // very-short outputs are usually refusals or truncations.
+        // Keep the floor at 8+ so the schema rejects empty/blank.
+        let r = CardMultiFieldGenerator.buildRequest(for: [.description], draft: draft)
+        let obj = try JSONSerialization.jsonObject(with: r.schemaJSON) as! [String: Any]
+        let properties = obj["properties"] as! [String: Any]
+        let descProp = try expectNotNil(properties["description"] as? [String: Any])
+        let minLen = try expectNotNil(descProp["minLength"] as? Int)
+        try expectGreaterThan(minLen, 7)
+    }
+
     s.test("prose-field maxLength stays generous (no over-tight clipping)") {
         // Description, personality, scenario, etc. need room for
         // verbose styles. Ensure wordCount=60 (description) gets at

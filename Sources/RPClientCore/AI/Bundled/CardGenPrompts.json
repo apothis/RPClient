@@ -20,11 +20,11 @@
   },
   "fields": {
     "name": {
-      "humanName": "character name",
+      "humanName": "character's given name ONLY — no occupation, title, age, descriptor, or 'the X' suffix. Just the name (e.g. 'Vexara', 'Gemma', 'Mira Vance'). One or two words.",
       "wordCount": 2
     },
     "nickname": {
-      "humanName": "nickname",
+      "humanName": "casual short alias (1-3 words). Either a shortening of the full name ('Vex' for 'Vexara', 'Gem' for 'Gemma') OR a non-intimate sensory/visual tag rooted in something specific about the character ('the curly-haired one', 'sparrow', 'redshirt', 'star-eyes'). MUST DIFFER from the full name. Avoid generic terms of endearment ('sweetheart', 'princess', 'darling') unless the character's role / setting genuinely calls for one.",
       "wordCount": 2
     },
     "description": {
@@ -144,8 +144,8 @@
       "wordCount": 2
     },
     "details_age": {
-      "humanName": "age (a number or short descriptor like 'mid-30s' or 'immortal')",
-      "wordCount": 2
+      "humanName": "age — a bare number ('22'), short descriptor ('mid-30s', 'ancient', 'immortal'), or 'unknown'. Do NOT append 'years old', 'yrs', or any qualifier.",
+      "wordCount": 1
     },
     "details_pronouns": {
       "humanName": "pronouns (e.g. she/her, they/them)",

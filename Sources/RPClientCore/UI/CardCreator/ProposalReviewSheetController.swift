@@ -30,7 +30,16 @@ final class ProposalReviewSheetController: NSWindowController {
     private let rerollAllButton = NSButton(title: "Re-roll all unlocked", target: nil, action: nil)
     private let commitButton = NSButton(title: "Commit", target: nil, action: nil)
     private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
+    private let tabStrip = NSSegmentedControl()
     private var rowViews: [CardField: ProposalReviewRowView] = [:]
+    /// nil = "All" segment selected. Otherwise the chosen Card Creator
+    /// tab — only rows whose field belongs to that section render, and
+    /// bulk actions (accept-all / reject-all / re-roll-all-unlocked)
+    /// scope to that section.
+    private var currentFilter: ProposalReviewSection?
+    /// Sections that have ≥1 row in the current proposal set, in
+    /// canonical order. Empty sections are dropped from the tab strip.
+    private var visibleSections: [ProposalReviewSection] = []
 
     init(
         model: ProposalReviewModel,
@@ -39,12 +48,19 @@ final class ProposalReviewSheetController: NSWindowController {
         self.model = model
         self.registry = registry
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 920, height: 720),
             styleMask: [.titled, .resizable, .closable],
             backing: .buffered,
             defer: false
         )
         panel.title = "Review proposals"
+        // contentMinSize / contentMaxSize cap the CONTENT size (excludes
+        // title bar). Unlike `minSize` / `maxSize`, AppKit honors these
+        // when sizing the sheet from Auto Layout on display, not just
+        // for user resize. Three prior fixes via constraint priorities
+        // and `maxSize` did not cap initial sheet width.
+        panel.contentMinSize = NSSize(width: 720, height: 560)
+        panel.contentMaxSize = NSSize(width: 1100, height: 1200)
         super.init(window: panel)
         buildUI()
         rebuildRows()
@@ -56,7 +72,35 @@ final class ProposalReviewSheetController: NSWindowController {
     func beginSheet(over parent: NSWindow) {
         guard let w = window else { return }
         DebugLog.shared.write("cardgen: mode3 review sheet opened — \(model.rows.count) rows")
-        parent.beginSheet(w) { _ in }
+        // Force the desired content size BEFORE display so AppKit
+        // doesn't grow the panel to fit Auto Layout's intrinsic
+        // demands. The contentMaxSize cap will keep it bounded.
+        w.setContentSize(NSSize(width: 920, height: 700))
+        // Show as a CHILD WINDOW, not a sheet. Sheets are pinned to
+        // the parent's title bar and can't be dragged; for a review
+        // workflow with 26 rows the user wants to position the panel
+        // freely on the screen. Child window stays above the parent
+        // and follows it if the parent moves, but the panel itself
+        // is fully draggable via its own title bar.
+        parent.addChildWindow(w, ordered: .above)
+        w.center()
+        w.makeKeyAndOrderFront(nil)
+        DispatchQueue.main.async { [weak self] in
+            guard let win = self?.window else { return }
+            DebugLog.shared.write("cardgen: mode3 sheet frame after open = \(Int(win.frame.width))×\(Int(win.frame.height)) content=\(Int(win.contentView?.frame.width ?? 0))×\(Int(win.contentView?.frame.height ?? 0))")
+        }
+    }
+
+    /// Detach from parent and close. Used by both commit and cancel
+    /// paths — sheet vs child-window dismiss require different APIs.
+    private func dismissPanel() {
+        guard let w = window else { return }
+        if let sheetParent = w.sheetParent {
+            sheetParent.endSheet(w, returnCode: .OK)
+        } else {
+            w.parent?.removeChildWindow(w)
+            w.orderOut(nil)
+        }
     }
 
     /// Slice 5 callback — the orchestrator delivered a fresh candidate
@@ -72,6 +116,11 @@ final class ProposalReviewSheetController: NSWindowController {
     private func buildUI() {
         guard let content = window?.contentView else { return }
         content.wantsLayer = true
+        // Belt-and-braces — even if a child view's intrinsic content
+        // size demands a screen-wide layout, the contentView won't
+        // exceed this. Combined with `panel.contentMaxSize` this
+        // guarantees the sheet fits on a 14" laptop.
+        content.widthAnchor.constraint(lessThanOrEqualToConstant: 1100).isActive = true
 
         // Header: summary + bulk actions.
         summaryLabel.font = DesignTokens.Typography.headline
@@ -99,6 +148,14 @@ final class ProposalReviewSheetController: NSWindowController {
         bulkRow.spacing = DesignTokens.Spacing.sm
         bulkRow.translatesAutoresizingMaskIntoConstraints = false
 
+        // Tab strip mirrors the Card Creator's tab order. Populated
+        // dynamically in `rebuildTabStrip()` once we know which
+        // sections have rows.
+        tabStrip.segmentStyle = .texturedRounded
+        tabStrip.target = self
+        tabStrip.action = #selector(tabSelectionChanged)
+        tabStrip.translatesAutoresizingMaskIntoConstraints = false
+
         let bulkSeparator = NSBox()
         bulkSeparator.boxType = .separator
         bulkSeparator.translatesAutoresizingMaskIntoConstraints = false
@@ -122,7 +179,7 @@ final class ProposalReviewSheetController: NSWindowController {
             stack.topAnchor.constraint(equalTo: flipped.topAnchor),
             stack.leadingAnchor.constraint(equalTo: flipped.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: flipped.trailingAnchor),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: flipped.bottomAnchor),
+            stack.bottomAnchor.constraint(equalTo: flipped.bottomAnchor),
         ])
 
         scroll.translatesAutoresizingMaskIntoConstraints = false
@@ -131,6 +188,14 @@ final class ProposalReviewSheetController: NSWindowController {
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
         scroll.documentView = flipped
+        // Bind the document view's width to the scroll view's own
+        // width (NOT to the clipView). The clipView's width depends
+        // on the document view's size, which creates a feedback
+        // loop that lets row intrinsic-width demands push the whole
+        // sheet wider than the screen. The scrollView's own width
+        // is set by its leading/trailing constraints to the panel
+        // content view, so it's a stable anchor.
+        flipped.widthAnchor.constraint(equalTo: scroll.widthAnchor, constant: -2).isActive = true
 
         // Footer: commit / cancel.
         for b in [commitButton, cancelButton] {
@@ -157,6 +222,7 @@ final class ProposalReviewSheetController: NSWindowController {
         footerRow.translatesAutoresizingMaskIntoConstraints = false
 
         content.addSubview(bulkRow)
+        content.addSubview(tabStrip)
         content.addSubview(bulkSeparator)
         content.addSubview(scroll)
         content.addSubview(footerSeparator)
@@ -167,7 +233,11 @@ final class ProposalReviewSheetController: NSWindowController {
             bulkRow.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: DesignTokens.Spacing.lg),
             bulkRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -DesignTokens.Spacing.lg),
 
-            bulkSeparator.topAnchor.constraint(equalTo: bulkRow.bottomAnchor, constant: DesignTokens.Spacing.sm),
+            tabStrip.topAnchor.constraint(equalTo: bulkRow.bottomAnchor, constant: DesignTokens.Spacing.sm),
+            tabStrip.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: DesignTokens.Spacing.lg),
+            tabStrip.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -DesignTokens.Spacing.lg),
+
+            bulkSeparator.topAnchor.constraint(equalTo: tabStrip.bottomAnchor, constant: DesignTokens.Spacing.sm),
             bulkSeparator.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             bulkSeparator.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             bulkSeparator.heightAnchor.constraint(equalToConstant: 1),
@@ -201,25 +271,101 @@ final class ProposalReviewSheetController: NSWindowController {
             view.onLockToggle = { [weak self] in self?.handleLockToggle(row.field) }
             view.onRevertHistory = { [weak self] index in self?.handleRevert(row.field, index: index) }
             view.translatesAutoresizingMaskIntoConstraints = false
+            // Don't push horizontally — let the row grow to whatever
+            // the stack offers. Without this the NSTextView's used-
+            // width can be reported upstream and force the panel wide.
+            view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             stack.addArrangedSubview(view)
             view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -DesignTokens.Spacing.lg * 2).isActive = true
             rowViews[row.field] = view
         }
+        rebuildTabStrip()
+        applyFilter()
         refresh()
+    }
+
+    private func rebuildTabStrip() {
+        let present = Set(model.rows.map { ProposalReviewSection.section(for: $0.field) })
+        visibleSections = ProposalReviewSection.allCases.filter { present.contains($0) }
+
+        // "All" + every section that owns at least one row in this run.
+        let segments = ["All"] + visibleSections.map { $0.displayName }
+        tabStrip.segmentCount = segments.count
+        for (i, label) in segments.enumerated() {
+            tabStrip.setLabel(label, forSegment: i)
+        }
+
+        // Drop the filter if the formerly-selected section no longer
+        // has any rows (e.g. caller swapped in a fresh proposal set).
+        if let f = currentFilter, !visibleSections.contains(f) {
+            currentFilter = nil
+        }
+        tabStrip.selectedSegment = selectedSegmentIndex()
+    }
+
+    private func selectedSegmentIndex() -> Int {
+        guard let f = currentFilter, let idx = visibleSections.firstIndex(of: f) else { return 0 }
+        return idx + 1   // +1 for the leading "All" segment
+    }
+
+    /// Show only rows whose field belongs to the current filter (or
+    /// every row if the filter is "All").
+    private func applyFilter() {
+        for row in model.rows {
+            guard let view = rowViews[row.field] else { continue }
+            let visible = currentFilter.map { ProposalReviewSection.section(for: row.field) == $0 } ?? true
+            view.isHidden = !visible
+        }
+    }
+
+    /// Rows the bulk actions and summary label apply to — every row by
+    /// default, or the rows owned by the active section when filtered.
+    private var filteredRows: [ProposalReviewModel.Row] {
+        guard let f = currentFilter else { return model.rows }
+        return model.rows.filter { ProposalReviewSection.section(for: $0.field) == f }
     }
 
     private func refresh() {
         for row in model.rows {
             rowViews[row.field]?.update(with: row)
         }
-        let accepted = model.rows.filter { $0.status == .accepted }.count
-        let rejected = model.rows.filter { $0.status == .rejected }.count
-        let proposed = model.rows.filter { $0.status == .proposed }.count
-        let total = model.rows.count
-        summaryLabel.stringValue = "\(total) fields — \(accepted) accepted · \(rejected) rejected · \(proposed) pending"
-        commitButton.title = accepted == 0 ? "Commit" : "Commit (\(accepted))"
-        commitButton.isEnabled = accepted > 0
-        rerollAllButton.isEnabled = !model.unlockedFields.isEmpty
+        let scope = filteredRows
+        let accepted = scope.filter { $0.status == .accepted }.count
+        let rejected = scope.filter { $0.status == .rejected }.count
+        let proposed = scope.filter { $0.status == .proposed }.count
+        let total = scope.count
+        let scopeLabel = currentFilter?.displayName ?? "fields"
+        if currentFilter == nil {
+            summaryLabel.stringValue = "\(total) fields — \(accepted) accepted · \(rejected) rejected · \(proposed) pending"
+        } else {
+            summaryLabel.stringValue = "\(scopeLabel): \(total) fields — \(accepted) accepted · \(rejected) rejected · \(proposed) pending"
+        }
+
+        // Rebuild the tab labels with the section pending counts so
+        // the user can see at a glance which tabs still have work.
+        if tabStrip.segmentCount > 0 {
+            tabStrip.setLabel("All (\(model.rows.filter { $0.status == .proposed }.count))", forSegment: 0)
+            for (i, sec) in visibleSections.enumerated() {
+                let pendingInSection = model.rows
+                    .filter { ProposalReviewSection.section(for: $0.field) == sec && $0.status == .proposed }
+                    .count
+                let label = pendingInSection > 0
+                    ? "\(sec.displayName) (\(pendingInSection))"
+                    : sec.displayName
+                tabStrip.setLabel(label, forSegment: i + 1)
+            }
+        }
+
+        // Commit always reflects the global accepted count — closing
+        // the sheet writes every accepted proposal regardless of the
+        // tab the user happened to be on.
+        let totalAccepted = model.rows.filter { $0.status == .accepted }.count
+        commitButton.title = totalAccepted == 0 ? "Commit" : "Commit (\(totalAccepted))"
+        commitButton.isEnabled = totalAccepted > 0
+
+        let unlockedInScope = scope.filter { !$0.locked }
+        rerollAllButton.isEnabled = !unlockedInScope.isEmpty
     }
 
     // MARK: - Actions
@@ -251,33 +397,56 @@ final class ProposalReviewSheetController: NSWindowController {
     }
 
     @objc private func acceptAllClicked() {
-        DebugLog.shared.write("cardgen: mode3 acceptAll")
-        model.acceptAll()
+        let scope = filteredRows
+        DebugLog.shared.write("cardgen: mode3 acceptAll (\(currentFilter?.rawValue ?? "all"), \(scope.count) rows)")
+        if currentFilter == nil {
+            model.acceptAll()
+        } else {
+            for r in scope { model.accept(r.field) }
+        }
     }
 
     @objc private func rejectAllClicked() {
-        DebugLog.shared.write("cardgen: mode3 rejectAll")
-        model.rejectAll()
+        let scope = filteredRows
+        DebugLog.shared.write("cardgen: mode3 rejectAll (\(currentFilter?.rawValue ?? "all"), \(scope.count) rows)")
+        if currentFilter == nil {
+            model.rejectAll()
+        } else {
+            for r in scope { model.reject(r.field) }
+        }
     }
 
     @objc private func rerollAllClicked() {
-        let targets = model.unlockedFields
+        let targets = filteredRows.filter { !$0.locked }.map { $0.field }
         guard !targets.isEmpty else { return }
-        DebugLog.shared.write("cardgen: mode3 rerollAllUnlocked (\(targets.count) fields)")
+        DebugLog.shared.write("cardgen: mode3 rerollAllUnlocked (\(currentFilter?.rawValue ?? "all"), \(targets.count) fields)")
         for f in targets { rowViews[f]?.setRerolling(true) }
         onRerollAllUnlocked?(targets)
+    }
+
+    @objc private func tabSelectionChanged() {
+        let idx = tabStrip.selectedSegment
+        if idx <= 0 {
+            currentFilter = nil
+        } else {
+            let sectionIndex = idx - 1
+            currentFilter = sectionIndex < visibleSections.count ? visibleSections[sectionIndex] : nil
+        }
+        DebugLog.shared.write("cardgen: mode3 tab → \(currentFilter?.rawValue ?? "all")")
+        applyFilter()
+        refresh()
     }
 
     @objc private func commitClicked() {
         let proposals = model.acceptedProposals
         DebugLog.shared.write("cardgen: mode3 commit \(proposals.count) proposals")
-        if let parent = window?.sheetParent { parent.endSheet(window!, returnCode: .OK) }
+        dismissPanel()
         onCommit?(proposals)
     }
 
     @objc private func cancelClicked() {
         DebugLog.shared.write("cardgen: mode3 review cancelled")
-        if let parent = window?.sheetParent { parent.endSheet(window!, returnCode: .cancel) }
+        dismissPanel()
         onCancel?()
     }
 }
@@ -303,7 +472,14 @@ final class ProposalReviewRowView: NSView {
     private let labelView = NSTextField(labelWithString: "")
     private let statusPill = NSTextField(labelWithString: "")
     private let exemplarView = NSTextField(labelWithString: "")
-    private let textView = NSTextView()
+    /// Wrapping label, NOT NSTextView. The previous NSTextView-in-
+    /// NSScrollView setup never engaged word wrap on initial layout —
+    /// the text container reported a screen-wide used-width and forced
+    /// the whole sheet off-screen (caught in §5.4.c smoke screenshot).
+    /// `wrappingLabelWithString` uses Auto Layout's preferredMaxLayoutWidth
+    /// machinery, which actually wraps when leading/trailing constraints
+    /// pin the field's width.
+    private let textView = NSTextField(wrappingLabelWithString: "")
     private let lockButton = NSButton(title: "Lock", target: nil, action: nil)
     private let rerollButton = NSButton(title: "Re-roll", target: nil, action: nil)
     private let acceptButton = NSButton(title: "Accept", target: nil, action: nil)
@@ -343,21 +519,20 @@ final class ProposalReviewRowView: NSView {
         refusalChip.translatesAutoresizingMaskIntoConstraints = false
         refusalChip.isHidden = true
 
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.drawsBackground = true
-        textView.backgroundColor = DesignTokens.Background.textInput
-        textView.textContainerInset = NSSize(width: DesignTokens.Spacing.sm, height: DesignTokens.Spacing.sm)
+        // wrappingLabelWithString already sets isEditable=false,
+        // isSelectable=true, isBezeled=false, drawsBackground=false,
+        // lineBreakMode=byWordWrapping, usesSingleLineMode=false. We
+        // just style it and let Auto Layout drive width-based wrapping.
         textView.font = DesignTokens.Typography.body
         textView.textColor = DesignTokens.Foreground.primary
-        textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = false
-
-        let textScroll = NSScrollView()
-        textScroll.documentView = textView
-        textScroll.borderType = .lineBorder
-        textScroll.hasVerticalScroller = true
-        textScroll.translatesAutoresizingMaskIntoConstraints = false
+        textView.drawsBackground = true
+        textView.backgroundColor = DesignTokens.Background.textInput
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        // Don't push the row wider than the container. With low hugging
+        // and compression resistance, the field shrinks to whatever the
+        // row offers and wraps.
+        textView.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         for b in [lockButton, rerollButton, acceptButton, rejectButton, historyButton] {
             b.bezelStyle = .rounded
@@ -396,7 +571,7 @@ final class ProposalReviewRowView: NSView {
         actionRow.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(header)
-        addSubview(textScroll)
+        addSubview(textView)
         addSubview(actionRow)
 
         NSLayoutConstraint.activate([
@@ -404,12 +579,11 @@ final class ProposalReviewRowView: NSView {
             header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DesignTokens.Spacing.sm),
             header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DesignTokens.Spacing.sm),
 
-            textScroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: DesignTokens.Spacing.xs),
-            textScroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DesignTokens.Spacing.sm),
-            textScroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DesignTokens.Spacing.sm),
-            textScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 80),
+            textView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: DesignTokens.Spacing.xs),
+            textView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DesignTokens.Spacing.sm),
+            textView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DesignTokens.Spacing.sm),
 
-            actionRow.topAnchor.constraint(equalTo: textScroll.bottomAnchor, constant: DesignTokens.Spacing.xs),
+            actionRow.topAnchor.constraint(equalTo: textView.bottomAnchor, constant: DesignTokens.Spacing.xs),
             actionRow.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DesignTokens.Spacing.sm),
             actionRow.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DesignTokens.Spacing.sm),
             actionRow.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -DesignTokens.Spacing.sm),
@@ -419,7 +593,7 @@ final class ProposalReviewRowView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func update(with row: ProposalReviewModel.Row) {
-        textView.string = row.current
+        textView.stringValue = row.current
         historyEntries = row.history
 
         switch row.status {
