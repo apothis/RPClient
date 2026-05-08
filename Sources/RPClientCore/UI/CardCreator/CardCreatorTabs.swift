@@ -189,6 +189,15 @@ final class DetailsTabViewController: NSViewController {
     }
 }
 
+extension DetailsTabViewController: AIAssistableTab {
+    var aiAssistableFields: [(CardField, MultilineFieldView)] {
+        [
+            (.detailsAppearance, appearanceField),
+            (.detailsMood, moodField),
+        ]
+    }
+}
+
 // MARK: - IntimacyTabViewController (§5.3c.2)
 
 /// Intimacy tab — RPClient-structured NSFW-aware fields per §3.9. Six
@@ -351,6 +360,21 @@ final class IntimacyTabViewController: NSViewController {
     }
 }
 
+extension IntimacyTabViewController: AIAssistableTab {
+    var aiAssistableFields: [(CardField, MultilineFieldView)] {
+        [
+            (.intimacyBuild, buildField),
+            (.intimacyAnatomy, anatomyField),
+            (.intimacyMarkings, markingsField),
+            (.intimacySensitivities, sensitivitiesField),
+            (.intimacyScent, scentField),
+            (.intimacyTurnOns, turnOnsField),
+            (.intimacyKinks, kinksField),
+            (.intimacyLimits, limitsField),
+        ]
+    }
+}
+
 // MARK: - PersonaTabViewController (§5.3b)
 
 /// Persona tab — description / personality / scenario. Three multi-line
@@ -424,6 +448,16 @@ final class PersonaTabViewController: NSViewController {
     }
 }
 
+extension PersonaTabViewController: AIAssistableTab {
+    var aiAssistableFields: [(CardField, MultilineFieldView)] {
+        [
+            (.description, descriptionField),
+            (.personality, personalityField),
+            (.scenario, scenarioField),
+        ]
+    }
+}
+
 // MARK: - GreetingsTabViewController (§5.3b)
 
 /// Greetings tab — firstMessage (multi-line field) + alternateGreetings
@@ -486,6 +520,12 @@ final class GreetingsTabViewController: NSViewController {
         self.view = makeScrollingTab(fields: [
             firstMessageField, alternateGreetingsEditor, groupOnlyEditor,
         ])
+    }
+}
+
+extension GreetingsTabViewController: AIAssistableTab {
+    var aiAssistableFields: [(CardField, MultilineFieldView)] {
+        [(.firstMessage, firstMessageField)]
     }
 }
 
@@ -604,6 +644,12 @@ final class ExamplesTabViewController: NSViewController {
     }
 }
 
+extension ExamplesTabViewController: AIAssistableTab {
+    var aiAssistableFields: [(CardField, MultilineFieldView)] {
+        [(.messageExample, exampleField)]
+    }
+}
+
 // MARK: - SystemTabViewController (§5.3b)
 
 /// System tab — systemPrompt / postHistoryInstructions / DepthPromptControl
@@ -687,6 +733,16 @@ final class SystemTabViewController: NSViewController {
         self.view = makeScrollingTab(fields: [
             systemPromptField, postHistoryField, depthPromptControl, creatorNotesField,
         ])
+    }
+}
+
+extension SystemTabViewController: AIAssistableTab {
+    var aiAssistableFields: [(CardField, MultilineFieldView)] {
+        [
+            (.systemPrompt, systemPromptField),
+            (.postHistoryInstructions, postHistoryField),
+            (.creatorNotes, creatorNotesField),
+        ]
     }
 }
 
