@@ -17,10 +17,17 @@ enum CardDraftSnapshotBuilder {
         // extractFrom returns nil when neither extensions nor description-
         // fence carry the structured block; treat that as "no values"
         // rather than error.
-        let details = CardDetails.extractFrom(c)
-            ?? CardDetails()
-        let intimacy = CardIntimacy.extractFrom(c)
-            ?? CardIntimacy(build: "", anatomy: "", markings: "", sensitivities: "", scent: "", turnOns: "", kinks: "", limits: "")
+        let extractedDetails = CardDetails.extractFrom(c)
+        let extractedIntimacy = CardIntimacy.extractFrom(c)
+        let details = extractedDetails ?? CardDetails()
+        let intimacy = extractedIntimacy ?? CardIntimacy(build: "", anatomy: "", markings: "", sensitivities: "", scent: "", turnOns: "", kinks: "", limits: "")
+        // Diagnostic — when an edit-and-redo run regenerates fields
+        // the user thought were filled, the most common cause is a
+        // structured-block extractor returning nil (e.g. card was
+        // saved before extensions["rpclient/intimacy"] was a thing).
+        DebugLog.shared.write(
+            "cardcreator: snapshot — rpclient/details=\(extractedDetails == nil ? "MISSING" : "ok") rpclient/intimacy=\(extractedIntimacy == nil ? "MISSING" : "ok") depth_prompt=\(DepthPrompt.extractFrom(c) == nil ? "missing" : "ok")"
+        )
 
         var fields: [CardField: String] = [:]
 
@@ -40,9 +47,11 @@ enum CardDraftSnapshotBuilder {
         write(&fields, .systemPrompt, c.systemPrompt)
         write(&fields, .postHistoryInstructions, c.postHistoryInstructions)
         write(&fields, .creatorNotes, c.creatorNotes)
-        // depth_prompt lives inside extensions; pull from the structured
-        // accessor when it lands. For now, leave nil so it doesn't
-        // pollute the upstream block with default values.
+        // depth_prompt lives in extensions["depth_prompt"]. Without
+        // this, the autopilot's edit-and-redo path always sees
+        // depth_prompt as empty and re-generates it on every run,
+        // even on a fully-populated card. Caught live §5.4.c smoke.
+        write(&fields, .depthPrompt, DepthPrompt.extractFrom(c)?.prompt)
 
         // §3.9 Details.
         write(&fields, .detailsSex, details.sex)

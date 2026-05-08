@@ -173,6 +173,19 @@ final class CardAutopilotOrchestrator {
         DebugLog.shared.write(
             "cardgen: mode3 start tags=\(draft.tags.joined(separator: ","))\(hintLog) maxCalls=\(budget.maxCalls) maxTokens=\(budget.maxTokens)"
         )
+        // Show what the orchestrator believes is already filled in
+        // the source draft so the edit-and-redo path is debuggable —
+        // a "fully populated" card that triggers many passes points
+        // straight at a snapshot extractor gap or an unsaved field.
+        let prefilled = CardField.allCases
+            .filter { (draft.fields[$0]?.isEmpty == false) }
+            .map(\.rawValue)
+        let absent = CardField.allCases
+            .filter { (draft.fields[$0]?.isEmpty ?? true) }
+            .map(\.rawValue)
+        DebugLog.shared.write(
+            "cardgen: mode3 input-snapshot prefilled=[\(prefilled.joined(separator: ","))] empty=[\(absent.joined(separator: ","))]"
+        )
         runNextPass()
     }
 
@@ -202,6 +215,14 @@ final class CardAutopilotOrchestrator {
 
         let pass = CardAutopilotPass.allCases[ctx.passIndex]
         let targets = pass.targets(in: ctx.runningDraft)
+        let skipped = pass.allFields.filter { !targets.contains($0) }
+
+        // Always log the pass-decision details so edit-and-redo
+        // behaviour is auditable: which fields the orchestrator
+        // thinks are already filled (skipped) vs empty (will fire).
+        DebugLog.shared.write(
+            "cardgen: mode3 pass=\(pass.logTag) decision skipped=[\(skipped.map(\.rawValue).joined(separator: ","))] willFire=[\(targets.map(\.rawValue).joined(separator: ","))]"
+        )
 
         // Skip-empty-pass: nothing left to fill in this pass.
         if targets.isEmpty {

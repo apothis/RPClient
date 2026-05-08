@@ -309,6 +309,17 @@ final class CardCreatorViewController: NSViewController {
         var collected: [(CardField, MultilineFieldView)] = []
         for item in tabView.tabViewItems {
             guard let vc = item.viewController as? AIAssistableTab else { continue }
+            // Force the tab's view to load NOW so its `loadView()` fires
+            // and wires every field's onChange. NSTabView lazy-loads only
+            // the first tab; for the others, MultilineFieldView.onChange
+            // stays nil until the user clicks the tab. Mode 3 commit
+            // calls `acceptProposal()` which fires `onChange?(text)` — a
+            // silent no-op when nil, so proposed values for Persona /
+            // Intimacy / Examples / Greetings never reach the draft and
+            // the saved card is missing those fields. Caught live
+            // §5.4.c smoke (Gemma card had Persona + Intimacy blank
+            // after a Mode 3 commit + save round-trip).
+            (item.viewController as? NSViewController)?.loadViewIfNeeded()
             collected.append(contentsOf: vc.aiAssistableFields)
         }
         aiAssistableFields = collected
