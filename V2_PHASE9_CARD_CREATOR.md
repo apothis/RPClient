@@ -766,6 +766,37 @@ Polish in same window: spinner on Fill button (`c550aff`), prompt echo regressio
 - Small UX polish from smoke: progress indicators, button-label refinement, banner copy.
 - ~1 day.
 
+#### Future polish — tag-aware placeholders
+
+Out of scope for §5.4.d, queued for a later pass. Today
+[`CardCreatorPlaceholders`](Sources/RPClientCore/UI/CardCreator/CardCreatorPlaceholders.swift)
+ships a single Mira-shape set — every author sees the fantasy ranger
+hint in every multi-line field regardless of what they're authoring.
+[`CardGenExemplars`](Sources/RPClientCore/UI/CardCreator/CardGenExemplars.swift)
+splits seven ways for AI-assist (mira / monstergirl / modern / spacer
+/ biopunk / companion / domestic) but the UI placeholders don't.
+
+The follow-up: extend `CardCreatorPlaceholders` to a tag-overlap
+selector mirror of `CardGenExemplars`, and re-render placeholders
+when the author commits tags on the Identity tab. **Critical scoping
+note:** four-to-seven archetypes is far too few — the tag-overlap
+heuristic only feels native if most tag entries hit a confident
+match, and the live-smoke iteration on §5.4.c showed how often
+ambiguous tag sets fall back to Mira on a sparse archetype set.
+Aim for **30+ placeholder archetypes** across the major card-shapes
+the community produces (medieval-fantasy / urban-fantasy / hard-SF /
+cyberpunk / biopunk / horror / school-life / period-drama / sports /
+domestic / sex-work-positive / etc), each with a lane-appropriate
+register. Selection logic mirrors `CardGenExemplars.selectWithScore`;
+ties resolve to a stable baseline (Mira) so byte-stability holds.
+
+UI plumbing: `MultilineFieldView` exposes `setPlaceholder(_:)`,
+each tab listens on `aiRegistry` for tag changes and re-renders
+empty fields. Populated fields stay untouched — the placeholder
+only matters for empty state. Effort estimate: ~1 day plumbing +
+several days of content authoring across 30+ archetypes (the
+content writing is the load-bearing cost, not the code).
+
 **Total §5.4 effort:** ~1 day research + ~7–11 days implementation across the three modes. Each mode is independently shippable; if scope tightens we ship Mode 1 first and gate Mode 2 / Mode 3 behind a follow-up phase.
 
 ### §5.5 — Polish + smoke
