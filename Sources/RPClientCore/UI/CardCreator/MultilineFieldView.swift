@@ -52,6 +52,15 @@ final class MultilineFieldView: NSView {
 
     var onChange: ((String) -> Void)?
 
+    /// Phase 9 §5.4.b — invoked when the author hits Accept on a
+    /// proposed value. The proposed text is already in the field via
+    /// `stringValue` at the time this fires. Parent commits to draft.
+    var onAcceptProposal: (() -> Void)?
+
+    /// Invoked when the author rejects. The previous value is already
+    /// restored at the time this fires. Parent recomputes draft state.
+    var onRejectProposal: (() -> Void)?
+
     private let labelView = NSTextField(labelWithString: "")
     private let v3PillContainer = NSView()
     private let scrollView = NSScrollView()
@@ -64,6 +73,26 @@ final class MultilineFieldView: NSView {
     /// attaches a `CardSuggestionsController` after construction.
     let suggestionsStrip: CardSuggestionsStripView?
 
+    /// Phase 9 §5.4.b — proposed-state UI: yellow "Proposed" pill in
+    /// the header row + Accept / Reject button row replacing the strip
+    /// while a Mode-2 / Mode-3 fill is awaiting decision. Hidden in
+    /// the default normal state.
+    private let proposedBadge = NSTextField(labelWithString: "Proposed")
+    private let proposalActionRow = NSStackView()
+    private let acceptButton = NSButton(title: "Accept", target: nil, action: nil)
+    private let rejectButton = NSButton(title: "Reject", target: nil, action: nil)
+    private let proposalRefusalChip = NSTextField(labelWithString: "⚠ refusal")
+
+    /// State machine for the field's editor. `.normal` is the default
+    /// (strip visible if present, no proposed-mode UI). `.proposing`
+    /// captures the previous value so reject can restore it; the
+    /// strip is hidden and the action row is shown.
+    private enum FieldMode {
+        case normal
+        case proposing(previousValue: String)
+    }
+    private var mode: FieldMode = .normal
+
     private let label: String
     private let hint: String?
     private let v3Only: Bool
@@ -71,6 +100,11 @@ final class MultilineFieldView: NSView {
     private let maxHeight: CGFloat
 
     private var heightConstraint: NSLayoutConstraint!
+
+    var isShowingProposal: Bool {
+        if case .proposing = mode { return true }
+        return false
+    }
 
     init(label: String,
          initialValue: String,
@@ -138,6 +172,12 @@ final class MultilineFieldView: NSView {
         if v3Only {
             header.addArrangedSubview(makeV3Pill())
         }
+        // Yellow "Proposed" pill — hidden by default, made visible by
+        // showProposal(...). Visual: same shape as the v3 pill but
+        // tinted warning-yellow.
+        configureProposedBadge()
+        proposedBadge.isHidden = true
+        header.addArrangedSubview(proposedBadge)
         addSubview(header)
 
         // Text view + scroll view — canonical NSScrollView-with-NSTextView
@@ -189,12 +229,24 @@ final class MultilineFieldView: NSView {
         heightConstraint = scrollView.heightAnchor.constraint(equalToConstant: minHeight)
         heightConstraint.priority = .defaultHigh
 
-        // Suggestions strip (optional, between input and hint).
-        if let strip = suggestionsStrip {
-            addSubview(strip)
-        }
+        // Build the proposal action row (Accept / Reject + warning chip).
+        configureProposalActionRow()
 
-        // Hint footer.
+        // Stack the post-textView elements vertically. NSStackView's
+        // `detachesHiddenViews` (default true on macOS) collapses
+        // any hidden arranged subview, so toggling visibility on
+        // proposalActionRow / suggestionsStrip Just Works for layout.
+        let belowField = NSStackView()
+        belowField.orientation = .vertical
+        belowField.alignment = .leading
+        belowField.distribution = .fill
+        belowField.spacing = DesignTokens.Spacing.xs
+        belowField.translatesAutoresizingMaskIntoConstraints = false
+        belowField.addArrangedSubview(proposalActionRow)
+        proposalActionRow.isHidden = true
+        if let strip = suggestionsStrip {
+            belowField.addArrangedSubview(strip)
+        }
         if let hintText = hint {
             hintView.stringValue = hintText
             hintView.font = DesignTokens.Typography.subheadline
@@ -202,8 +254,9 @@ final class MultilineFieldView: NSView {
             hintView.lineBreakMode = .byWordWrapping
             hintView.maximumNumberOfLines = 3
             hintView.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(hintView)
+            belowField.addArrangedSubview(hintView)
         }
+        addSubview(belowField)
 
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: topAnchor),
@@ -214,37 +267,118 @@ final class MultilineFieldView: NSView {
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             heightConstraint,
+
+            belowField.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: DesignTokens.Spacing.xs),
+            belowField.leadingAnchor.constraint(equalTo: leadingAnchor),
+            belowField.trailingAnchor.constraint(equalTo: trailingAnchor),
+            belowField.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-
-        // The next-anchor for the hint depends on whether a strip exists.
-        let topOfHintAnchor: NSLayoutYAxisAnchor
-        if let strip = suggestionsStrip {
-            NSLayoutConstraint.activate([
-                strip.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: DesignTokens.Spacing.xs),
-                strip.leadingAnchor.constraint(equalTo: leadingAnchor),
-                strip.trailingAnchor.constraint(equalTo: trailingAnchor),
-            ])
-            topOfHintAnchor = strip.bottomAnchor
-        } else {
-            topOfHintAnchor = scrollView.bottomAnchor
-        }
-
-        if hint != nil {
-            NSLayoutConstraint.activate([
-                hintView.topAnchor.constraint(equalTo: topOfHintAnchor, constant: DesignTokens.Spacing.xs),
-                hintView.leadingAnchor.constraint(equalTo: leadingAnchor),
-                hintView.trailingAnchor.constraint(equalTo: trailingAnchor),
-                hintView.bottomAnchor.constraint(equalTo: bottomAnchor),
-            ])
-        } else {
-            topOfHintAnchor.constraint(equalTo: bottomAnchor).isActive = true
-        }
 
         // Initial height calc once layout pass settles.
         DispatchQueue.main.async { [weak self] in
             self?.recalculateHeight()
         }
     }
+
+    // MARK: - Proposed-state UI
+
+    private func configureProposedBadge() {
+        proposedBadge.font = DesignTokens.Typography.caption2
+        proposedBadge.textColor = DesignTokens.Foreground.warning
+        proposedBadge.translatesAutoresizingMaskIntoConstraints = false
+        proposedBadge.drawsBackground = false
+        proposedBadge.toolTip = "Proposed by AI-assist. Hit Accept to commit, Reject to discard, or just edit to override."
+    }
+
+    private func configureProposalActionRow() {
+        acceptButton.bezelStyle = .rounded
+        acceptButton.controlSize = .small
+        acceptButton.target = self
+        acceptButton.action = #selector(acceptProposalClicked)
+        acceptButton.keyEquivalent = "\r"  // ⏎ accepts when the field is focused
+        acceptButton.translatesAutoresizingMaskIntoConstraints = false
+
+        rejectButton.bezelStyle = .rounded
+        rejectButton.controlSize = .small
+        rejectButton.target = self
+        rejectButton.action = #selector(rejectProposalClicked)
+        rejectButton.translatesAutoresizingMaskIntoConstraints = false
+
+        proposalRefusalChip.font = DesignTokens.Typography.caption1
+        proposalRefusalChip.textColor = DesignTokens.Foreground.warning
+        proposalRefusalChip.toolTip = "This proposal looks like a refusal. Use anyway, switch the server, or reject."
+        proposalRefusalChip.isHidden = true
+
+        proposalActionRow.orientation = .horizontal
+        proposalActionRow.alignment = .centerY
+        proposalActionRow.spacing = DesignTokens.Spacing.sm
+        proposalActionRow.translatesAutoresizingMaskIntoConstraints = false
+        proposalActionRow.addArrangedSubview(acceptButton)
+        proposalActionRow.addArrangedSubview(rejectButton)
+        proposalActionRow.addArrangedSubview(NSView())  // spacer
+        proposalActionRow.addArrangedSubview(proposalRefusalChip)
+    }
+
+    /// Phase 9 §5.4.b — switch the field into proposed mode. The
+    /// current value is captured for `rejectProposal()` to restore;
+    /// the proposed text is shown in the textView; the strip is
+    /// hidden in favour of the Accept / Reject row.
+    func showProposal(text: String, refusal: RefusalDetection) {
+        let previous = textView.string
+        mode = .proposing(previousValue: previous)
+        textView.string = text
+        proposedBadge.isHidden = false
+        proposalActionRow.isHidden = false
+        suggestionsStrip?.isHidden = true
+        proposalRefusalChip.isHidden = !refusal.isRefusal
+        DebugLog.shared.write("multilineField[\(label)]: showing proposal (\(text.count)c, refusal=\(refusal.isRefusal))")
+        DispatchQueue.main.async { [weak self] in
+            self?.recalculateHeight()
+        }
+    }
+
+    /// Dismiss the proposal without applying. The captured previous
+    /// value is restored. Caller's onRejectProposal fires; the parent
+    /// re-syncs draft state if needed.
+    func rejectProposal() {
+        guard case .proposing(let previous) = mode else { return }
+        textView.string = previous
+        exitProposalMode()
+        DebugLog.shared.write("multilineField[\(label)]: proposal rejected (restored \(previous.count)c)")
+        onRejectProposal?()
+        // Re-fire onChange so the parent knows the field's value is
+        // back to the previous state (since we silently overwrote).
+        onChange?(previous)
+    }
+
+    /// Commit the proposed value. The textView already shows it; we
+    /// just exit proposal mode and fire the callbacks so the parent
+    /// commits to the draft + triggers stale-propagation.
+    func acceptProposal() {
+        guard case .proposing = mode else { return }
+        let accepted = textView.string
+        exitProposalMode()
+        DebugLog.shared.write("multilineField[\(label)]: proposal accepted (\(accepted.count)c)")
+        onAcceptProposal?()
+        onChange?(accepted)
+    }
+
+    /// Internal — flip back to normal-mode UI (badge + action row
+    /// hidden, strip restored). Doesn't touch the text or fire
+    /// callbacks; accept/reject paths handle that.
+    private func exitProposalMode() {
+        mode = .normal
+        proposedBadge.isHidden = true
+        proposalActionRow.isHidden = true
+        proposalRefusalChip.isHidden = true
+        suggestionsStrip?.isHidden = false
+        DispatchQueue.main.async { [weak self] in
+            self?.recalculateHeight()
+        }
+    }
+
+    @objc private func acceptProposalClicked() { acceptProposal() }
+    @objc private func rejectProposalClicked() { rejectProposal() }
 
     private func makeV3Pill() -> NSView {
         let pill = NSTextField(labelWithString: "v3")
@@ -287,6 +421,16 @@ final class MultilineFieldView: NSView {
 
 extension MultilineFieldView: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
+        // Phase 9 §5.4.b: editing while in proposing mode is an
+        // implicit accept (per V2_PHASE9_CARD_CREATOR §4.7 step 4
+        // — "or just edits inline (which auto-accepts)"). Flip out
+        // of proposal mode silently; the textView already has the
+        // new value and onChange fires below.
+        if case .proposing = mode {
+            DebugLog.shared.write("multilineField[\(label)]: edit-during-proposal → implicit accept")
+            exitProposalMode()
+            onAcceptProposal?()
+        }
         let len = textView.string.count
         DebugLog.shared.write("multilineField[\(label)]: textDidChange len=\(len)")
         onChange?(textView.string)
