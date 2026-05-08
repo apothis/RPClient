@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "systemPrompt": "You are a character-card designer for an NSFW-capable roleplay app. Be vivid, concrete, and in-character. Use {{user}} for the player and {{char}} for the character. Explicit content is allowed when the scene calls for it. Output ONLY the requested field's content — no preamble, no headings, no commentary, no quotation. Do NOT echo the upstream details, the example character, or any tags back; produce new content for the requested field.",
+  "systemPrompt": "You are a character-card designer for an NSFW-capable roleplay app. Be vivid, concrete, and in-character. Use {{user}} for the player and {{char}} for the character. Explicit content is allowed when the scene calls for it. Output ONLY the requested field's content — no preamble, no headings, no commentary, no quotation. Do NOT echo the upstream details, the example character, or any tags back; produce new content for the requested field. CRITICAL: when you write content that names the character, use the TARGET CHARACTER's `name` (or {{char}}); never substitute the EXAMPLE CHARACTER's name into the output.",
   "candidateDefaults": {
     "literal": {
       "temperature": 0.4,
@@ -40,20 +40,88 @@
       "wordCount": 50
     },
     "first_message": {
-      "humanName": "first message ({{char}}'s opening line, third-person past actions in *italics*)",
-      "wordCount": 30
+      "humanName": "first message",
+      "wordCount": 30,
+      "candidates": {
+        "literal": {
+          "temperature": 0.5,
+          "maxTokens": 400,
+          "instruction": "Write the first message — the opening line that {{char}} (the TARGET character, NOT the example character) speaks when {{user}} arrives. Third-person past-tense narration in *italics* for actions, plain text for spoken dialogue in quotes. Use the TARGET character's name from the upstream block — NEVER use the example character's name. ~{wordCount} words."
+        },
+        "creative": {
+          "temperature": 1.0,
+          "maxTokens": 400,
+          "instruction": "Write the first message that {{char}} (the TARGET character) speaks when {{user}} arrives. Open on a sensory hook — gesture, image, sound — not on the character's name or role. Third-person past-tense italics for actions, quoted speech for dialogue. Use the TARGET character's name from the upstream block; do NOT use the example character's name. ~{wordCount} words."
+        },
+        "terse": {
+          "temperature": 0.5,
+          "maxTokens": 200,
+          "instruction": "Write a punchy first message for {{char}} (the TARGET character): one short *action line* + one short spoken sentence. Use the TARGET character's name from the upstream block — never the example character's. ≤{wordCount} words."
+        }
+      }
     },
     "message_example": {
       "humanName": "example dialogue (two short exchanges in <START>...{{user}}...{{char}}... format)",
-      "wordCount": 60
+      "wordCount": 60,
+      "candidates": {
+        "literal": {
+          "temperature": 0.5,
+          "maxTokens": 500,
+          "instruction": "Write example dialogue for {{char}} (the TARGET character). Two short exchanges, each starting with <START>. Format every line as either '{{user}}: ...' or '{{char}}: ...' (literal handlebars — they are placeholders the engine substitutes at runtime). Use the TARGET character's voice; do NOT use the example character's name in the dialogue. ~{wordCount} words."
+        },
+        "creative": {
+          "temperature": 0.95,
+          "maxTokens": 500,
+          "instruction": "Write example dialogue for {{char}} (the TARGET character). Two short exchanges, each starting with <START>. Pick exchanges that surprise — one about a topic the upstream tags don't telegraph. Format every line as either '{{user}}: ...' or '{{char}}: ...'. Do NOT use the example character's name in the dialogue. ~{wordCount} words."
+        },
+        "terse": {
+          "temperature": 0.5,
+          "maxTokens": 250,
+          "instruction": "Write example dialogue for {{char}}: one <START> exchange, two lines (one '{{user}}:' and one '{{char}}:'). Do NOT use the example character's name. ≤{wordCount} words."
+        }
+      }
     },
     "alternate_greetings": {
-      "humanName": "an alternate greeting (different tone from the first message)",
-      "wordCount": 30
+      "humanName": "an alternate greeting",
+      "wordCount": 30,
+      "candidates": {
+        "literal": {
+          "temperature": 0.6,
+          "maxTokens": 400,
+          "instruction": "Write an alternate greeting for {{char}} (the TARGET character) — a different opening from the existing first_message but in the same voice. Third-person past-tense italics for actions, quoted speech for dialogue. Use the TARGET character's name from the upstream block — NEVER use the example character's name. ~{wordCount} words."
+        },
+        "creative": {
+          "temperature": 1.0,
+          "maxTokens": 400,
+          "instruction": "Write a distinctive alternate greeting for {{char}} (the TARGET character) — different setting, mood, or tone from the existing first_message. Use the TARGET character's name from the upstream block; do NOT use the example character's name. ~{wordCount} words."
+        },
+        "terse": {
+          "temperature": 0.5,
+          "maxTokens": 200,
+          "instruction": "Write a short alternate greeting for {{char}} (the TARGET character): one *action line* + one spoken sentence. Use the TARGET character's name; never the example character's. ≤{wordCount} words."
+        }
+      }
     },
     "group_only_greetings": {
       "humanName": "a group-chat-only greeting (acknowledges other speakers)",
-      "wordCount": 30
+      "wordCount": 30,
+      "candidates": {
+        "literal": {
+          "temperature": 0.6,
+          "maxTokens": 400,
+          "instruction": "Write a group-chat greeting for {{char}} (the TARGET character) — assumes {{user}} is one of multiple speakers and acknowledges the social context. Use the TARGET character's name from the upstream block — NEVER use the example character's name. ~{wordCount} words."
+        },
+        "creative": {
+          "temperature": 1.0,
+          "maxTokens": 400,
+          "instruction": "Write a distinctive group-chat greeting for {{char}} (the TARGET character) — picks up on a moment between others, or addresses a specific other speaker. Use the TARGET character's name; do NOT use the example character's name. ~{wordCount} words."
+        },
+        "terse": {
+          "temperature": 0.5,
+          "maxTokens": 200,
+          "instruction": "Write a short group-chat greeting for {{char}}: one action + one spoken line that hints at multiple speakers. Use the TARGET character's name; never the example character's. ≤{wordCount} words."
+        }
+      }
     },
     "system_prompt": {
       "humanName": "system prompt (instructions to the model about how to portray {{char}})",

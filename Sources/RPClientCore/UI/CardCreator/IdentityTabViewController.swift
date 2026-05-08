@@ -82,30 +82,46 @@ final class IdentityTabViewController: NSViewController {
                                      v3Only: true)
         fieldStack.addArrangedSubview(nicknameRow)
 
-        // Tags (token field). Inline wrap — busy tag lists grow the
-        // field vertically rather than clipping at the right edge.
-        // NSTokenField's cell.wraps + isScrollable=false +
-        // preferredMaxLayoutWidth let it wrap; AppKit recomputes the
-        // intrinsic height as tokens flow onto additional lines.
-        // (Earlier attempt at wrapping in an NSScrollView broke
-        // click/focus handling — NSTokenField doesn't behave
-        // cleanly as a documentView. Reverted to inline.)
-        tagsField.translatesAutoresizingMaskIntoConstraints = false
+        // Tags (token field). NSTokenField's wrap-to-multi-line mode
+        // is unreliable in current AppKit — settings (cell.wraps +
+        // isScrollable=false + preferredMaxLayoutWidth) don't always
+        // take, leaving the field in single-line clipping mode.
+        // Embracing single-line: wrap in an NSScrollView with a
+        // visible horizontal scroller so a busy tag list shows a
+        // scroll thumb the user can drag, instead of silently
+        // clipping at the right edge.
+        //
+        // Documentview setup uses translatesAutoresizingMaskIntoConstraints=true
+        // (frame-based sizing) so the field's intrinsic content size
+        // drives its width inside the clip view — without this, the
+        // earlier wrap attempt left the field at zero size and ate
+        // all click events.
+        tagsField.translatesAutoresizingMaskIntoConstraints = true
         tagsField.tokenStyle = .rounded
         tagsField.controlSize = .small
         tagsField.placeholderString = "Add tags…"
         tagsField.objectValue = draft.character.tags
         tagsField.delegate = self
         tagsField.font = DesignTokens.Typography.body
-        tagsField.cell?.wraps = true
-        tagsField.cell?.usesSingleLineMode = false
-        tagsField.cell?.isScrollable = false
-        tagsField.lineBreakMode = .byWordWrapping
-        tagsField.maximumNumberOfLines = 0
-        tagsField.preferredMaxLayoutWidth = 360
-        tagsField.widthAnchor.constraint(equalToConstant: 360).isActive = true
+        tagsField.isBordered = false
+        tagsField.drawsBackground = false
+        tagsField.frame = NSRect(x: 0, y: 0, width: 360, height: 22)
+        tagsField.autoresizingMask = [.height]
+
+        let tagsScroll = NSScrollView()
+        tagsScroll.translatesAutoresizingMaskIntoConstraints = false
+        tagsScroll.hasHorizontalScroller = true
+        tagsScroll.hasVerticalScroller = false
+        tagsScroll.autohidesScrollers = false
+        tagsScroll.borderType = .bezelBorder
+        tagsScroll.drawsBackground = true
+        tagsScroll.documentView = tagsField
+        tagsScroll.widthAnchor.constraint(equalToConstant: 360).isActive = true
+        // Field height + horizontal scroller height (~16pt on macOS 26).
+        tagsScroll.heightAnchor.constraint(equalToConstant: 44).isActive = true
+
         let tagsRow = labeledRow("Tags",
-                                 control: tagsField,
+                                 control: tagsScroll,
                                  hint: "Comma-separated. Used by the library for filtering. Common tags autocomplete.",
                                  width: 360)
         fieldStack.addArrangedSubview(tagsRow)

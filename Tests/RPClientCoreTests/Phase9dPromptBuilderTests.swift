@@ -136,7 +136,7 @@ func phase9dPromptBuilderTests() -> TestSuite {
         let r = CardFieldGenerator.buildPrompt(
             for: .description, style: .literal, draft: .empty
         )
-        try expectFalse(r.prompt.contains("TARGET CHARACTER"),
+        try expectFalse(r.prompt.contains("TARGET CHARACTER (current draft):"),
             "empty draft should not produce a TARGET CHARACTER section")
     }
 
@@ -219,7 +219,7 @@ func phase9dPromptBuilderTests() -> TestSuite {
         // intimacy_limits has zero upstreams per the dep graph; even
         // though the draft has tags + name + description + personality,
         // none of them should land in the upstream block for this field.
-        try expectFalse(r.prompt.contains("TARGET CHARACTER"))
+        try expectFalse(r.prompt.contains("TARGET CHARACTER (current draft):"))
     }
 
     // MARK: - Candidate-style differentiation
