@@ -112,17 +112,25 @@ func phase9dExemplarsTests() -> TestSuite {
     }
 
     s.test("exact tie between archetypes resolves to Mira") {
-        // Construct a tag set with one tag from monstergirl and one from
-        // modern, no Mira-specific tags. Both should score 1; tie resolves
-        // to Mira.
-        let monsterOnly = CardGenExemplars.monstergirl.tags
-            .subtracting(CardGenExemplars.modern.tags)
-            .subtracting(CardGenExemplars.mira.tags)
-        let modernOnly = CardGenExemplars.modern.tags
-            .subtracting(CardGenExemplars.monstergirl.tags)
-            .subtracting(CardGenExemplars.mira.tags)
-        guard let monsterTag = monsterOnly.first, let modernTag = modernOnly.first else {
-            try expectTrue(false, "tag-set design assumes monstergirl and modern each have at least one unique tag")
+        // Construct a tag set with one tag truly unique to monstergirl
+        // and one truly unique to modern (subtracted against EVERY other
+        // exemplar, not just the named three — the §5.4.c follow-up
+        // expanded the set to seven and `explicit` / `modern` are no
+        // longer monstergirl/modern-exclusive). Both score exactly 1;
+        // tie → Mira.
+        let target: Set<String> = CardGenExemplars.monstergirl.tags
+        let othersExcludingMonstergirl = CardGenExemplars.all
+            .filter { $0.id != "monstergirl" }
+            .reduce(Set<String>()) { acc, ex in acc.union(ex.tags) }
+        let monsterOnly = target.subtracting(othersExcludingMonstergirl)
+        let modernTarget: Set<String> = CardGenExemplars.modern.tags
+        let othersExcludingModern = CardGenExemplars.all
+            .filter { $0.id != "modern" }
+            .reduce(Set<String>()) { acc, ex in acc.union(ex.tags) }
+        let modernOnly = modernTarget.subtracting(othersExcludingModern)
+        guard let monsterTag = monsterOnly.sorted().first,
+              let modernTag = modernOnly.sorted().first else {
+            try expectTrue(false, "tag-set design assumes monstergirl and modern each have at least one tag unique across all seven exemplars")
             return
         }
         let pick = CardGenExemplars.select(forTags: [monsterTag, modernTag])
