@@ -46,6 +46,7 @@ final class CardCreatorViewController: NSViewController {
     private let rejectAllButton = NSButton(title: "Reject all", target: nil, action: nil)
     private let cancelFillButton = NSButton(title: "Cancel", target: nil, action: nil)
     private let fillButton = NSButton(title: "Fill missing fields", target: nil, action: nil)
+    private let fillSpinner = NSProgressIndicator()
 
     private let tabView = NSTabView()
     private let serverPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -97,7 +98,8 @@ final class CardCreatorViewController: NSViewController {
         modelLabel.stringValue = "—"
 
         // Phase 9 §5.4.b — global "Fill missing fields" button at the
-        // trailing edge of the header.
+        // trailing edge of the header, with a small spinner that
+        // shows while the orchestrator is fetching.
         fillButton.bezelStyle = .rounded
         fillButton.controlSize = .regular
         fillButton.target = self
@@ -105,12 +107,18 @@ final class CardCreatorViewController: NSViewController {
         fillButton.toolTip = "Generate proposed values for every empty multi-line field. Review with Accept / Reject before saving."
         fillButton.translatesAutoresizingMaskIntoConstraints = false
 
+        fillSpinner.style = .spinning
+        fillSpinner.controlSize = .small
+        fillSpinner.isDisplayedWhenStopped = false
+        fillSpinner.translatesAutoresizingMaskIntoConstraints = false
+
         let header = NSStackView(views: [serverLabel, serverPopup, modelLabel])
         header.orientation = .horizontal
         header.alignment = .firstBaseline
         header.spacing = DesignTokens.Spacing.sm
         header.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(header)
+        root.addSubview(fillSpinner)
         root.addSubview(fillButton)
 
         // Hairline separator below the header.
@@ -126,6 +134,9 @@ final class CardCreatorViewController: NSViewController {
 
             fillButton.firstBaselineAnchor.constraint(equalTo: serverLabel.firstBaselineAnchor),
             fillButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -DesignTokens.Spacing.lg),
+
+            fillSpinner.centerYAnchor.constraint(equalTo: fillButton.centerYAnchor),
+            fillSpinner.trailingAnchor.constraint(equalTo: fillButton.leadingAnchor, constant: -DesignTokens.Spacing.sm),
 
             separator.topAnchor.constraint(equalTo: header.bottomAnchor, constant: DesignTokens.Spacing.md),
             separator.leadingAnchor.constraint(equalTo: root.leadingAnchor),
@@ -328,16 +339,20 @@ final class CardCreatorViewController: NSViewController {
         case .idle:
             fillButton.isEnabled = true
             fillButton.title = "Fill missing fields"
+            fillSpinner.stopAnimation(nil)
         case .fetching(let n):
             fillButton.isEnabled = false
             fillButton.title = "Filling \(n) fields…"
+            fillSpinner.startAnimation(nil)
         case .ready(let proposals):
             dispatchProposals(proposals)
             fillButton.isEnabled = true
             fillButton.title = "Fill missing fields"
+            fillSpinner.stopAnimation(nil)
         case .failed(let m):
             fillButton.isEnabled = true
             fillButton.title = "Fill missing fields"
+            fillSpinner.stopAnimation(nil)
             DebugLog.shared.write("cardgen: mode2 fill failed: \(m)")
             // TODO §5.4.d: surface error in a toast / alert.
         }

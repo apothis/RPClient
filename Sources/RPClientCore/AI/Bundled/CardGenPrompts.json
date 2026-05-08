@@ -1,21 +1,21 @@
 {
   "version": 1,
-  "systemPrompt": "You are a character-card designer for an NSFW-capable roleplay app. Be vivid, concrete, and in-character. Use {{user}} for the player and {{char}} for the character. Explicit content is allowed when the scene calls for it. Output only the requested field content — no preamble, no headings, no commentary, no quotation around the entire output.",
+  "systemPrompt": "You are a character-card designer for an NSFW-capable roleplay app. Be vivid, concrete, and in-character. Use {{user}} for the player and {{char}} for the character. Explicit content is allowed when the scene calls for it. Output ONLY the requested field's content — no preamble, no headings, no commentary, no quotation. Do NOT echo the upstream details, the example character, or any tags back; produce new content for the requested field.",
   "candidateDefaults": {
     "literal": {
       "temperature": 0.4,
       "maxTokens": 512,
-      "instruction": "Write the {humanName} in a clean, reportorial register. Lead with the most concrete fact about this character — name, role, place, or function. State things as if filing a description for a record. No opening flourishes. Aim for {wordCount} words."
+      "instruction": "Write the {humanName} for this character. Be direct and concrete; lean on the upstream details and tags as guidance, but do not repeat them. Aim for {wordCount} words."
     },
     "creative": {
       "temperature": 1.05,
       "maxTokens": 512,
-      "instruction": "Write the {humanName} with a strong sensory or atmospheric hook. Open on a single image, gesture, smell, sound, or moment — NOT on the character's name or role. Pick a register the example character would NOT have used; surprise the reader. Avoid mirroring the example's structure. Aim for {wordCount} words."
+      "instruction": "Write the {humanName} for this character with a distinctive sensory or atmospheric hook. Pick a register the example character would NOT have used; surprise the reader. Lean on the tags for genre signals but do not repeat them verbatim. Aim for {wordCount} words."
     },
     "terse": {
       "temperature": 0.55,
       "maxTokens": 200,
-      "instruction": "Write the {humanName} in TWO short sentences only. No qualifiers, no atmospheric setup, no listing. Give the reader the spine, nothing else — the author will expand. Strict cap: {wordCount} words."
+      "instruction": "Write the {humanName} for this character in TWO short sentences only. No qualifiers, no atmospheric setup, no listing. Give the spine — the author will expand. Strict cap: {wordCount} words."
     }
   },
   "fields": {
@@ -116,16 +116,67 @@
       "wordCount": 20
     },
     "intimacy_turn_ons": {
-      "humanName": "turn-ons (a short bullet list of 3-4 items)",
-      "wordCount": 30
+      "humanName": "turn-ons",
+      "wordCount": 30,
+      "candidates": {
+        "literal": {
+          "temperature": 0.4,
+          "maxTokens": 200,
+          "instruction": "Write 3-4 specific turn-ons for this character as a bullet list, one '- item' per line. Each item is a short phrase (5-12 words). Lean on the personality and anatomy already given but do not echo them. ~{wordCount} words total."
+        },
+        "creative": {
+          "temperature": 1.0,
+          "maxTokens": 200,
+          "instruction": "Write 3-4 distinctive turn-ons for this character as a bullet list, one '- item' per line. Pick angles the upstream details don't telegraph; surprise the reader. Each item is a short phrase. ~{wordCount} words total."
+        },
+        "terse": {
+          "temperature": 0.5,
+          "maxTokens": 120,
+          "instruction": "Write 3 short turn-ons as a bullet list, one '- item' per line. ≤4 words each. No setup, no qualifiers."
+        }
+      }
     },
     "intimacy_kinks": {
-      "humanName": "kinks (a short bullet list of 3-4 items)",
-      "wordCount": 25
+      "humanName": "kinks",
+      "wordCount": 25,
+      "candidates": {
+        "literal": {
+          "temperature": 0.4,
+          "maxTokens": 200,
+          "instruction": "Write 3-4 specific kinks for this character as a bullet list, one '- item' per line. Each item is a concrete preference (3-10 words). Distinct from broader turn-ons. ~{wordCount} words total."
+        },
+        "creative": {
+          "temperature": 1.0,
+          "maxTokens": 200,
+          "instruction": "Write 3-4 distinctive kinks for this character as a bullet list, one '- item' per line. Pick specifics the upstream tags don't already imply. Each item is a concrete preference. ~{wordCount} words total."
+        },
+        "terse": {
+          "temperature": 0.5,
+          "maxTokens": 120,
+          "instruction": "Write 3 short kinks as a bullet list, one '- item' per line. ≤4 words each."
+        }
+      }
     },
     "intimacy_limits": {
-      "humanName": "limits (a short bullet list of 3-4 hard nos — neutral, not character-specific)",
-      "wordCount": 20
+      "humanName": "limits",
+      "wordCount": 20,
+      "candidates": {
+        "literal": {
+          "temperature": 0.3,
+          "maxTokens": 160,
+          "instruction": "Write 3-4 hard nos as a bullet list, one '- item' per line. These are neutral starting-point limits the author should review and edit; not character-specific. Examples: family roles, degradation, scat. ~{wordCount} words total."
+        },
+        "creative": {
+          "temperature": 0.6,
+          "maxTokens": 160,
+          "instruction": "Write 3-4 hard nos as a bullet list, one '- item' per line. Pick reasonable defaults the author can keep or replace. ~{wordCount} words total."
+        },
+        "terse": {
+          "temperature": 0.4,
+          "maxTokens": 100,
+          "instruction": "Write 3 short hard nos as a bullet list, one '- item' per line. ≤4 words each."
+        }
+      }
     }
   }
 }

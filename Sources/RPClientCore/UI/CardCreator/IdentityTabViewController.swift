@@ -82,7 +82,11 @@ final class IdentityTabViewController: NSViewController {
                                      v3Only: true)
         fieldStack.addArrangedSubview(nicknameRow)
 
-        // Tags (token field).
+        // Tags (token field). Multi-line wrapping enabled so a busy
+        // tag list (10+ tokens) flows onto additional rows instead of
+        // clipping at the field edge. Width is constrained to 360pt
+        // so wrap happens at the same boundary as the surrounding
+        // fields' visual width.
         tagsField.translatesAutoresizingMaskIntoConstraints = false
         tagsField.tokenStyle = .rounded
         tagsField.controlSize = .small
@@ -90,6 +94,11 @@ final class IdentityTabViewController: NSViewController {
         tagsField.objectValue = draft.character.tags
         tagsField.delegate = self
         tagsField.font = DesignTokens.Typography.body
+        tagsField.cell?.wraps = true
+        tagsField.cell?.usesSingleLineMode = false
+        tagsField.lineBreakMode = .byWordWrapping
+        tagsField.maximumNumberOfLines = 0
+        tagsField.widthAnchor.constraint(equalToConstant: 360).isActive = true
         let tagsRow = labeledRow("Tags",
                                  control: tagsField,
                                  hint: "Comma-separated. Used by the library for filtering. Common tags autocomplete.",
