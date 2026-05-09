@@ -119,10 +119,18 @@ final class TurnView: NSView, NSTextViewDelegate {
     /// Discards the active variant. Only meaningful when count > 1 so it
     /// shares the same visibility gate as the rest of the pager.
     private let discardVariantButton: NSButton
-    /// Phase 7 §3.3b — branch-sibling glyph in the gutter. Visible only
-    /// when `hasSiblings` is true (i.e., this turn's parent has more than
-    /// one child). Click → delegate presents a sibling-list popover.
-    private let branchGlyph: NSButton
+    /// V2_UI_OVERHAUL §4.0.f / §4.d.2 — "branches: N ▸" labelled pill
+    /// shown next to the variants pill on diverging messages. Replaces
+    /// the Phase 7 §3.3b gutter glyph (an SF-symbol-only icon under the
+    /// avatar) — same click target (opens the existing sibling
+    /// popover), spec'd shape, sits in the new pills row alongside
+    /// variants for unified branch + variant chrome.
+    private let branchesPill = NSButton()
+    /// V2_UI_OVERHAUL §4.d.2 — horizontal NSStackView that wraps the
+    /// metadata pills (variants + branches) so they sit side-by-side
+    /// above the hover toolbar in `belowBubbleStack`. NSStackView's
+    /// hidden-collapse handles per-pill visibility automatically.
+    private let pillsRow = NSStackView()
 
     private var baseFont: NSFont { Theme.font(15) }
 
@@ -165,23 +173,21 @@ final class TurnView: NSView, NSTextViewDelegate {
     var hasSiblings: Bool = false {
         didSet {
             guard oldValue != hasSiblings else { return }
-            branchGlyph.isHidden = !hasSiblings
-            updateBranchGlyphLabel()
+            updateBranchesPill()
         }
     }
 
-    /// Total siblings (parent's child count, including this one). Used to
-    /// render the inline "N/M" label on the gutter glyph so the user
-    /// knows there are alternatives without having to open the popover.
-    /// Set by ChatViewController.
+    /// Total siblings (parent's child count, including this one). Drives
+    /// the "N" in the "branches: N ▸" pill — the user reads it
+    /// at-a-glance without having to open the popover.
     var siblingCount: Int = 1 {
-        didSet { updateBranchGlyphLabel() }
+        didSet { updateBranchesPill() }
     }
 
     /// 1-based index of this turn within its parent's children (sorted by
     /// ts). Drives the "N" in "N/M".
     var siblingIndex: Int = 1 {
-        didSet { updateBranchGlyphLabel() }
+        didSet { updateBranchesPill() }
     }
 
     /// Phase 7 §3.3+ — toolbar fork button only makes sense on assistant
@@ -194,33 +200,37 @@ final class TurnView: NSView, NSTextViewDelegate {
         }
     }
 
-    private func updateBranchGlyphLabel() {
-        guard hasSiblings, siblingCount > 1 else {
-            branchGlyph.title = ""
-            branchGlyph.imagePosition = .imageOnly
-            return
+    /// V2_UI_OVERHAUL §4.0.f / §4.d.2 — derive the pill's title from
+    /// the current `(hasSiblings, siblingCount)` state. Hides the pill
+    /// when there's nothing to disclose (single child, root turn off
+    /// the tree). pillsRow's overall visibility is recomputed at the
+    /// same time so the row collapses cleanly when both pills hide.
+    private func updateBranchesPill() {
+        let title = hasSiblings
+            ? TurnView.branchesPillTitle(siblingCount: siblingCount)
+            : nil
+        if let t = title {
+            branchesPill.title = "\(t) ▸"
+            branchesPill.isHidden = false
+        } else {
+            branchesPill.isHidden = true
         }
-        branchGlyph.title = " \(siblingIndex)/\(siblingCount)"
-        branchGlyph.imagePosition = .imageLeading
-        branchGlyph.font = Theme.font(11, weight: .medium)
+        updatePillsRowVisibility()
     }
 
-    /// Toggle the gutter glyph's "selected" appearance — set true while
-    /// the sibling popover is open so the user has a clear visual anchor
-    /// back to where they clicked. ChatViewController flips this on
-    /// present and back off when the popover closes.
+    /// V2_UI_OVERHAUL §4.d.2 — flip the branches pill's "active"
+    /// appearance while ChatViewController's sibling popover is open,
+    /// so the user has a clear visual anchor back to where they
+    /// clicked. Mirrors the pre-§4.d.2 setBranchPopoverOpen behaviour
+    /// from when this lived on the gutter glyph.
     func setBranchPopoverOpen(_ open: Bool) {
-        // controlAccentColor when open (matches the active sibling row in
-        // the popover); slightly faded accent when closed (the default
-        // "this turn has alternatives" signal).
         if open {
-            branchGlyph.contentTintColor = .controlAccentColor
-            branchGlyph.layer?.backgroundColor = NSColor.controlAccentColor
+            branchesPill.contentTintColor = .controlAccentColor
+            branchesPill.layer?.backgroundColor = NSColor.controlAccentColor
                 .withAlphaComponent(0.18).cgColor
-            branchGlyph.layer?.cornerRadius = 4
         } else {
-            branchGlyph.contentTintColor = .controlAccentColor
-            branchGlyph.layer?.backgroundColor = NSColor.clear.cgColor
+            branchesPill.contentTintColor = .secondaryLabelColor
+            branchesPill.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         }
     }
 
@@ -252,6 +262,7 @@ final class TurnView: NSView, NSTextViewDelegate {
         // shown; the pill itself is what hides/shows.
         let show = role == .assistant && count > 1
         variantsPill.isHidden = !show
+        updatePillsRowVisibility()
         refreshVariantPagerEnabled()
     }
 
@@ -405,20 +416,9 @@ final class TurnView: NSView, NSTextViewDelegate {
         prevVariantButton = TurnView.makeIconButton(symbol: "chevron.left", tooltip: "Previous variant (⌘←)")
         nextVariantButton = TurnView.makeIconButton(symbol: "chevron.right", tooltip: "Next variant (⌘→)")
         discardVariantButton = TurnView.makeIconButton(symbol: "minus.circle", tooltip: "Discard this variant")
-        branchGlyph = TurnView.makeIconButton(
-            symbol: "arrow.triangle.branch",
-            tooltip: "Switch branch — this turn has siblings"
-        )
-        // Phase 7 §3.3b — branch glyph stands out more than the hover-toolbar
-        // icons because it's persistent (not hover-revealed). Accent tint + a
-        // larger point size makes it skim-readable without crowding the
-        // gutter. Tone down later if it feels loud.
-        branchGlyph.contentTintColor = .controlAccentColor
-        if let img = NSImage(systemSymbolName: "arrow.triangle.branch", accessibilityDescription: nil) {
-            branchGlyph.image = img.withSymbolConfiguration(
-                NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
-            ) ?? img
-        }
+        // V2_UI_OVERHAUL §4.0.f / §4.d.2 — branchesPill replaces the
+        // pre-§4.d.2 gutter glyph. Configured below in the post-super
+        // setup block.
 
         super.init(frame: .zero)
         wantsLayer = true
@@ -614,11 +614,27 @@ final class TurnView: NSView, NSTextViewDelegate {
         prevVariantButton.target = self; prevVariantButton.action = #selector(prevVariantTapped)
         nextVariantButton.target = self; nextVariantButton.action = #selector(nextVariantTapped)
         discardVariantButton.target = self; discardVariantButton.action = #selector(discardVariantTapped)
-        branchGlyph.target = self; branchGlyph.action = #selector(branchGlyphTapped)
-        branchGlyph.isHidden = true
-        branchGlyph.wantsLayer = true
-        branchGlyph.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(branchGlyph)
+        // V2_UI_OVERHAUL §4.d.2 — branches pill: capsule-styled
+        // labelled button next to the variants pill. Hidden until
+        // hasSiblings flips true via ChatViewController. Click opens
+        // the same sibling popover the pre-§4.d.2 gutter glyph did.
+        branchesPill.title = ""
+        branchesPill.bezelStyle = .inline
+        branchesPill.isBordered = false
+        branchesPill.font = DesignTokens.Typography.caption1
+        branchesPill.contentTintColor = .secondaryLabelColor
+        branchesPill.imagePosition = .noImage
+        branchesPill.alignment = .center
+        branchesPill.target = self
+        branchesPill.action = #selector(branchGlyphTapped)
+        branchesPill.isHidden = true
+        branchesPill.wantsLayer = true
+        branchesPill.layer?.cornerRadius = 11
+        branchesPill.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        branchesPill.translatesAutoresizingMaskIntoConstraints = false
+        branchesPill.heightAnchor.constraint(
+            equalToConstant: TurnView.variantsPillHeight
+        ).isActive = true
 
         saveButton.contentTintColor = .systemBlue
         cancelButton.contentTintColor = .secondaryLabelColor
@@ -708,11 +724,25 @@ final class TurnView: NSView, NSTextViewDelegate {
         // so the pill's visibility transition doesn't need any
         // constraint-juggling — toolbar slides up cleanly when the
         // pager hides.
+        // V2_UI_OVERHAUL §4.d.2 — pills row sits between the bubble
+        // and the toolbar, holding [variantsPill, branchesPill] side
+        // by side. NSStackView collapses hidden arrangedSubviews so
+        // each pill's visibility is independent. updatePillsRowVisibility()
+        // hides the row entirely when both are hidden so the toolbar
+        // doesn't get a phantom 4pt gap above it.
+        pillsRow.orientation = .horizontal
+        pillsRow.spacing = DesignTokens.Spacing.xs
+        pillsRow.alignment = .centerY
+        pillsRow.translatesAutoresizingMaskIntoConstraints = false
+        pillsRow.addArrangedSubview(variantsPill)
+        pillsRow.addArrangedSubview(branchesPill)
+        pillsRow.isHidden = true   // updateBranchesPill / setVariantState reveal
+
         belowBubbleStack.orientation = .vertical
         belowBubbleStack.alignment = .leading
         belowBubbleStack.spacing = DesignTokens.Spacing.xs
         belowBubbleStack.translatesAutoresizingMaskIntoConstraints = false
-        belowBubbleStack.addArrangedSubview(variantsPill)
+        belowBubbleStack.addArrangedSubview(pillsRow)
         belowBubbleStack.addArrangedSubview(toolbar)
         addSubview(belowBubbleStack)
 
@@ -737,6 +767,15 @@ final class TurnView: NSView, NSTextViewDelegate {
 
     static func formatTimestamp(_ ts: Date) -> String {
         return timestampFormatter.string(from: ts)
+    }
+
+    /// V2_UI_OVERHAUL §4.0.f / §4.d.2 — title for the "branches: N"
+    /// pill on diverging messages. Returns nil when the count means
+    /// there's nothing to disclose (single-variant or defensive 0).
+    /// Pinned by Phase11BranchesPillTests so the format stays explicit.
+    static func branchesPillTitle(siblingCount: Int) -> String? {
+        guard siblingCount > 1 else { return nil }
+        return "branches: \(siblingCount)"
     }
 
     /// V2_UI_OVERHAUL §4.d.1 — items that appear in the per-turn `⋯`
@@ -876,14 +915,10 @@ final class TurnView: NSView, NSTextViewDelegate {
                 belowBubbleStack.topAnchor.constraint(equalTo: bubble.bottomAnchor, constant: toolbarTopGap),
                 belowBubbleStack.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
                 belowBubbleStack.bottomAnchor.constraint(equalTo: bottomAnchor),
-                toolbar.heightAnchor.constraint(equalToConstant: toolbarHeight),
-
-                // Branch glyph below the avatar (mirrors the assistant
-                // layout). The pre-§4.c "outside leading edge" placement
-                // worked when user turns were right-aligned and had free
-                // left-side real estate; that's gone now.
-                branchGlyph.topAnchor.constraint(equalTo: avatar.bottomAnchor, constant: 6),
-                branchGlyph.centerXAnchor.constraint(equalTo: avatar.centerXAnchor)
+                toolbar.heightAnchor.constraint(equalToConstant: toolbarHeight)
+                // V2_UI_OVERHAUL §4.d.2 — branchesPill replaces the
+                // pre-§4.d.2 gutter glyph; it now lives in pillsRow
+                // (inside belowBubbleStack), not constrained here.
             ])
             if let nameLabel = speakerNameLabel {
                 NSLayoutConstraint.activate([
@@ -928,10 +963,10 @@ final class TurnView: NSView, NSTextViewDelegate {
                 belowBubbleStack.topAnchor.constraint(equalTo: bubble.bottomAnchor, constant: toolbarTopGap),
                 belowBubbleStack.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
                 belowBubbleStack.bottomAnchor.constraint(equalTo: bottomAnchor),
-                toolbar.heightAnchor.constraint(equalToConstant: toolbarHeight),
-
-                branchGlyph.topAnchor.constraint(equalTo: avatar.bottomAnchor, constant: 6),
-                branchGlyph.centerXAnchor.constraint(equalTo: avatar.centerXAnchor)
+                toolbar.heightAnchor.constraint(equalToConstant: toolbarHeight)
+                // V2_UI_OVERHAUL §4.d.2 — branchesPill replaces the
+                // pre-§4.d.2 gutter glyph; it now lives in pillsRow
+                // (inside belowBubbleStack), not constrained here.
             ])
             if let nameLabel = speakerNameLabel {
                 NSLayoutConstraint.activate([
@@ -1059,7 +1094,19 @@ final class TurnView: NSView, NSTextViewDelegate {
     }
 
     @objc private func branchGlyphTapped() {
-        delegate?.turnViewDidRequestSiblingPopover(self, anchor: branchGlyph)
+        // Selector name kept for backwards-compat with the pre-§4.d.2
+        // wiring; the anchor is now branchesPill (in the pills row),
+        // not the gutter glyph.
+        delegate?.turnViewDidRequestSiblingPopover(self, anchor: branchesPill)
+    }
+
+    /// V2_UI_OVERHAUL §4.d.2 — collapse the pills row when both
+    /// children are hidden so the toolbar doesn't get a phantom
+    /// 4pt gap above it. Called from setVariantState and
+    /// updateBranchesPill — the two state setters that flip
+    /// per-pill visibility.
+    private func updatePillsRowVisibility() {
+        pillsRow.isHidden = variantsPill.isHidden && branchesPill.isHidden
     }
 
     @objc private func overflowTapped() {
@@ -1257,9 +1304,14 @@ final class TurnView: NSView, NSTextViewDelegate {
         cancelButton.isHidden = !editing
         // V2_UI_OVERHAUL §4.0.d — variants pill stays always-visible
         // on assistant turns with multiple variants, but hides during
-        // edit so Save/Cancel get the visual focus.
+        // edit so Save/Cancel get the visual focus. Branches pill
+        // hides during edit too (the Save/Cancel context shouldn't
+        // also be inviting branch navigation).
         let showPager = !editing && role == .assistant && variantCount > 1
         variantsPill.isHidden = !showPager
+        if editing { branchesPill.isHidden = true }
+        else if hasSiblings { branchesPill.isHidden = false }
+        updatePillsRowVisibility()
         if editing {
             // Force-visible while editing so the user sees Save/Cancel without hovering.
             toolbar.alphaValue = 1
@@ -1444,11 +1496,15 @@ final class TurnView: NSView, NSTextViewDelegate {
             expanded: thinkingExpanded,
             bodyHeight: thinkingExpanded ? measuredThinkBodyHeight() : 0
         )
-        // V2_UI_OVERHAUL §4.d.1 — below the bubble: variants pill (when
-        // count > 1) above the toolbar, both inside `belowBubbleStack`.
-        // Pill collapses out via NSStackView's hidden-collapse so the
-        // toolbar slides up cleanly when the pager isn't shown.
-        let pillVisible = role == .assistant && variantCount > 1 && !isEditing
+        // V2_UI_OVERHAUL §4.d.1 / §4.d.2 — below the bubble: pillsRow
+        // (variants pill + branches pill) above the toolbar, both
+        // inside `belowBubbleStack`. Pills collapse via NSStackView's
+        // hidden-collapse so the toolbar slides up cleanly when both
+        // pills are hidden. The row contributes `variantsPillHeight`
+        // (= 22pt) when *either* pill is shown.
+        let variantsVisible = role == .assistant && variantCount > 1 && !isEditing
+        let branchesVisible = hasSiblings && !isEditing
+        let pillVisible = variantsVisible || branchesVisible
         let pillH: CGFloat = pillVisible
             ? TurnView.variantsPillHeight + DesignTokens.Spacing.xs
             : 0
