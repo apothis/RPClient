@@ -315,11 +315,15 @@ final class TurnView: NSView, NSTextViewDelegate {
     /// block (or only an empty pre-fill, per Phase 10's finding).
     private var thinkingText: String?
     private var thinkingExpanded: Bool = false
-    /// Phase 11 §D.11 — trace captured from the active variant at init
-    /// time. Preferred over `Markdown.extractThinking(rawText)` when
-    /// non-nil; the inline-extractor stays as a fallback for legacy
-    /// chats whose text still has `<think>` tags embedded.
-    private let persistedThinkingTrace: String?
+    /// Phase 11 §D.11 — trace from the active variant. Mutable because
+    /// the placeholder TurnView is created BEFORE any tokens stream
+    /// (init reads nil from the empty variant); the chat controller
+    /// pushes the captured trace via `setThinkingTrace(_:)` after the
+    /// stream-finish handler writes it to the variant. Preferred over
+    /// `Markdown.extractThinking(rawText)` when non-nil; the inline
+    /// extractor stays as a fallback for legacy chats whose text still
+    /// has `<think>` tags embedded.
+    private var persistedThinkingTrace: String?
     private let thinkPill = NSButton()
     private let thinkBodyView = NSTextField(wrappingLabelWithString: "")
     /// Bubble's top constraint, kept as an ivar so the disclosure
@@ -867,6 +871,21 @@ final class TurnView: NSView, NSTextViewDelegate {
         // (e.g. stream tokens arriving on the very turn being edited).
         guard !isEditing else { return }
         rawText = s
+        renderRendered()
+        recomputeHeight()
+    }
+
+    /// Phase 11 §D.11 — push the active variant's `thinkingTrace` in
+    /// after the stream-finish handler has written it. The placeholder
+    /// TurnView is created at stream-start (before any token lands)
+    /// when the variant's trace is still nil, so the init-time read
+    /// always sees nil; this setter is what ChatViewController fires
+    /// from `handleStreamFinished` to surface the disclosure pill.
+    /// No-op when the value is unchanged.
+    func setThinkingTrace(_ trace: String?) {
+        guard role == .assistant else { return }
+        guard persistedThinkingTrace != trace else { return }
+        persistedThinkingTrace = trace
         renderRendered()
         recomputeHeight()
     }

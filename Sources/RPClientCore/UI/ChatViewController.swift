@@ -448,6 +448,17 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             if tv.currentText != t.text {
                 tv.setText(t.text)
             }
+            // Phase 11 §D.11 — paging also changes which variant's
+            // thinkingTrace applies. Push the matching trace through
+            // every in-place update so the disclosure pill always
+            // reflects the active variant. No-op when unchanged.
+            if t.role == .assistant {
+                let active = t.activeVariant
+                let trace = t.variants.indices.contains(active)
+                    ? t.variants[active].thinkingTrace
+                    : nil
+                tv.setThinkingTrace(trace)
+            }
         }
         // Update titles potentially in status bar handled elsewhere.
         statusBar.refresh()
@@ -494,6 +505,24 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         // placeholder, even if the close tag never arrived.
         for tv in turnViews where tv.isThinking {
             tv.isThinking = false
+        }
+        // Phase 11 §D.11 — the streaming filter has now written the
+        // captured `<think>` trace onto the active variant. Push it
+        // into the trailing assistant TurnView so the disclosure pill
+        // can surface. The placeholder TurnView was created at
+        // stream-start when the variant was still empty, so its
+        // init-time read got nil; this is the catch-up.
+        if let chat = AppState.shared.currentChat,
+           let leafId = chat.activePath.last,
+           let lastTurn = chat.turn(id: leafId),
+           let lastView = turnViews.last,
+           lastView.turnId == lastTurn.id,
+           lastTurn.role == .assistant {
+            let active = lastTurn.activeVariant
+            let trace = lastTurn.variants.indices.contains(active)
+                ? lastTurn.variants[active].thinkingTrace
+                : nil
+            lastView.setThinkingTrace(trace)
         }
         if !userScrolledUp {
             scrollToBottom(animated: true)
