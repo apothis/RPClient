@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Avatar gutter — lg (24pt) vs xl (32pt)</title>
+<style>
+  /* Tokens: spacing per V2_DESIGN_LANGUAGE.md §3, type per §2,
+     colors via system (semantic). Light + dark via prefers-color-scheme. */
+  :root {
+    --xs: 4px; --sm: 8px; --md: 16px; --lg: 24px; --xl: 32px;
+    --content-w: 640px;          /* slightly tighter than the 720pt max */
+    --turn-gap: var(--md);
+    --bubble-radius: 14px;
+    --avatar-size-lg: 24px;
+    --avatar-size-xl: 32px;
+    --label: #1d1d1f;
+    --secondary: #6e6e73;
+    --tertiary: #b5b5b5;
+    --bg: #ffffff;
+    --user-bubble: #f1f2f4;
+    --hover-bar: #ffffff;
+    --hover-bar-border: rgba(0,0,0,0.08);
+    --think-bg: #f8f8f9;
+    --accent: #0a84ff;
+    --accent-soft: rgba(10,132,255,0.10);
+    --speaker-mia: #b0387a;     /* SpeakerColor-style deterministic, demo only */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --label: #f5f5f7;
+      --secondary: #a8a8ad;
+      --tertiary: #6c6c70;
+      --bg: #1c1c1e;
+      --user-bubble: #2c2c2e;
+      --hover-bar: #2c2c2e;
+      --hover-bar-border: rgba(255,255,255,0.10);
+      --think-bg: #232325;
+      --accent: #0a84ff;
+      --accent-soft: rgba(10,132,255,0.18);
+      --speaker-mia: #e07ab0;
+    }
+  }
+
+  html, body { background: var(--bg); color: var(--label); margin: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    font-size: 13px;          /* body */
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1 {
+    font-size: 22px;          /* title1 */
+    font-weight: 400;
+    margin: var(--xl) var(--lg) var(--sm);
+  }
+  .meta {
+    color: var(--secondary);
+    margin: 0 var(--lg) var(--lg);
+    font-size: 11px;          /* subheadline */
+  }
+
+  .columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    border-top: 1px solid var(--hover-bar-border);
+  }
+  .col {
+    border-right: 1px solid var(--hover-bar-border);
+    padding: var(--lg);
+    min-height: 100vh;
+  }
+  .col:last-child { border-right: none; }
+  .col h2 {
+    font-size: 15px;          /* title3 */
+    font-weight: 400;
+    color: var(--secondary);
+    margin: 0 0 var(--lg);
+    text-align: center;
+  }
+  .col h2 strong { color: var(--label); font-weight: 600; }
+
+  /* Transcript */
+  .transcript {
+    max-width: var(--content-w);
+    margin: 0 auto;
+  }
+
+  .turn {
+    display: grid;
+    grid-template-columns: var(--gutter) 1fr;
+    column-gap: var(--sm);
+    margin-bottom: var(--turn-gap);
+    position: relative;
+  }
+  .col.lg .turn { --gutter: var(--avatar-size-lg); }
+  .col.xl .turn { --gutter: var(--avatar-size-xl); }
+
+  .avatar {
+    grid-column: 1;
+    width: var(--avatar);
+    height: var(--avatar);
+    border-radius: 50%;
+    background: var(--speaker-mia);
+    color: white;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600;
+    margin-top: 2px;
+  }
+  .col.lg .avatar { --avatar: var(--avatar-size-lg); font-size: 10px; }
+  .col.xl .avatar { --avatar: var(--avatar-size-xl); font-size: 13px; }
+
+  .body { grid-column: 2; min-width: 0; }
+
+  .speaker {
+    font-weight: 600;          /* headline */
+    font-size: 13px;
+    color: var(--label);
+    margin-right: var(--sm);
+  }
+  .timestamp {
+    font-size: 10px;            /* caption1 */
+    color: var(--tertiary);
+  }
+  .turn.assistant .text {
+    margin-top: 2px;
+    color: var(--label);
+  }
+  .turn.assistant em {
+    color: var(--secondary);    /* italics carry action-not-speech vibe */
+    font-style: italic;
+  }
+
+  /* User turn — subtle bubble (locked decision) */
+  .turn.user .body {
+    grid-column: 2;
+  }
+  .turn.user .bubble {
+    display: inline-block;
+    background: var(--user-bubble);
+    border-radius: var(--bubble-radius);
+    padding: var(--sm) var(--md);
+    max-width: 100%;
+  }
+  .turn.user .speaker {
+    color: var(--secondary);
+    font-size: 11px;
+    font-weight: 600;
+    display: block;
+    margin: 0 0 var(--xs) var(--md);
+  }
+  .turn.user .avatar {
+    background: var(--secondary);
+    color: var(--bg);
+  }
+
+  /* Think block — collapsed disclosure (Claude pattern) */
+  .think {
+    margin: var(--xs) 0 var(--sm);
+    padding: var(--xs) var(--sm);
+    background: var(--think-bg);
+    border-radius: 6px;
+    color: var(--secondary);
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--xs);
+  }
+  .think::before { content: "▸"; font-size: 9px; opacity: 0.6; }
+
+  /* Variant pill */
+  .variants {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--xs);
+    margin-top: var(--xs);
+    font-size: 11px;
+    color: var(--secondary);
+    background: var(--user-bubble);
+    border-radius: 999px;
+    padding: 2px var(--sm);
+  }
+  .variants .arrow { color: var(--label); cursor: pointer; user-select: none; }
+
+  /* Hover bar — shown statically here for layout reference */
+  .hover-bar {
+    margin-top: var(--xs);
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    background: var(--hover-bar);
+    border: 1px solid var(--hover-bar-border);
+    border-radius: 8px;
+    padding: 2px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+  }
+  .hover-bar button {
+    appearance: none; border: 0; background: transparent;
+    color: var(--secondary); font-size: 13px;
+    width: 24px; height: 22px; border-radius: 5px; cursor: pointer;
+  }
+  .hover-bar button:hover { background: var(--accent-soft); color: var(--label); }
+
+  .footnote {
+    margin: var(--xl) auto var(--lg);
+    max-width: var(--content-w);
+    padding: var(--md);
+    border-top: 1px solid var(--hover-bar-border);
+    font-size: 11px;
+    color: var(--secondary);
+  }
+  .footnote strong { color: var(--label); }
+
+  /* Side-by-side legend strip */
+  .legend {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border-bottom: 1px solid var(--hover-bar-border);
+    background: var(--user-bubble);
+  }
+  .legend > div {
+    padding: var(--sm) var(--lg);
+    font-size: 11px;
+    color: var(--secondary);
+    text-align: center;
+  }
+  .legend > div strong { color: var(--label); font-weight: 600; }
+  .legend > div:first-child { border-right: 1px solid var(--hover-bar-border); }
+</style>
+</head>
+<body>
+
+<h1>Avatar gutter — <code>lg</code> (24pt) vs <code>xl</code> (32pt)</h1>
+<p class="meta">
+  V2 chat-pane design sketch. Same content, two gutter widths. Tokens per
+  V2_DESIGN_LANGUAGE.md §2 / §3. User-turn subtle bubble locked. Hover bar
+  shown statically (would be hover-revealed in app).
+</p>
+
+<div class="legend">
+  <div><strong>Option A — <code>lg</code> 24pt gutter, 24pt avatar</strong></div>
+  <div><strong>Option B — <code>xl</code> 32pt gutter, 32pt avatar</strong></div>
+</div>
+
+<div class="columns">
+
+  <!-- Option A -->
+  <div class="col lg">
+    <h2>Option A · <strong>24pt</strong> · "small marker"</h2>
+    <div class="transcript">
+
+      <div class="turn assistant">
+        <div class="avatar">M</div>
+        <div class="body">
+          <span class="speaker">Mia</span><span class="timestamp">2:14 PM</span>
+          <div class="text">
+            She glances up from her book as you enter, the corner of her mouth
+            twitching toward a smile she hasn't fully earned yet.
+            <em>You're late.</em>
+          </div>
+          <div class="variants"><span class="arrow">◀</span> 1 / 3 <span class="arrow">▶</span></div>
+        </div>
+      </div>
+
+      <div class="turn user">
+        <div class="avatar">K</div>
+        <div class="body">
+          <div class="speaker">Kevin</div>
+          <div class="bubble">Got held up at the station. Long story.</div>
+        </div>
+      </div>
+
+      <div class="turn assistant">
+        <div class="avatar">M</div>
+        <div class="body">
+          <span class="speaker">Mia</span><span class="timestamp">2:14 PM</span>
+          <div class="think">Thought for 2 seconds</div>
+          <div class="text">
+            <em>She closes the book without marking the page — a small tell.</em>
+            Long stories are usually worth telling. Sit. I'll get you a drink.
+          </div>
+          <div class="hover-bar">
+            <button title="Copy">⧉</button>
+            <button title="Regenerate">⟲</button>
+            <button title="Edit">✎</button>
+            <button title="Branch">⑂</button>
+            <button title="More">⋯</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="turn assistant">
+        <div class="avatar">M</div>
+        <div class="body">
+          <span class="speaker">Mia</span><span class="timestamp">2:15 PM</span>
+          <div class="text">
+            <em>The kettle's already on — of course it is, she keeps tea ready
+            the way other people keep weapons.</em> So. Your station. Tell me
+            it was at least worth the delay.
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Option B -->
+  <div class="col xl">
+    <h2>Option B · <strong>32pt</strong> · "character is present"</h2>
+    <div class="transcript">
+
+      <div class="turn assistant">
+        <div class="avatar">M</div>
+        <div class="body">
+          <span class="speaker">Mia</span><span class="timestamp">2:14 PM</span>
+          <div class="text">
+            She glances up from her book as you enter, the corner of her mouth
+            twitching toward a smile she hasn't fully earned yet.
+            <em>You're late.</em>
+          </div>
+          <div class="variants"><span class="arrow">◀</span> 1 / 3 <span class="arrow">▶</span></div>
+        </div>
+      </div>
+
+      <div class="turn user">
+        <div class="avatar">K</div>
+        <div class="body">
+          <div class="speaker">Kevin</div>
+          <div class="bubble">Got held up at the station. Long story.</div>
+        </div>
+      </div>
+
+      <div class="turn assistant">
+        <div class="avatar">M</div>
+        <div class="body">
+          <span class="speaker">Mia</span><span class="timestamp">2:14 PM</span>
+          <div class="think">Thought for 2 seconds</div>
+          <div class="text">
+            <em>She closes the book without marking the page — a small tell.</em>
+            Long stories are usually worth telling. Sit. I'll get you a drink.
+          </div>
+          <div class="hover-bar">
+            <button title="Copy">⧉</button>
+            <button title="Regenerate">⟲</button>
+            <button title="Edit">✎</button>
+            <button title="Branch">⑂</button>
+            <button title="More">⋯</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="turn assistant">
+        <div class="avatar">M</div>
+        <div class="body">
+          <span class="speaker">Mia</span><span class="timestamp">2:15 PM</span>
+          <div class="text">
+            <em>The kettle's already on — of course it is, she keeps tea ready
+            the way other people keep weapons.</em> So. Your station. Tell me
+            it was at least worth the delay.
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<div class="footnote">
+  <strong>Trade-offs.</strong>
+  <code>lg</code> 24pt: avatar is a small leading marker; transcript reads as
+  primarily about the prose. Less character-presence, more transcript-feel —
+  closer to Open WebUI's posture, but Open WebUI doesn't have characters.
+  <code>xl</code> 32pt: avatar carries real visual weight; the character feels
+  "present" at every turn. Closer to a Discord-style avatar prominence but
+  inside a no-bubbles transcript layout. RPClient's RP frame benefits from the
+  character feeling present (per the user's "chat-feel, not form-feel"
+  north-star) — but 32pt avatars start to dominate short turns and may feel
+  busy in a long transcript. Open question: does the user want presence (B)
+  or restraint (A)?
+</div>
+
+</body>
+</html>
