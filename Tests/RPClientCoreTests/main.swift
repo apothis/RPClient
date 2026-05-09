@@ -74,6 +74,7 @@ let suites: [TestSuite] = [
     modelCapabilitiesTests(),
     promptBuilderOverridesTests(),
     placeholderSubstitutionTests(),
+    characterEntitySeedTests(),
 ]
 
 // `TestRunner.run` is `@MainActor`-isolated so test bodies can drive

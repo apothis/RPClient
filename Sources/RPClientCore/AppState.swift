@@ -194,8 +194,42 @@ final class AppState {
             self.chats = [c]
             self.currentChatId = c.id
         }
+        // 2026-05-09 — backfill empty character-entity stubs from
+        // structured card data on app start. ensureCharacterEntity
+        // gained CardDetails / CardIntimacy seeding in the same
+        // commit; this loop catches existing chats whose entity was
+        // created BEFORE that fix shipped (the on-disk Emily case).
+        // Idempotent: ensureCharacterEntity early-returns when the
+        // matched entity already has facts, so well-populated chats
+        // pay only the cheap lookup cost.
+        backfillEmptyCharacterEntities()
         refreshServerInfo()
         startHealthChecks()
+    }
+
+    /// One-time backfill of empty character-entity stubs from
+    /// structured card data. Runs at app start on every chat that
+    /// has a bound character. Skips chats whose entity already has
+    /// facts (user-curated state); only mutates the empty-stub case.
+    /// Saves any chat that was actually mutated.
+    private func backfillEmptyCharacterEntities() {
+        var mutated = 0
+        for i in chats.indices {
+            guard let cid = chats[i].characterId,
+                  let character = characters.first(where: { $0.id == cid })
+            else { continue }
+            let before = chats[i].entities.count
+            let beforeFacts = chats[i].entities.first(where: { $0.name.lowercased() == character.name.lowercased() })?.facts.count ?? 0
+            chats[i].ensureCharacterEntity(character)
+            let afterFacts = chats[i].entities.first(where: { $0.name.lowercased() == character.name.lowercased() })?.facts.count ?? 0
+            if chats[i].entities.count != before || afterFacts != beforeFacts {
+                Storage.shared.saveChat(chats[i])
+                mutated += 1
+            }
+        }
+        if mutated > 0 {
+            DebugLog.shared.write("entity-backfill: seeded card facts on \(mutated) existing chat(s)")
+        }
     }
 
     /// Install the Kokoro engine selector (§7.1l). Idempotent: safe to call

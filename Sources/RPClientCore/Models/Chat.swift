@@ -529,6 +529,14 @@ struct Chat: Codable, Equatable, Identifiable {
     /// the extractor's suggestion path or hand-curated) take priority,
     /// so this never overwrites user state.
     ///
+    /// 2026-05-09 enhancement: also seeds Facts from the card's
+    /// structured details + intimacy data (`extensions["rpclient/details"]`
+    /// and `["rpclient/intimacy"]`, with description-fence fallback).
+    /// User reported expecting populated entities for new chats — the
+    /// previous behaviour was a name-only stub. Backfills empty existing
+    /// stubs (the on-disk Emily case from before this fix shipped) but
+    /// never overwrites a user-curated entity that already has facts.
+    ///
     /// The point: entity-name-matched voice routing (Phase 6 §7.3 +
     /// Phase 8 §4.5) needs an entity to exist before the user can
     /// assign a voice. Pre-§4.5, that entity was only created when the
@@ -544,14 +552,68 @@ struct Chat: Codable, Equatable, Identifiable {
     mutating func ensureCharacterEntity(_ character: Character) {
         let trimmed = character.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        if Speaker.matchCharacterToEntity(characterName: character.name, entities: entities) != nil {
+        let cardFacts = Chat.factsFromCard(character)
+        if let matchedId = Speaker.matchCharacterToEntity(characterName: character.name, entities: entities) {
+            // Existing entity — backfill ONLY when it has zero facts
+            // AND we have facts to seed. User-curated entities (any
+            // facts present) are never modified; entities the user
+            // explicitly curated to empty (rare) are also preserved
+            // because we can't distinguish "user emptied it" from
+            // "stub from before this fix shipped" without a
+            // provenance bit. The trade-off: existing-empty stubs
+            // get one-time backfill the next time the user opens
+            // the chat, after which they're idempotent.
+            if !cardFacts.isEmpty,
+               let idx = entities.firstIndex(where: { $0.id == matchedId }),
+               entities[idx].facts.isEmpty {
+                entities[idx].facts = cardFacts
+            }
             return
         }
         entities.append(Entity(
             name: trimmed,
             type: .character,
+            facts: cardFacts,
             pinnedByUser: true
         ))
+    }
+
+    /// Lift the character's structured fields (CardDetails +
+    /// CardIntimacy) into Fact entries — one fact per non-empty
+    /// field, formatted as `Key: value`. Reads from
+    /// `extensions["rpclient/details"]` first, falling back to the
+    /// `[character_details]` description fence; same for intimacy.
+    /// Returns an empty array when the card has neither (legacy v1
+    /// imports / cards from other tools without RPClient's structured
+    /// extensions). Public so `AppState`-side migrations and tests can
+    /// drive it directly.
+    static func factsFromCard(_ character: Character) -> [Fact] {
+        let details = CardDetails.extractFrom(character)
+            ?? CardStructuredFence.parseDetails(in: character.description)
+        let intimacy = CardIntimacy.extractFrom(character)
+            ?? CardStructuredFence.parseIntimacy(in: character.description)
+        var out: [Fact] = []
+        if let d = details {
+            for (key, value) in d.orderedFields where !value.isEmpty {
+                out.append(Fact(text: "\(formatKey(key)): \(value)"))
+            }
+        }
+        if let i = intimacy {
+            for (key, value) in i.orderedFields where !value.isEmpty {
+                out.append(Fact(text: "\(formatKey(key)): \(value)"))
+            }
+        }
+        return out
+    }
+
+    /// Snake_case → Title-Cased. `turn_ons` → `Turn Ons`. The
+    /// CardDetails / CardIntimacy ordered-fields keys are
+    /// snake_case for fence compatibility; for facts we want
+    /// human-readable labels.
+    private static func formatKey(_ key: String) -> String {
+        key.split(separator: "_")
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
     }
 
     /// Phase 8 §4.2a — read and clear `pendingSpeakerId` in one mutation,
