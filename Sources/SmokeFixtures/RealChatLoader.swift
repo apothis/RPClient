@@ -71,4 +71,38 @@ enum RealChatLoader {
             throw LoadError.decode(url, error)
         }
     }
+
+    /// Production characters directory:
+    /// `~/Library/Application Support/RPClient/characters/`. Mirrors
+    /// `Storage.charactersDir` without taking the AppKit-bound
+    /// `Storage.shared` singleton.
+    static func charactersDirectory() -> URL {
+        let base = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return base
+            .appendingPathComponent("RPClient", isDirectory: true)
+            .appendingPathComponent("characters", isDirectory: true)
+    }
+
+    /// Load a character by UUID. Returns nil when no card file exists
+    /// for that id (e.g. the chat references a deleted character).
+    static func loadCharacter(id: UUID) throws -> Character? {
+        let url = charactersDirectory().appendingPathComponent("\(id.uuidString).json")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            throw LoadError.decode(url, error)
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        do {
+            return try decoder.decode(Character.self, from: data)
+        } catch {
+            throw LoadError.decode(url, error)
+        }
+    }
 }

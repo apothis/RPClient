@@ -292,7 +292,7 @@ final class AppState {
         // character so voice routing has somewhere to land without the
         // user waiting for the fact extractor + accepting a suggestion.
         c.ensureCharacterEntity(character)
-        if let greeting = AppState.makeGreetingTurn(character: character) {
+        if let greeting = AppState.makeGreetingTurn(character: character, userName: settings.userName) {
             c.appendTurn(greeting)
         }
         c.worldInfo = AppState.mergedWorldInfo(existing: c.worldInfo, charBook: character.charBook)
@@ -350,18 +350,28 @@ final class AppState {
     /// an empty assistant turn (see `PromptBuilder.verbatimTurns` for why
     /// trailing-empty assistant turns confuse the model). Internal so tests
     /// can drive it directly.
-    static func makeGreetingTurn(character: Character) -> Turn? {
+    static func makeGreetingTurn(character: Character, userName: String = "") -> Turn? {
         let primary = character.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !primary.isEmpty else { return nil }
+        // {{char}} / {{user}} substitution at chat-seed time —
+        // greeting text is PERSISTED on the chat, so we substitute
+        // once here rather than every send. SillyTavern chara_card_v2
+        // standard. See PlaceholderSubstitution.
+        let subbedPrimary = PlaceholderSubstitution.apply(
+            character.firstMessage, characterName: character.name, userName: userName
+        )
         // The Turn initialiser seeds variants[0] from `text` for assistant
         // turns with non-empty seed content; we then append each alternate as
         // a sibling variant. activeVariant stays at 0 so the canonical
         // first_mes is what the user (and the prompt) sees by default.
-        var turn = Turn(role: .assistant, text: character.firstMessage)
+        var turn = Turn(role: .assistant, text: subbedPrimary)
         for alt in character.alternateGreetings {
             let trimmed = alt.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
-            turn.variants.append(TurnVariant(text: alt, ts: turn.ts))
+            let subbedAlt = PlaceholderSubstitution.apply(
+                alt, characterName: character.name, userName: userName
+            )
+            turn.variants.append(TurnVariant(text: subbedAlt, ts: turn.ts))
         }
         return turn
     }

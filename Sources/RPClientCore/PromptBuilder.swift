@@ -325,11 +325,37 @@ struct PromptBuilder {
         }()
         let nudge: String? = activeName.map { groupNudge(activeSpeakerName: $0, style: nudgeStyle, xToX: xToX) }
         let renderedTurns: [Turn] = {
-            guard isMultiCast, let sid = speakerId else { return verbatimTurns(chat) }
-            return formatHistoryForSpeaker(turns: verbatimTurns(chat), activeSpeakerId: sid, cast: cast)
+            let base: [Turn]
+            if isMultiCast, let sid = speakerId {
+                base = formatHistoryForSpeaker(turns: verbatimTurns(chat), activeSpeakerId: sid, cast: cast)
+            } else {
+                base = verbatimTurns(chat)
+            }
+            // Substitute {{char}} / {{user}} in EVERY turn's text
+            // before they go to the model. Card-format placeholders
+            // are the source of truth on disk (SillyTavern convention)
+            // — substitution happens at every render. Without this,
+            // existing chats whose seeded greeting was persisted with
+            // raw `{{char}}` (i.e. from before this fix shipped) keep
+            // hallucinating the character's name forever because the
+            // chat history primes the pattern.
+            let charName = character?.name ?? ""
+            let resolvedUserName = persona?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return base.map { t in
+                var copy = t
+                copy.text = PlaceholderSubstitution.apply(
+                    t.text, characterName: charName, userName: resolvedUserName
+                )
+                return copy
+            }
         }()
 
-        let memoryBlock = composeMemoryBlock(chat: chat, character: character, userName: "", cohabitants: cohabitants)
+        // Test-path userName resolution for {{user}} substitution: use
+        // the persona's name when one is bound, otherwise empty (which
+        // PlaceholderSubstitution.apply maps to "User"). Production
+        // (TokenBudget.assemble) passes settings.userName explicitly.
+        let resolvedUserName = persona?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let memoryBlock = composeMemoryBlock(chat: chat, character: character, userName: resolvedUserName, cohabitants: cohabitants)
         let personaBlock = renderPersonaBlock(persona)
         let template = Templates.byId(chat.templateId, qwenThinking: qwenThinking)
         let prompt = template.assemble(
@@ -339,7 +365,7 @@ struct PromptBuilder {
             sceneSummaries: renderableScenes(chat: chat, speakerId: speakerId),
             summary: chat.summary.isEmpty ? nil : chat.summary,
             worldInfoHits: worldInfoHits(chat: chat),
-            authorsNote: effectiveAuthorsNote(chat: chat, character: character),
+            authorsNote: effectiveAuthorsNote(chat: chat, character: character, userName: resolvedUserName),
             relevantMemories: relevantMemories,
             tailMemoryDigest: tailMemoryDigest(chat: chat, continuation: continuation),
             currentSceneAnchor: currentSceneAnchor(chat: chat, continuation: continuation),
@@ -430,14 +456,24 @@ struct PromptBuilder {
         let trimmedName = userName.trimmingCharacters(in: .whitespacesAndNewlines)
         var sections: [String] = []
 
+        // Substitution context. Empty character name leaves {{char}}
+        // intact (model sees the literal token rather than a vacuum);
+        // empty user name falls back to "User" inside
+        // PlaceholderSubstitution.apply.
+        let charName = character?.name ?? ""
+
         if let c = character, let sp = c.systemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !sp.isEmpty {
-            sections.append(sp)
+            // {{char}} / {{user}} substitution — SillyTavern
+            // chara_card_v2 standard. Without this, models with no
+            // anchor for `{{char}}` hallucinate a common name (the
+            // 2026-05-09 "Emily → 'Mia'" bug surfaced this gap).
+            sections.append(PlaceholderSubstitution.apply(sp, characterName: charName, userName: userName))
         }
         if !trimmedName.isEmpty {
             sections.append("The user's name is \(trimmedName).")
         }
         if let c = character {
-            let cardPrefix = renderCardPrefix(c)
+            let cardPrefix = renderCardPrefix(c, userName: userName)
             if !cardPrefix.isEmpty {
                 sections.append(cardPrefix)
             }
@@ -482,7 +518,15 @@ struct PromptBuilder {
     /// the chat's existing depth so a user can still tune position without
     /// having to type a note. Returns `nil` when there's nothing to inject,
     /// matching what the templates expect.
-    static func effectiveAuthorsNote(chat: Chat, character: Character?) -> AuthorsNote? {
+    ///
+    /// The `userName` parameter (added with the `{{char}}` / `{{user}}`
+    /// substitution fix) is required to substitute placeholders in the
+    /// PHI fallback. The user-set authorsNote text is NOT substituted —
+    /// the user typed it directly and is expected to use literal names.
+    /// Default-value parameter so legacy callers (tests, side-call paths)
+    /// keep compiling; production callers (PromptBuilder.build,
+    /// TokenBudget.assemble) pass the resolved settings.userName.
+    static func effectiveAuthorsNote(chat: Chat, character: Character?, userName: String = "") -> AuthorsNote? {
         let userText = chat.authorsNote.text.trimmingCharacters(in: .whitespacesAndNewlines)
         if !userText.isEmpty {
             return chat.authorsNote
@@ -492,7 +536,10 @@ struct PromptBuilder {
         else {
             return nil
         }
-        return AuthorsNote(text: phi, depth: chat.authorsNote.depth)
+        let substituted = PlaceholderSubstitution.apply(
+            phi, characterName: character?.name ?? "", userName: userName
+        )
+        return AuthorsNote(text: substituted, depth: chat.authorsNote.depth)
     }
 
     /// Render the read-only `[from card]` biographical prefix
@@ -500,14 +547,23 @@ struct PromptBuilder {
     /// blank so the caller can drop the section entirely. Empty fields are
     /// omitted individually so a card with only a description doesn't render
     /// stray blank lines.
-    static func renderCardPrefix(_ c: Character) -> String {
+    ///
+    /// `userName` was added for `{{char}}` / `{{user}}` substitution —
+    /// SillyTavern cards persist these as literal tokens; the chat
+    /// runtime substitutes before sending to the model. Default value
+    /// keeps legacy callers compiling.
+    static func renderCardPrefix(_ c: Character, userName: String = "") -> String {
         let pieces: [(String, String)] = [
             ("Description", c.description),
             ("Personality", c.personality),
             ("Scenario", c.scenario),
         ]
         let body = pieces
-            .map { ($0.0, $0.1.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .map { (label, raw) -> (String, String) in
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                let subbed = PlaceholderSubstitution.apply(trimmed, characterName: c.name, userName: userName)
+                return (label, subbed)
+            }
             .filter { !$0.1.isEmpty }
             .map { "\($0.0): \($0.1)" }
             .joined(separator: "\n")

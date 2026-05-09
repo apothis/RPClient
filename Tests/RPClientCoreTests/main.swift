@@ -73,6 +73,7 @@ let suites: [TestSuite] = [
     quirkDetectorsTests(),
     modelCapabilitiesTests(),
     promptBuilderOverridesTests(),
+    placeholderSubstitutionTests(),
 ]
 
 // `TestRunner.run` is `@MainActor`-isolated so test bodies can drive

@@ -167,7 +167,10 @@ enum TokenBudget {
         }
         // Falls back to character.postHistoryInstructions when the user
         // hasn't typed an author's note. See PromptBuilder.effectiveAuthorsNote.
-        let effectiveAN = PromptBuilder.effectiveAuthorsNote(chat: chat, character: character)
+        // userName is forwarded so {{char}} / {{user}} substitution can run
+        // on the PHI fallback path (the user-typed authorsNote text is NOT
+        // substituted — it's expected to be literal).
+        let effectiveAN = PromptBuilder.effectiveAuthorsNote(chat: chat, character: character, userName: userName)
         if let an = effectiveAN, !an.text.isEmpty {
             group.enter()
             counter.count(an.text, kobold: kobold) { n in anTok = n; group.leave() }
@@ -192,8 +195,25 @@ enum TokenBudget {
             // multi-cast. Solo path returns raw turns unchanged. Done
             // before token-counting so the per-turn token estimates
             // include the inflation from `Sarah: ` prefixes.
-            guard isMultiCast, let sid = speakerId else { return raw }
-            return PromptBuilder.formatHistoryForSpeaker(turns: raw, activeSpeakerId: sid, cast: cast)
+            let formatted: [Turn]
+            if isMultiCast, let sid = speakerId {
+                formatted = PromptBuilder.formatHistoryForSpeaker(turns: raw, activeSpeakerId: sid, cast: cast)
+            } else {
+                formatted = raw
+            }
+            // {{char}} / {{user}} substitution on every turn's text —
+            // covers existing chats whose seeded greeting was persisted
+            // with raw placeholders (Emily "Mia" hallucination
+            // regression). Token counting below sees the substituted
+            // form so the budget is accurate.
+            let charName = character?.name ?? ""
+            return formatted.map { t in
+                var copy = t
+                copy.text = PlaceholderSubstitution.apply(
+                    t.text, characterName: charName, userName: userName
+                )
+                return copy
+            }
         }()
         for turn in verbatim where !turn.text.isEmpty {
             group.enter()

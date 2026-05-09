@@ -97,14 +97,16 @@ func resolveFixtures(args: Args) -> [FixtureRun] {
     if let chatId = args.chatId {
         do {
             let chat = try RealChatLoader.loadChat(id: chatId)
-            // Real chats: best-effort character lookup against the
-            // synthetic catalogue (smoke users typically point this at
-            // a chat that does NOT match a synthetic character; the
-            // `nil` fallback is the right call — PromptBuilder skips
-            // the card prefix and we still exercise the rest of the
-            // chat-path).
-            let activeChar: Character? = chat.characterId
-                .flatMap { cid in SyntheticCharacters.all.first(where: { $0.character.id == cid })?.character }
+            // Real chats: load the bound character from the production
+            // characters dir. Falls back to the synthetic catalogue
+            // (for chats that happen to use a synthetic character id)
+            // and then to nil (free-form chat path).
+            let activeChar: Character? = try chat.characterId.flatMap { cid -> Character? in
+                if let synth = SyntheticCharacters.all.first(where: { $0.character.id == cid })?.character {
+                    return synth
+                }
+                return try RealChatLoader.loadCharacter(id: cid)
+            }
             return [FixtureRun(name: "real:\(chatId)", chat: chat, activeCharacter: activeChar, cast: activeChar.map { [$0] } ?? [])]
         } catch {
             FileHandle.standardError.write(Data("error: failed to load real chat '\(chatId)' — \(error)\n".utf8))
