@@ -253,6 +253,13 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     }
 
     private func installEmptyState() {
+        // V2_UI_OVERHAUL §4.6 — configure with the active chat's
+        // character (if any) so the empty state shows the avatar +
+        // name + scenario. Free-form chats fall back to the SF Symbol
+        // person glyph via EmptyStateView.configure(nil).
+        let character = AppState.shared.currentChat?.characterId
+            .flatMap { AppState.shared.character(id: $0) }
+        emptyStateView.configure(character: character)
         guard emptyStateView.superview == nil else { return }
         view.addSubview(emptyStateView)
         NSLayoutConstraint.activate([
