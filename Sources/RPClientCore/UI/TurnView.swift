@@ -129,27 +129,19 @@ final class TurnView: NSView, NSTextViewDelegate {
     /// actions, mirroring native macOS context-menu convention.
     private let overflowButton: NSButton
     private let copyButton: NSButton
-    private let replayButton: NSButton
     private let editButton: NSButton
     private let regenButton: NSButton
     /// Phase 7 §3.3+ — explicit "fork from this reply" toolbar button.
     /// Hover-revealed alongside regen on every assistant turn that has a
     /// parent (i.e., not the root greeting). Fires the same path as Cmd-B.
     private let forkButton: NSButton
-    private let continueButton: NSButton
     private let deleteButton: NSButton
     private let saveButton: NSButton
     private let cancelButton: NSButton
-    /// Variant pager: ◀ N/M ▶. Lives at the start of the toolbar so it
-    /// hover-reveals alongside the other actions. All four pager controls
-    /// (including the discard button) stay hidden until `setVariantState`
-    /// reports a swipe-set worth showing.
+    /// Variant pager: ◀ N/M ▶ inside the always-visible variants pill.
     private let prevVariantButton: NSButton
     private let nextVariantButton: NSButton
     private let variantLabel = NSTextField(labelWithString: "")
-    /// Discards the active variant. Only meaningful when count > 1 so it
-    /// shares the same visibility gate as the rest of the pager.
-    private let discardVariantButton: NSButton
     /// V2_UI_OVERHAUL §4.0.f / §4.d.2 — "branches: N ▸" labelled pill
     /// shown next to the variants pill on diverging messages. Replaces
     /// the Phase 7 §3.3b gutter glyph. Implemented as an NSStackView
@@ -309,8 +301,6 @@ final class TurnView: NSView, NSTextViewDelegate {
         // variant). Disabled mid-stream regardless.
         let canPage = activeVariantIndex < variantCount - 1
         nextVariantButton.isEnabled = !busy && (canPage || isLastAssistant)
-        // Discard requires at least 2 variants and a quiet stream.
-        discardVariantButton.isEnabled = !busy && variantCount > 1
     }
 
     private var isHovering: Bool = false
@@ -439,21 +429,20 @@ final class TurnView: NSView, NSTextViewDelegate {
             : nil
 
         copyButton = TurnView.makeIconButton(symbol: "doc.on.doc", tooltip: "Copy")
-        replayButton = TurnView.makeIconButton(symbol: "speaker.wave.2", tooltip: "Replay audio")
         editButton = TurnView.makeIconButton(symbol: "pencil", tooltip: "Edit")
         regenButton = TurnView.makeIconButton(symbol: "arrow.clockwise", tooltip: "Regenerate")
         forkButton = TurnView.makeIconButton(symbol: "arrow.triangle.branch", tooltip: "Fork branch (⌘B)")
-        continueButton = TurnView.makeIconButton(symbol: "arrow.forward", tooltip: "Continue")
         deleteButton = TurnView.makeIconButton(symbol: "trash", tooltip: "Delete")
         saveButton = TurnView.makeIconButton(symbol: "checkmark", tooltip: "Save (⌘↵)")
         cancelButton = TurnView.makeIconButton(symbol: "xmark", tooltip: "Cancel (esc)")
         overflowButton = TurnView.makeIconButton(symbol: "ellipsis", tooltip: "More actions")
         prevVariantButton = TurnView.makeIconButton(symbol: "chevron.left", tooltip: "Previous variant (⌘←)")
         nextVariantButton = TurnView.makeIconButton(symbol: "chevron.right", tooltip: "Next variant (⌘→)")
-        discardVariantButton = TurnView.makeIconButton(symbol: "minus.circle", tooltip: "Discard this variant")
-        // V2_UI_OVERHAUL §4.0.f / §4.d.2 — branchesPill replaces the
-        // pre-§4.d.2 gutter glyph. Configured below in the post-super
-        // setup block.
+        // V2_UI_OVERHAUL §4.d.1 / §4.j — Replay / Continue / Discard
+        // moved to the overflow popup menu (selectors stay; their
+        // NSButton ivars were never added to the view tree post-§4.d.1
+        // and are now removed). branchesPill replaces the pre-§4.d.2
+        // gutter glyph; configured in the post-super setup block.
 
         super.init(frame: .zero)
         wantsLayer = true
@@ -652,18 +641,15 @@ final class TurnView: NSView, NSTextViewDelegate {
         }
 
         copyButton.target = self;     copyButton.action     = #selector(copyTapped)
-        replayButton.target = self;   replayButton.action   = #selector(replayTapped)
         editButton.target = self;     editButton.action     = #selector(editTapped)
         regenButton.target = self;    regenButton.action    = #selector(regenTapped)
         forkButton.target = self;     forkButton.action     = #selector(forkTapped)
-        continueButton.target = self; continueButton.action = #selector(continueTapped)
         deleteButton.target = self;   deleteButton.action   = #selector(deleteTapped)
         saveButton.target = self;     saveButton.action     = #selector(saveTapped)
         cancelButton.target = self;   cancelButton.action   = #selector(cancelTapped)
         overflowButton.target = self; overflowButton.action = #selector(overflowTapped)
         prevVariantButton.target = self; prevVariantButton.action = #selector(prevVariantTapped)
         nextVariantButton.target = self; nextVariantButton.action = #selector(nextVariantTapped)
-        discardVariantButton.target = self; discardVariantButton.action = #selector(discardVariantTapped)
         // V2_UI_OVERHAUL §4.d.2 — branches pill: capsule-styled
         // NSStackView wrapping a single text label. Hidden until
         // hasSiblings flips true via ChatViewController. Click opens
@@ -706,12 +692,6 @@ final class TurnView: NSView, NSTextViewDelegate {
         // the user can fork from any reply via the UI. Final visibility is
         // gated in `updateToolbarForEditState` once parentId is known.
         forkButton.isHidden = !(role == .assistant)
-        continueButton.isHidden = !(role == .assistant)
-        // Phase 8 deferred polish — replay button shows on every
-        // assistant turn so the user can re-trigger TTS for any
-        // historic reply (not just the trailing one) without
-        // regenerating the text. Hidden on user turns.
-        replayButton.isHidden = !(role == .assistant)
         saveButton.isHidden = true
         cancelButton.isHidden = true
         // V2_UI_OVERHAUL §4.d.1 — the variantsPill itself hides as a
@@ -1355,8 +1335,6 @@ final class TurnView: NSView, NSTextViewDelegate {
         editButton.isHidden = editing
         regenButton.isHidden = editing || !(role == .assistant && isLastAssistant)
         forkButton.isHidden = editing || !(role == .assistant && canFork)
-        continueButton.isHidden = editing || !(role == .assistant && isLastAssistant)
-        replayButton.isHidden = editing || role != .assistant
         deleteButton.isHidden = editing
         // Overflow button hidden during edit — Save/Cancel are the
         // only valid actions then, and the menu would mostly contain
