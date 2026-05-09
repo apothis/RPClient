@@ -26,12 +26,43 @@ import Foundation
 
 // MARK: - CLI parsing
 
+/// Per the §10.0.b Qwen3.6 baseline, the standard group nudge
+/// (`[Write the next reply only as X.]`) isn't load-bearing on
+/// every model — particularly in the X→X case where the active
+/// speaker just spoke and the model treats "next" as next-speaker-
+/// in-rotation. These are the candidate fixes from
+/// `V2_PHASE10_CHAT_TUNING_RESEARCH.md`'s Qwen3.6 section, exposed
+/// here as A/B switches so we can validate each before encoding the
+/// winner as a per-EXACT-model `ChatPathOverrides.groupNudgeStyle`
+/// value when §10.a lands.
+enum NudgeVariant: String {
+    /// Production default — `PromptBuilder.groupNudge` text passed through unchanged.
+    case standard
+    /// `[X speaks now. Other cast members are silent for this turn.]`
+    /// — stronger directive aimed at models that treat the standard
+    /// nudge as a soft hint.
+    case strong
+    /// Detect the "X→X" case (last assistant turn was the active
+    /// speaker too) and use `[Continuing as X.]` to disambiguate
+    /// "next reply" from "next speaker." Falls back to standard when
+    /// the active speaker just changed (X→Y).
+    case continuing
+    /// Standard nudge but augment `stopSequences` with `\n<other>:`
+    /// per cohabitant so the model cuts off if it tries to switch
+    /// speakers mid-turn. Doesn't help if the model leads with the
+    /// cohabitant name without a leading newline.
+    case stopAugment = "stop-augment"
+    /// Belt-and-braces: `strong` text PLUS `stop-augment` stops.
+    case strongStop = "strong-stop"
+}
+
 struct Args {
     var server: URL = URL(string: "http://192.168.1.201:5001")!
     var templateId: String = "qwen"
     var fixture: String = "all"   // "all", a fixture name, or unused when chatId set
     var chatId: String? = nil
     var verbose: Bool = false
+    var nudgeVariant: NudgeVariant = .standard
 }
 
 func parseArgs() -> Args {
@@ -49,10 +80,20 @@ func parseArgs() -> Args {
             if let v = it.next() { args.chatId = v }
         case "--verbose":
             args.verbose = true
+        case "--nudge-variant":
+            if let v = it.next() {
+                if let parsed = NudgeVariant(rawValue: v) {
+                    args.nudgeVariant = parsed
+                } else {
+                    FileHandle.standardError.write(Data("error: unknown nudge variant '\(v)' — try standard / strong / continuing / stop-augment / strong-stop\n".utf8))
+                    exit(2)
+                }
+            }
         case "-h", "--help":
             FileHandle.standardError.write(Data("""
             usage: swift run ChatSmoke [--server URL] [--template ID] \
-            [--fixture NAME|all] [--chat ID] [--verbose]
+            [--fixture NAME|all] [--chat ID] [--verbose] \
+            [--nudge-variant standard|strong|continuing|stop-augment|strong-stop]
             """.utf8))
             exit(0)
         default:
@@ -145,18 +186,70 @@ func runFixture(_ run: FixtureRun, args: Args, kobold: KoboldClient) -> (respons
         speakerId: speakerId,
         cast: run.cast
     )
-    // Override the chat's templateId for the actual stop sequences if
-    // the user passed --template — otherwise the assembled stops
-    // match `chat.templateId`. We use whichever the user picked at
-    // the CLI for both prompt assembly and stop sequences.
-    let stops = template.stopSequences
-    print(promptPreview(assembled.prompt))
-    let promptChars = assembled.prompt.count
+
+    // Apply the experimental nudge variant. PromptBuilder always emits
+    // the standard nudge `[Write the next reply only as X.]` when
+    // `groupNudge:` is non-nil; for `--nudge-variant` we either
+    // post-process the prompt to swap that line, augment stops, or
+    // both. The active speaker name is what PromptBuilder used in the
+    // nudge and is what we substitute back in.
+    let activeSpeakerName: String? = {
+        if let sid = speakerId { return run.cast.first(where: { $0.id == sid })?.name }
+        return run.activeCharacter?.name
+    }()
+    var promptText = assembled.prompt
+    var stops = template.stopSequences
+
+    let isMultiCast = run.chat.cast.count > 1 && speakerId != nil
+    if isMultiCast, let activeName = activeSpeakerName {
+        let standardNudge = PromptBuilder.groupNudge(activeSpeakerName: activeName)
+        // Detect "X→X" — last assistant turn was the same speaker as
+        // the active one. Used by the `continuing` variant.
+        let lastAssistantSpeakerId: UUID? = run.chat.turns
+            .reversed()
+            .first(where: { $0.role == .assistant })?
+            .speakerId
+        let isXToX = lastAssistantSpeakerId == speakerId
+
+        let cohabitants = run.cast.filter { $0.id != speakerId }.map(\.name)
+        let cohabitantStops: [String] = cohabitants.flatMap { name in
+            // `\nName:` is the canonical SillyTavern role-prefix shape.
+            // We add a pure-leading variant too because models
+            // occasionally lead with `Name:` straight after the prefill.
+            ["\n\(name):", "\(name):"]
+        }
+
+        switch args.nudgeVariant {
+        case .standard:
+            break
+        case .strong:
+            let strong = "[\(activeName) speaks now. Other cast members are silent for this turn.]"
+            promptText = promptText.replacingOccurrences(of: standardNudge, with: strong)
+        case .continuing:
+            if isXToX {
+                let cont = "[Continuing as \(activeName).]"
+                promptText = promptText.replacingOccurrences(of: standardNudge, with: cont)
+            }
+            // Non-X→X falls through unchanged (standard nudge stands).
+        case .stopAugment:
+            stops += cohabitantStops
+        case .strongStop:
+            let strong = "[\(activeName) speaks now. Other cast members are silent for this turn.]"
+            promptText = promptText.replacingOccurrences(of: standardNudge, with: strong)
+            stops += cohabitantStops
+        }
+        if args.nudgeVariant != .standard {
+            print("[nudge-variant] \(args.nudgeVariant.rawValue) (X→X=\(isXToX), cohabitants=\(cohabitants.joined(separator: ", ")))")
+        }
+    }
+
+    print(promptPreview(promptText))
+    let promptChars = promptText.count
     print("[prompt: \(promptChars) chars, ~\(promptChars / 4) tokens]")
     print("--- response \(args.verbose ? "(streaming)" : "")---")
 
     let request = GenerateRequest(
-        prompt: assembled.prompt,
+        prompt: promptText,
         stopSequences: stops,
         preset: .balanced,
         maxContextLength: 16384,

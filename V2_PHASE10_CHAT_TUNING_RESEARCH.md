@@ -50,11 +50,21 @@ So at this point in the phase, observed quirks land in the log with a remediatio
 
 1. **The empty `<think></think>` pre-fill is harmless on this model** — the chat path emits it on every assistant block (per `QwenTemplate`), and Qwen3.6-Uncensored consumes it cleanly. No `thinking-trace-leak` observations across the runs to date. Zero remediation needed; this matches the §5.4.0 finding and is the baseline expectation when ServerCapabilities lands `thinkingPrefill = .needed` for Qwen3 family.
 
-2. **Group-nudge `[Write the next reply only as X.]` is NOT load-bearing on this model** when X has just spoken. The model interprets "next" as the next speaker in the rotation rather than as the addressee of the directive. Two independent reproductions (`nsfw-group-scene` → Cass→Rae, `group-chat` → Mira→Anya). Possible mitigations to evaluate in §10.a:
-   - **Stop-sequence augmentation:** add `\nRae Lindhart:` / `\nAlex Rivers:` etc. to `stopSequences` so the model cuts off if it tries to switch. Cheapest fix; doesn't help when the model leads with the cohabitant name without a newline.
-   - **Stronger directive in the nudge:** something like `[Mira speaks now. Other cast members are silent for this turn.]` — empirically untested on this model; worth a one-fixture probe.
-   - **Skip the nudge when the active speaker just spoke:** detect the "X→X" case in PromptBuilder and add an extra `[Continuing as X.]` framing line.
-   - The right per-model fix for THIS exact model name will be encoded in ServerCapabilities once §10.a lands.
+2. **Group-nudge `[Write the next reply only as X.]` is NOT load-bearing on this model** when X has just spoken. The model interprets "next" as the next speaker in the rotation rather than as the addressee of the directive. Two independent reproductions (`nsfw-group-scene` → Cass→Rae, `group-chat` → Mira→Anya). Validation pass (3 runs × 4 variants × 2 fixtures via `swift run ChatSmoke --nudge-variant <…>`):
+
+   | variant | `group-chat` clean rate | `nsfw-group-scene` clean rate | notes |
+   |---|---|---|---|
+   | `standard` (baseline) | 1/3 | 0/3 | reproduces the problem reliably |
+   | `strong` (`[X speaks now. Others silent.]`) | mixed | mixed | the directive helps sometimes but isn't decisive |
+   | `continuing` (`[Continuing as X.]` on X→X case) | **2/3** | 0/3 | best clean alternative on group-chat; doesn't crack the harder NSFW fixture |
+   | `stop-augment` (append `\n<Other>:` to stops) | mixed | 1/3 of clean runs were 0-tokens | stops fire too aggressively when prose contains cohabitant names |
+   | `strong-stop` (combined) | **3/3** | 1/3 (other 2 = 0 tokens) | bullet-proof on standard group chats but brittle on NSFW where the model leads with `Name:` |
+
+   **Recommended per-EXACT-model `ChatPathOverrides.groupNudgeStyle` for `koboldcpp/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M`: `continuing`** as the primary fix for the X→X case. `strong-stop` is tempting (3/3 on group-chat) but the augmented stop sequences fire on legitimate prose for the NSFW fixture — too risky for a default-on override.
+
+   The `nsfw-group-scene` fixture remains hard for every variant. Looking at why: Cass's last assistant turn explicitly directs Alex and Rae (`"Alex, kiss her — slow, the way she likes."`), priming the model to write *as* one of them. This is a fixture design issue more than a model issue — production multi-cast chats won't usually script other speakers' actions in the active speaker's turn that aggressively. Flag for fixture revision in §10.0.f follow-up; not a blocker for §10.a wiring of the `continuing` override.
+
+   The right per-model fix for THIS exact model name gets encoded in ServerCapabilities (§10.a) — `groupNudgeStyle = .continuing`.
 
 3. **Doubled-prefill quirk on assistant-trailing fixtures.** Initially I tried setting `continuation: true` for these; **that empirically made things worse** — the model interpreted the open assistant turn as already complete and emitted end-of-turn immediately on closed-feeling prose. Two reverts and a fixture rewrite later: `sfw-short` and `sfw-long` now end on conversational user hooks; the remaining assistant-trailing fixtures (`nsfw-explicit`, `nsfw-kink`, `post-conflict`, etc.) are kept as-is because they intentionally probe the doubled-prefill semantics. The QuirkDetector flags `short-reply` on these but the remediation hint is now correct ("end on a user turn" rather than the misleading "set continuation:true").
 
