@@ -583,7 +583,14 @@ final class TurnView: NSView, NSTextViewDelegate {
             height: CGFloat.greatestFiniteMagnitude
         )
         textView.drawsBackground = false
-        textView.onBecomeFirstResponder = { [weak self] in self?.enterEditMode() }
+        // V2_UI_OVERHAUL §4.d.1 fixup — edit mode is entered EXPLICITLY
+        // via editTapped(), not on becomeFirstResponder. Right-clicks
+        // and selection drags also focus the text view, so the previous
+        // wiring (callback → enterEditMode) entered edit mode on every
+        // click, including right-clicks — which then short-circuited
+        // the context-menu hook. enterEditMode is now called directly
+        // from editTapped. The resign path stays so click-away commits
+        // a pending edit.
         textView.onResignFirstResponder = { [weak self] in self?.exitEditMode() }
         textView.onCommitEdit = { [weak self] in self?.commitEdit() }
         textView.onCancelEdit = { [weak self] in self?.cancelEdit() }
@@ -1007,8 +1014,12 @@ final class TurnView: NSView, NSTextViewDelegate {
     @objc private func editTapped() {
         // V2_UI_OVERHAUL §4.d.1 fixup — the textView is read-only by
         // default; flip it editable BEFORE focusing so the user can
-        // type. exitEditMode / cancelEdit revert the flag.
+        // type. enterEditMode is called explicitly here (not via the
+        // becomeFirstResponder callback, which would also fire on
+        // right-clicks and selection drags). exitEditMode / cancelEdit
+        // revert isEditable.
         textView.isEditable = true
+        enterEditMode()
         window?.makeFirstResponder(textView)
     }
 
