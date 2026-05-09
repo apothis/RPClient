@@ -19,10 +19,10 @@ Each smoke binary calls `ModelObservationStore.append(...)` with the observation
 | Layer | Status | What it does |
 |---|---|---|
 | Observation | LANDED (§10.0.b–c) | smokes emit `ModelObservation` to per-model JSON; remediation hint is text-only |
-| ServerCapabilities | NOT YET (§10.a) | smokes' findings will feed a `Codable` capability cache per server profile |
-| Auto-apply | NOT YET (§10.c) | chat path consumption points (template, sampler, stop-tokens, ctx caps) read from ServerCapabilities |
+| ModelCapabilities | LANDED (§10.a) | per-EXACT-model `ChatPathOverrides` record at `model_capabilities/<sanitised>.json`; written via `swift run ModelCapsAdmin set` |
+| Auto-apply | NOT YET (§10.c) | chat path consumption points (template, sampler, stop-tokens, ctx caps) will read `ModelCapabilitiesStore.lookupOrDefault(modelName:)` and apply per-call |
 
-So at this point in the phase, observed quirks land in the log with a remediation-hint text but **are NOT auto-applied to the chat path**. Per-model fixes get wired through ServerCapabilities (§10.a) once that data model exists.
+So at this point in the phase, observed quirks land in the observation log with a remediation hint, validated fixes land in the `ModelCapabilities` record, and the chat-path consumption (which actually applies overrides) waits for §10.c. The `continuing` group-nudge override for the Qwen3.6 baseline is the first concrete record in the store (encoded 2026-05-09).
 
 ---
 

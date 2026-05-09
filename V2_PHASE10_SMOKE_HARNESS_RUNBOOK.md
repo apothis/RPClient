@@ -157,7 +157,7 @@ Symptoms:
 
 Action: edit the fixture or the smoke code, re-run, confirm the observation no longer fires. **No per-model state changes** — this fix benefits every model, and the per-model log dedupes naturally on re-run.
 
-### Category 2 — Real model quirk that needs ServerCapabilities (queue for §10.a)
+### Category 2 — Real model quirk that needs ModelCapabilities (encode now)
 
 Symptoms:
 - `role-confusion-in-group` on a model's group-chat output (group-nudge isn't load-bearing on this model).
@@ -168,15 +168,21 @@ Symptoms:
 
 Action — and this is the load-bearing part for the per-model invariant:
 
-1. Open [V2_PHASE10_CHAT_TUNING_RESEARCH.md](V2_PHASE10_CHAT_TUNING_RESEARCH.md).
-2. **Find the section for this exact model name.** If it doesn't exist (new model), add a new section. If it exists, append to the existing rows — DO NOT modify or delete other models' sections.
-3. Add a row to that model's findings table with the observation, its remediation candidate, and a status of `UNFIXED — needs §10.a wiring`.
-4. If a candidate fix is concrete enough to encode (specific stop sequence to add, specific template tweak), add it to the **Fix-registry roadmap** at the bottom of the research doc as a typed `ChatPathOverrides` snippet under that exact model name.
+1. **Run the candidate fix through ChatSmoke's `--nudge-variant` (or future similar A/B knob)** to validate which mitigation is most reliable on this exact model. The current variants are `standard`, `strong`, `continuing`, `stop-augment`, `strong-stop`. Three repeats per fixture per variant is enough to call a winner.
+2. **Encode the validated fix to ModelCapabilities** via `swift run ModelCapsAdmin set <exact-model-name> <key>=<value> [...] --note "..."`. The set command MERGES into any existing record — adding `group-nudge=continuing` does not erase a previously-set `thinking-prefill=needed`.
+3. **Add a section in [V2_PHASE10_CHAT_TUNING_RESEARCH.md](V2_PHASE10_CHAT_TUNING_RESEARCH.md)** for this exact model name documenting the validation table + recommendation. If a section already exists, append rows; never modify or delete other models' sections.
 
-Once §10.a lands:
-1. The remediation hints + roadmap snippets become the seed data for `ServerCapabilities` records, one per exact model name.
-2. The chat path reads `ChatPathOverrides` via `ServerCapabilities.shared.lookup(modelName:)?.overrides`.
-3. **Adding a fix for model B never touches model A's record** — the dictionary keying is per-exact-name, the file storage is per-exact-name, the lookup is per-exact-name.
+The chat path consumption (§10.c — not yet wired) will read `ModelCapabilitiesStore.lookupOrDefault(modelName:)`'s `overrides` and apply per-call. **Adding a fix for model B never touches model A's record** — the file storage is per-exact-name, the lookup is per-exact-name, the only path that writes records (`ModelCapsAdmin set`) operates on exactly one record at a time.
+
+Recognised override keys (see `ModelCapsAdmin --help` for the full list):
+| key | values | applies to |
+|---|---|---|
+| `thinking-prefill` | `needed` / `harmless` / `unknown` | Whether QwenTemplate emits the empty `<think></think>` pre-fill |
+| `sampler` | `balanced` / `creative` / `precise` | Recommended sampler preset id |
+| `stop-augment` | comma-separated list (use `\n` for newline) | Extra stops appended to the template default |
+| `group-nudge` | `standard` / `strong` / `continuing` / `stop-augment` / `strong-stop` | How the multi-cast nudge is rendered |
+| `max-ctx-cap` | int | Hard cap on `effectiveCtx` (e.g. Llama 4 Scout 8192) |
+| `refusal-posture` | `permissive` / `aligned` / `unknown` | How the chat path treats detected refusals |
 
 ### Category 3 — Correct model behavior (refine detector or accept)
 
@@ -273,4 +279,6 @@ This is the genuinely tricky case. KoboldCPP can change the model name string wh
 | `~/Library/Application Support/RPClient/smoke-reports/<sanitised>-<ts>.json` | per-run snapshot (frozen view of post-run observation log; diff-able across runs) |
 | `~/Library/Application Support/RPClient/smoke-observations/<sanitised>.json` | per-EXACT-model observation log |
 | `V2_PHASE10_CHAT_TUNING_RESEARCH.md` | per-model findings + fix-registry roadmap |
-| (future) `~/Library/Application Support/RPClient/server_capabilities/<sanitised>.json` | per-EXACT-model capability cache (§10.a) |
+| `~/Library/Application Support/RPClient/model_capabilities/<sanitised>.json` | per-EXACT-model `ModelCapabilities` record (§10.a — `ChatPathOverrides`) |
+| `Sources/RPClientCore/ModelCapabilities.swift` | data model + per-EXACT-model store |
+| `Sources/ModelCapsAdmin/main.swift` | admin CLI: `list` / `show MODEL` / `set MODEL k=v...` / `delete MODEL` |

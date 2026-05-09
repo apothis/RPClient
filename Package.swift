@@ -174,5 +174,17 @@ let package = Package(
             dependencies: ["RPClientCore", "SmokeFixtures"],
             path: "Sources/SmokeAll"
         ),
+        // Phase 10 §10.a — admin CLI for the per-EXACT-model
+        // ModelCapabilities store. list / show / set / delete records
+        // keyed by `/api/v1/model` exact string. The thin wrapper
+        // around ModelCapabilitiesStore that enforces the per-EXACT-model
+        // invariant: every write touches exactly one record.
+        // Run with `swift run ModelCapsAdmin list` / `… show MODEL` /
+        // `… set MODEL group-nudge=continuing thinking-prefill=needed`.
+        .executableTarget(
+            name: "ModelCapsAdmin",
+            dependencies: ["RPClientCore"],
+            path: "Sources/ModelCapsAdmin"
+        ),
     ]
 )
