@@ -42,7 +42,15 @@ final class EmptyStateView: NSView {
         wantsLayer = true
 
         avatar.imageScaling = .scaleProportionallyUpOrDown
+        // Tint applies to SF-Symbol template images (the no-character
+        // person.crop.circle fallback) AND to bitmap avatars where it
+        // has no effect — safe either way. Without this the symbol
+        // rendered with no fill, looking invisible.
+        avatar.contentTintColor = .secondaryLabelColor
         avatar.wantsLayer = true
+        // Bitmap character avatars are square — clip to a circle.
+        // The SF-Symbol fallback is already circular so the clip is a
+        // no-op for it.
         avatar.layer?.cornerRadius = avatarSize / 2
         avatar.layer?.masksToBounds = true
         avatar.translatesAutoresizingMaskIntoConstraints = false
@@ -78,9 +86,18 @@ final class EmptyStateView: NSView {
             chipsStack.addArrangedSubview(btn)
         }
 
+        // V2_UI_OVERHAUL §4.6 — bifurcated layout:
+        //   • avatar + title + subtitle pinned near the top of the
+        //     empty state (top-anchor with breathing room).
+        //   • chips pinned to the bottom (just above where the composer
+        //     sits in the chat-pane stack — composer is outside this view).
+        // The pre-fixup `centerYAnchor.constraint(constant: -100)` placed
+        // the avatar 100pt above centre, which pushed it offscreen when
+        // the empty state was shorter than ~264pt. Top-anchored breathing
+        // room is height-independent.
         NSLayoutConstraint.activate([
             avatar.centerXAnchor.constraint(equalTo: centerXAnchor),
-            avatar.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -100),
+            avatar.topAnchor.constraint(equalTo: topAnchor, constant: DesignTokens.Spacing.xl * 2),
             avatar.widthAnchor.constraint(equalToConstant: avatarSize),
             avatar.heightAnchor.constraint(equalToConstant: avatarSize),
 
@@ -95,7 +112,8 @@ final class EmptyStateView: NSView {
             subtitle.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -DesignTokens.Spacing.lg),
 
             chipsStack.centerXAnchor.constraint(equalTo: centerXAnchor),
-            chipsStack.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: DesignTokens.Spacing.xl),
+            chipsStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -DesignTokens.Spacing.xl),
+            chipsStack.topAnchor.constraint(greaterThanOrEqualTo: subtitle.bottomAnchor, constant: DesignTokens.Spacing.lg),
             chipsStack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: DesignTokens.Spacing.md),
             chipsStack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -DesignTokens.Spacing.md)
         ])
