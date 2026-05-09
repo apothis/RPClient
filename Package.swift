@@ -104,5 +104,17 @@ let package = Package(
             dependencies: ["RPClientCore"],
             path: "Sources/CardGenSmoke"
         ),
+        // Phase 10 §10.0.b — chat-path smoke runner. Drives
+        // KoboldClient.generateStream against prompts assembled by
+        // PromptBuilder from the SmokeFixtures catalogue. Most
+        // load-bearing model-facing surface in the app — exercises
+        // template selection, stop sequences, system prompt, persona,
+        // world-info injection, memory prefix, multi-cast assembly.
+        // Run with `swift run ChatSmoke [--server …] [--fixture …] [--verbose]`.
+        .executableTarget(
+            name: "ChatSmoke",
+            dependencies: ["RPClientCore", "SmokeFixtures"],
+            path: "Sources/ChatSmoke"
+        ),
     ]
 )
