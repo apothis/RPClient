@@ -6,6 +6,13 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     private let inputBar = InputBar()
     private let statusBar = StatusBar()
     private let scrollLatestButton = NSButton()
+    /// V2_UI_OVERHAUL §4.5 stage-3 — bottom-centre "Stop response"
+    /// pill shown during streaming. Per spec, the transcript carries
+    /// streaming state; the cancel affordance is a dedicated pill, not
+    /// a send-button morph (ChatGPT's anti-pattern). The InputBar's
+    /// existing send→stop morph stays as a redundant secondary
+    /// affordance until 4.g (composer redesign) replaces it.
+    private let stopButton = NSButton()
     private let emptyStateView = EmptyStateView()
     /// Phase 4 §5.4 — per-chat server pin. nil/(use default) = chat
     /// generation goes to settings.defaultServerId; otherwise pinned to the
@@ -134,6 +141,9 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         configureScrollLatestButton()
         v.addSubview(scrollLatestButton)
 
+        configureStopButton()
+        v.addSubview(stopButton)
+
         emptyStateView.delegate = self
         emptyStateView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -158,7 +168,12 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             scrollLatestButton.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -16),
             scrollLatestButton.bottomAnchor.constraint(equalTo: inputBar.topAnchor, constant: -12),
             scrollLatestButton.widthAnchor.constraint(equalToConstant: 30),
-            scrollLatestButton.heightAnchor.constraint(equalToConstant: 30)
+            scrollLatestButton.heightAnchor.constraint(equalToConstant: 30),
+
+            // V2_UI_OVERHAUL §4.5 stage-3 — stop pill bottom-centre,
+            // 12pt above the input bar.
+            stopButton.centerXAnchor.constraint(equalTo: v.centerXAnchor),
+            stopButton.bottomAnchor.constraint(equalTo: inputBar.topAnchor, constant: -12)
         ])
 
         let nc = NotificationCenter.default
@@ -168,6 +183,8 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             name: AppNotification.streamTokenAppended, object: nil)
         nc.addObserver(self, selector: #selector(handleStreamFinished),
             name: AppNotification.streamFinished, object: nil)
+        nc.addObserver(self, selector: #selector(handleStreamStarted),
+            name: AppNotification.streamStarted, object: nil)
         nc.addObserver(self, selector: #selector(handleThinkingStateChanged),
             name: AppNotification.thinkingStateChanged, object: nil)
         nc.addObserver(self, selector: #selector(handleChatUpdated),
@@ -201,6 +218,38 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         scrollLatestButton.alphaValue = 0
         scrollLatestButton.isHidden = true
         scrollLatestButton.toolTip = "Scroll to latest"
+    }
+
+    /// V2_UI_OVERHAUL §4.5 stage-3 — Stop pill at the bottom-centre
+    /// of the transcript while the stream is active. Click cancels
+    /// the request via AppState.shared.stop(), same path as the
+    /// InputBar's send→stop morph (which stays in place as a
+    /// secondary affordance until 4.g composer redesign).
+    private func configureStopButton() {
+        stopButton.title = " Stop response"
+        stopButton.image = NSImage(
+            systemSymbolName: "stop.circle",
+            accessibilityDescription: "Stop response"
+        )
+        stopButton.imagePosition = .imageLeading
+        stopButton.imageScaling = .scaleProportionallyDown
+        stopButton.bezelStyle = .rounded
+        stopButton.controlSize = .small
+        stopButton.font = DesignTokens.Typography.subheadline
+        stopButton.contentTintColor = .secondaryLabelColor
+        stopButton.target = self
+        stopButton.action = #selector(stopButtonTapped)
+        stopButton.translatesAutoresizingMaskIntoConstraints = false
+        stopButton.isHidden = true
+        stopButton.toolTip = "Stop the active stream"
+    }
+
+    @objc private func stopButtonTapped() {
+        AppState.shared.stop()
+    }
+
+    @objc private func handleStreamStarted() {
+        stopButton.isHidden = false
     }
 
     private func installEmptyState() {
@@ -498,6 +547,9 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         )
         AppState.shared.persistCurrent()
         inputBar.updateButtons()
+        // V2_UI_OVERHAUL §4.5 stage-3 — hide the bottom-centre Stop
+        // pill once the stream's done (or cancelled).
+        stopButton.isHidden = true
         for tv in turnViews where tv.isStreaming {
             tv.isStreaming = false
         }
