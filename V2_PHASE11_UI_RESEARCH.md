@@ -590,7 +590,13 @@ Things this research couldn't resolve alone. Each is a subjective taste call or 
 
 9. **`Theme.swift uiFontOffset` removal during V11.a** — confirmed dead per [V2_DESIGN_LANGUAGE.md §10](V2_DESIGN_LANGUAGE.md). Migration timing — does it land in V11.a (chat-pane redesign) or as a separate sub-step? Trivially small but needs sequencing.
 
-10. **Custom glyph migration** — `✦` placeholder for character-less assistant turns. [V2_DESIGN_LANGUAGE.md §10](V2_DESIGN_LANGUAGE.md) says replace with `person.crop.circle`. Lands during V11.a inevitably (the avatar gutter implementation is exactly where this glyph currently lives).
+10. **Custom glyph migration** — `✦` placeholder for character-less assistant turns. [V2_DESIGN_LANGUAGE.md §10](V2_DESIGN_LANGUAGE.md) says replace with `person.crop.circle`. Lands during V11.a inevitably (the avatar gutter implementation is exactly where this glyph currently lives). **RESOLVED** in 4.b.1 (commit `7aeb6d8`).
+
+11. **`<think>` trace doesn't reach `turn.text` today** — surfaced 2026-05-09 while smoke-verifying the 4.b.2 disclosure UI. [`ThinkBlockFilter`](Sources/RPClientCore/ThinkBlockFilter.swift) strips the trace from the streaming token feed before it reaches `turn.text` (per the comment at [`AppState.swift:1446`](Sources/RPClientCore/AppState.swift)), so the `▸ Thinking` disclosure has no data to surface on either historical chats or new thinking-model turns. Three options when this gets addressed (post-chat-pane, not blocking V11.a sub-steps):
+    - **(a) Strip-at-display.** Keep the trace in `turn.text`; let `Markdown.extractThinking` (already shipped, 4.b.1) handle stripping per consumer. Matches Claude.ai's pattern. The existing call sites (`DirectorPicker`, `ContextBlurber`, `Summarizer`, `Speaker`, `CardMultiFieldGenerator`, `CardGenSideCall`) already strip; need a sweep for any consumer that doesn't — chunker is the one to verify.
+    - **(b) Side-channel field.** `Turn.thinkingTrace: String?`; `ThinkBlockFilter` writes it; UI reads it; downstream sees `turn.text` clean as today. Schema migration + codable round-trip + backwards-compat for old chats. Highest-cost, lowest-risk.
+    - **(c) Document and accept.** Disclosure is dead code until (a) or (b) lands; the UI machinery is ready when storage changes. No code work.
+    Recommendation when prioritising: (a) is the right architectural move; (c) is the right pragmatic move while the chat-pane redesign is still landing. Decide before §4.j cleanup.
 
 ---
 
