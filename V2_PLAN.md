@@ -186,7 +186,7 @@ Output of step 1: a design doc `V2_PHASE9_CARD_CREATOR.md` mirroring the Phase 7
 
 Spun off the §5.4.0 research pass. Adds a `ServerProbe` subsystem that runs capability + behavior probes against any configured server (Qwen / Gemma / future models), caches results in `ServerCapabilities`, and lets the chat path read those instead of hardcoding behavior. Scoping note + expected sub-step shape in [`V2_PHASE10_CHAT_TUNING_SCOPING.md`](V2_PHASE10_CHAT_TUNING_SCOPING.md):
 
-- §10.0 — Empirical probe pass + subsystem design. **Produces fresh `V2_PHASE10_CHAT_TUNING_RESEARCH.md` + `V2_PHASE10_CHAT_TUNING_PLAN.md`** following Phase 7/8/9 convention; the existing scoping note is a handoff, not the research home.
+- §10.0 — Empirical probe pass + subsystem design. **Produces fresh `V2_PHASE10_CHAT_TUNING_RESEARCH.md` + `V2_PHASE10_CHAT_TUNING_PLAN.md`** following Phase 7/8/9 convention; the existing scoping note is a handoff, not the research home. Implementation plan for the empirical pass lives in [`V2_PHASE10_SMOKE_HARNESS_PLAN.md`](V2_PHASE10_SMOKE_HARNESS_PLAN.md) — six per-surface CLI smokes (Chat / Summariser / Extractor / Blurber / Director / Embed) plus a `SmokeAll` aggregate runner with JSON-report output, building on the `CardGenSmoke` pattern.
 - §10.a — `ServerProbe` runner + `ServerCapabilities` data model.
 - §10.b — Settings UI surface.
 - §10.c — Chat-path consumption points (thinking pre-fill, sampler defaults, stop sequences, max-ctx caps).

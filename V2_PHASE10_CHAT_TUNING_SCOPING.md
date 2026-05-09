@@ -30,7 +30,7 @@ The deliverable is two things: empirical baselines (per model family) and a `Ser
 
 ### §10.0 — Empirical probe pass + `ServerProbe` subsystem design
 
-Mandatory before any consumption-point code. Output: this doc grows from scoping → empirical findings + subsystem design (mirroring §5.4.0's evolution). Concretely:
+Mandatory before any consumption-point code. Output: this doc grows from scoping → empirical findings + subsystem design (mirroring §5.4.0's evolution). **The empirical pass is structured as a CLI smoke-harness suite per [`V2_PHASE10_SMOKE_HARNESS_PLAN.md`](V2_PHASE10_SMOKE_HARNESS_PLAN.md)** — six per-surface smokes (Chat / Summariser / Extractor / Blurber / Director / Embed) + a `SmokeAll` aggregate runner with JSON-report output. Building on the `CardGenSmoke` pattern; each smoke is independently useful and the runner's findings feed `ServerCapabilities`. Concretely:
 
 1. Pre-probe research — scan for additional probe candidates beyond the §2 list. The brief search done during scoping surfaced [Llama 4 chunked attention](https://github.com/huggingface/transformers/issues/37351), [Gemma 3 sampler defaults](https://gemma-llm.readthedocs.io/en/latest/colab_sampling.html), and [RAG context-neglect](https://www.getmaxim.ai/articles/rag-evaluation-a-complete-guide-for-2025/) — all worth probing.
 2. Run all §2 probes against the currently-loaded model (Qwen3.6-Uncensored at scoping time).
