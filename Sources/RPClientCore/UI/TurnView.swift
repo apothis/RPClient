@@ -121,11 +121,16 @@ final class TurnView: NSView, NSTextViewDelegate {
     private let discardVariantButton: NSButton
     /// V2_UI_OVERHAUL §4.0.f / §4.d.2 — "branches: N ▸" labelled pill
     /// shown next to the variants pill on diverging messages. Replaces
-    /// the Phase 7 §3.3b gutter glyph (an SF-symbol-only icon under the
-    /// avatar) — same click target (opens the existing sibling
-    /// popover), spec'd shape, sits in the new pills row alongside
-    /// variants for unified branch + variant chrome.
-    private let branchesPill = NSButton()
+    /// the Phase 7 §3.3b gutter glyph. Implemented as an NSStackView
+    /// (capsule-styled, containing an NSTextField label) rather than
+    /// an NSButton, structurally identical to `variantsPill` so the
+    /// horizontal pills row sizes both children consistently — an
+    /// NSButton with bezelStyle=.inline + a custom layer background
+    /// fights AppKit's built-in inline-button rendering and produces
+    /// inconsistent intrinsic widths.
+    private let branchesPill = NSStackView()
+    /// Backing label for `branchesPill`; updated by updateBranchesPill.
+    private let branchesLabel = NSTextField(labelWithString: "")
     /// V2_UI_OVERHAUL §4.d.2 — horizontal NSStackView that wraps the
     /// metadata pills (variants + branches) so they sit side-by-side
     /// above the hover toolbar in `belowBubbleStack`. NSStackView's
@@ -210,9 +215,10 @@ final class TurnView: NSView, NSTextViewDelegate {
             ? TurnView.branchesPillTitle(siblingCount: siblingCount)
             : nil
         if let t = title {
-            branchesPill.title = "\(t) ▸"
+            branchesLabel.stringValue = "\(t) ▸"
             branchesPill.isHidden = false
         } else {
+            branchesLabel.stringValue = ""
             branchesPill.isHidden = true
         }
         updatePillsRowVisibility()
@@ -225,11 +231,11 @@ final class TurnView: NSView, NSTextViewDelegate {
     /// from when this lived on the gutter glyph.
     func setBranchPopoverOpen(_ open: Bool) {
         if open {
-            branchesPill.contentTintColor = .controlAccentColor
+            branchesLabel.textColor = .controlAccentColor
             branchesPill.layer?.backgroundColor = NSColor.controlAccentColor
                 .withAlphaComponent(0.18).cgColor
         } else {
-            branchesPill.contentTintColor = .secondaryLabelColor
+            branchesLabel.textColor = .secondaryLabelColor
             branchesPill.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         }
     }
@@ -615,26 +621,35 @@ final class TurnView: NSView, NSTextViewDelegate {
         nextVariantButton.target = self; nextVariantButton.action = #selector(nextVariantTapped)
         discardVariantButton.target = self; discardVariantButton.action = #selector(discardVariantTapped)
         // V2_UI_OVERHAUL §4.d.2 — branches pill: capsule-styled
-        // labelled button next to the variants pill. Hidden until
+        // NSStackView wrapping a single text label. Hidden until
         // hasSiblings flips true via ChatViewController. Click opens
-        // the same sibling popover the pre-§4.d.2 gutter glyph did.
-        branchesPill.title = ""
-        branchesPill.bezelStyle = .inline
-        branchesPill.isBordered = false
-        branchesPill.font = DesignTokens.Typography.caption1
-        branchesPill.contentTintColor = .secondaryLabelColor
-        branchesPill.imagePosition = .noImage
-        branchesPill.alignment = .center
-        branchesPill.target = self
-        branchesPill.action = #selector(branchGlyphTapped)
-        branchesPill.isHidden = true
-        branchesPill.wantsLayer = true
-        branchesPill.layer?.cornerRadius = 11
-        branchesPill.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        // the same sibling popover the pre-§4.d.2 gutter glyph did
+        // (via an NSClickGestureRecognizer). Structurally mirrors
+        // `variantsPill` so the horizontal pills row sizes both
+        // consistently.
+        branchesLabel.font = DesignTokens.Typography.caption1
+        branchesLabel.textColor = .secondaryLabelColor
+        branchesLabel.alignment = .center
+        branchesLabel.lineBreakMode = .byClipping
+        branchesPill.orientation = .horizontal
+        branchesPill.alignment = .centerY
+        branchesPill.spacing = 0
         branchesPill.translatesAutoresizingMaskIntoConstraints = false
-        branchesPill.heightAnchor.constraint(
-            equalToConstant: TurnView.variantsPillHeight
-        ).isActive = true
+        branchesPill.wantsLayer = true
+        branchesPill.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        branchesPill.layer?.cornerRadius = 11
+        branchesPill.edgeInsets = NSEdgeInsets(
+            top: 0,
+            left: DesignTokens.Spacing.sm,
+            bottom: 0,
+            right: DesignTokens.Spacing.sm
+        )
+        branchesPill.addArrangedSubview(branchesLabel)
+        branchesPill.isHidden = true
+        let branchesClick = NSClickGestureRecognizer(
+            target: self, action: #selector(branchGlyphTapped)
+        )
+        branchesPill.addGestureRecognizer(branchesClick)
 
         saveButton.contentTintColor = .systemBlue
         cancelButton.contentTintColor = .secondaryLabelColor
