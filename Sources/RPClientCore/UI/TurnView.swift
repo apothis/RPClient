@@ -343,7 +343,12 @@ final class TurnView: NSView, NSTextViewDelegate {
         return pill + bodyHeight + DesignTokens.Spacing.xs
     }
 
-    init(turn: Turn, character: Character? = nil, multiCast: Bool = false) {
+    init(
+        turn: Turn,
+        character: Character? = nil,
+        personaName: String? = nil,
+        multiCast: Bool = false
+    ) {
         self.turnId = turn.id
         self.role = turn.role
         self.rawText = turn.text
@@ -382,10 +387,45 @@ final class TurnView: NSView, NSTextViewDelegate {
 
         bubble.wantsLayer = true
         if role == .user {
-            bubble.layer?.cornerRadius = 14
+            bubble.layer?.cornerRadius = DesignTokens.Chat.bubbleRadius
         }
         bubble.translatesAutoresizingMaskIntoConstraints = false
         addSubview(bubble)
+
+        if role == .user {
+            // V2_UI_OVERHAUL §4.0.c — user-side avatar in the leading
+            // gutter, secondaryLabelColor circle with the persona's
+            // initial in windowBackgroundColor. Symmetric to the
+            // assistant gutter but tuned to read as "you" rather than
+            // competing with the character's accent-coloured avatar.
+            let displayName = personaName ?? "You"
+            avatar.image = TurnView.makeUserAvatar(
+                size: avatarSize, name: displayName
+            )
+            avatar.toolTip = displayName
+            avatar.imageScaling = .scaleProportionallyUpOrDown
+            avatar.wantsLayer = true
+            avatar.layer?.cornerRadius = avatarSize / 2
+            avatar.layer?.masksToBounds = true
+            avatar.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(avatar)
+
+            // Persona caption above the bubble. caption1 / secondary
+            // — quieter than the assistant's headline-weight name so
+            // the eye reads "this was you" without it competing with
+            // the character's voice. No timestamp on user turns by
+            // design (the spec deliberately omits it; would read as
+            // journaling rather than chat).
+            let nameLabel = NSTextField(labelWithString: displayName)
+            nameLabel.font = DesignTokens.Typography.caption1
+            nameLabel.textColor = .secondaryLabelColor
+            nameLabel.alignment = .left
+            nameLabel.lineBreakMode = .byTruncatingTail
+            nameLabel.maximumNumberOfLines = 1
+            nameLabel.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(nameLabel)
+            speakerNameLabel = nameLabel
+        }
 
         if role == .assistant {
             avatar.imageScaling = .scaleProportionallyUpOrDown
@@ -593,6 +633,49 @@ final class TurnView: NSView, NSTextViewDelegate {
         return timestampFormatter.string(from: ts)
     }
 
+    /// V2_UI_OVERHAUL §4.c — display name for the user-turn caption.
+    /// Falls back through (persona name → settings.userName → "You")
+    /// with empty/whitespace strings treated as missing so a never-named
+    /// persona doesn't render a blank caption above the bubble.
+    /// Pinned by Phase11UserDisplayNameTests.
+    static func userTurnDisplayName(personaName: String?, settingsUserName: String) -> String {
+        let p = personaName?.trimmingCharacters(in: .whitespaces) ?? ""
+        if !p.isEmpty { return p }
+        let u = settingsUserName.trimmingCharacters(in: .whitespaces)
+        if !u.isEmpty { return u }
+        return "You"
+    }
+
+    /// V2_UI_OVERHAUL §4.0.c — user-side avatar. `secondaryLabelColor`
+    /// circle with the persona's initial in `windowBackgroundColor`.
+    /// Drawn at the avatar size so it composites cleanly without
+    /// resampling artefacts.
+    private static func makeUserAvatar(size: CGFloat, name: String) -> NSImage {
+        let dim = NSSize(width: size, height: size)
+        let img = NSImage(size: dim)
+        img.lockFocus()
+        defer { img.unlockFocus() }
+        NSColor.secondaryLabelColor.setFill()
+        let circle = NSBezierPath(ovalIn: NSRect(origin: .zero, size: dim))
+        circle.fill()
+        let initial: String = {
+            let trimmed = name.trimmingCharacters(in: .whitespaces)
+            guard let first = trimmed.first else { return "?" }
+            return String(first).uppercased()
+        }()
+        let para = NSMutableParagraphStyle()
+        para.alignment = .center
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: size * 0.5, weight: .semibold),
+            .foregroundColor: NSColor.windowBackgroundColor,
+            .paragraphStyle: para
+        ]
+        let s = NSAttributedString(string: initial, attributes: attrs)
+        let h = s.size().height
+        s.draw(in: NSRect(x: 0, y: (size - h) / 2, width: size, height: h))
+        return img
+    }
+
     /// Free-form-chat assistant avatar fallback (no character bound).
     /// Renders `person.crop.circle` SF Symbol at the avatar size with
     /// a tertiary-label tint so it reads as "no character here" without
@@ -632,11 +715,29 @@ final class TurnView: NSView, NSTextViewDelegate {
 
     private func installConstraints() {
         if role == .user {
+            // V2_UI_OVERHAUL §4.0.a / §4.0.c / §4.3 — user turn anatomy
+            // is symmetric to the assistant: avatar in the leading
+            // gutter, name caption above the bubble, bubble + content
+            // left-aligned starting at glyphCol. User-side bubble
+            // keeps a controlBackgroundColor fill at bubbleRadius
+            // (visible distinction without a Messages-style tail).
+            // Width keeps the historical 0.78 multiplier so short user
+            // turns don't fill the entire transcript column; promoting
+            // to true inline-block content-hugging is flagged in
+            // V2_UI_OVERHAUL §D as a polish follow-up.
+            let labelGap = speakerLabelHeight
+
             NSLayoutConstraint.activate([
-                bubble.topAnchor.constraint(equalTo: topAnchor),
-                bubble.trailingAnchor.constraint(equalTo: trailingAnchor),
+                avatar.topAnchor.constraint(equalTo: topAnchor),
+                avatar.leadingAnchor.constraint(equalTo: leadingAnchor),
+                avatar.widthAnchor.constraint(equalToConstant: avatarSize),
+                avatar.heightAnchor.constraint(equalToConstant: avatarSize),
+
+                bubble.topAnchor.constraint(equalTo: topAnchor, constant: labelGap),
+                bubble.leadingAnchor.constraint(equalTo: leadingAnchor, constant: glyphCol),
                 bubble.widthAnchor.constraint(
-                    equalTo: widthAnchor, multiplier: 0.78
+                    equalTo: widthAnchor, multiplier: 0.78,
+                    constant: -glyphCol * 0.78
                 ),
 
                 scrollView.topAnchor.constraint(equalTo: bubble.topAnchor, constant: bubblePadY),
@@ -645,16 +746,25 @@ final class TurnView: NSView, NSTextViewDelegate {
                 scrollView.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -bubblePadX),
 
                 toolbar.topAnchor.constraint(equalTo: bubble.bottomAnchor, constant: toolbarTopGap),
-                toolbar.trailingAnchor.constraint(equalTo: bubble.trailingAnchor),
+                toolbar.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
                 toolbar.heightAnchor.constraint(equalToConstant: toolbarHeight),
                 toolbar.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-                // Branch glyph sits just outside the bubble's leading edge,
-                // top-aligned with the bubble. User turns are right-aligned
-                // so we have free real estate on the left.
-                branchGlyph.topAnchor.constraint(equalTo: bubble.topAnchor, constant: 2),
-                branchGlyph.trailingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: -6)
+                // Branch glyph below the avatar (mirrors the assistant
+                // layout). The pre-§4.c "outside leading edge" placement
+                // worked when user turns were right-aligned and had free
+                // left-side real estate; that's gone now.
+                branchGlyph.topAnchor.constraint(equalTo: avatar.bottomAnchor, constant: 6),
+                branchGlyph.centerXAnchor.constraint(equalTo: avatar.centerXAnchor)
             ])
+            if let nameLabel = speakerNameLabel {
+                NSLayoutConstraint.activate([
+                    nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 2),
+                    nameLabel.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
+                    nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: bubble.trailingAnchor),
+                    nameLabel.bottomAnchor.constraint(lessThanOrEqualTo: bubble.topAnchor, constant: -2)
+                ])
+            }
         } else {
             // V2_UI_OVERHAUL §4.3 — assistant turn anatomy:
             //   [avatar | name · ts             ]    <- speaker header (always)
@@ -1089,7 +1199,11 @@ final class TurnView: NSView, NSTextViewDelegate {
         let parentW = bounds.width
         guard parentW > 1 else { return 0 }
         if role == .user {
-            let bubbleW = parentW * 0.78
+            // User bubble width = 0.78 * parentW - 0.78 * glyphCol
+            // (matches the constraint set in installConstraints — the
+            // bubble is left-aligned at glyphCol and shrinks to the
+            // historical 78% of the available column width).
+            let bubbleW = parentW * 0.78 - glyphCol * 0.78
             return max(0, bubbleW - bubblePadX * 2)
         } else {
             return max(0, parentW - glyphCol)

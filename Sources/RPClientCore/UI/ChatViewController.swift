@@ -299,7 +299,22 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
                 }
                 return chatCharacter
             }()
-            let tv = TurnView(turn: t, character: character, multiCast: isMultiCast)
+            // V2_UI_OVERHAUL §4.c — user-turn caption resolves through
+            // (chat persona → settings.userName → "You"). Assistant
+            // turns get nil here; the assistant header drives off
+            // `character.name`.
+            let personaName: String? = (t.role == .user)
+                ? TurnView.userTurnDisplayName(
+                    personaName: AppState.shared.persona(id: chat.personaId)?.name,
+                    settingsUserName: AppState.shared.settings.userName
+                  )
+                : nil
+            let tv = TurnView(
+                turn: t,
+                character: character,
+                personaName: personaName,
+                multiCast: isMultiCast
+            )
             tv.delegate = self
             tv.isLastAssistant = (i == lastAssistantIdx)
             tv.setVariantState(
