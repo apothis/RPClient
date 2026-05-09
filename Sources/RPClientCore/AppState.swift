@@ -1114,6 +1114,7 @@ final class AppState {
             speakerId: trailingSpeakerId,
             cast: resolvedCast,
             overrides: resolveOverrides(for: chat),
+            systemPromptAddendum: settings.systemPromptAddendum,
             kobold: kobold
         ) { [weak self] assembly in
             guard let self = self else { return }
@@ -1333,6 +1334,7 @@ final class AppState {
             replyReserve: preset.maxLength,
             qwenThinking: settings.qwenThinkingEnabled,
             overrides: resolveOverrides(for: chat),
+            systemPromptAddendum: settings.systemPromptAddendum,
             kobold: kobold
         ) { [weak self] assembly in
             guard let self = self else { return }

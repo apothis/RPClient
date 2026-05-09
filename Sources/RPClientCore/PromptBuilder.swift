@@ -296,7 +296,7 @@ struct PromptBuilder {
     /// function of its inputs (testable without AppState). Both default to
     /// nil for the free-form chat path. Step 4a plumbs them through; later
     /// sub-steps consume them.
-    static func build(chat: Chat, character: Character? = nil, persona: Persona? = nil, relevantMemories: String? = nil, continuation: Bool = false, qwenThinking: Bool = false, speakerId: UUID? = nil, cast: [Character] = [], overrides: ChatPathOverrides = ChatPathOverrides()) -> (prompt: String, stops: [String]) {
+    static func build(chat: Chat, character: Character? = nil, persona: Persona? = nil, relevantMemories: String? = nil, continuation: Bool = false, qwenThinking: Bool = false, speakerId: UUID? = nil, cast: [Character] = [], overrides: ChatPathOverrides = ChatPathOverrides(), systemPromptAddendum: String = "") -> (prompt: String, stops: [String]) {
         // Phase 8 §4.2b — multi-cast assembly path. Triggered when the
         // chat has more than one cast member AND the caller has resolved
         // a speakerId for this generation. `character` is still the active
@@ -355,7 +355,7 @@ struct PromptBuilder {
         // PlaceholderSubstitution.apply maps to "User"). Production
         // (TokenBudget.assemble) passes settings.userName explicitly.
         let resolvedUserName = persona?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let memoryBlock = composeMemoryBlock(chat: chat, character: character, userName: resolvedUserName, cohabitants: cohabitants)
+        let memoryBlock = composeMemoryBlock(chat: chat, character: character, userName: resolvedUserName, cohabitants: cohabitants, systemPromptAddendum: systemPromptAddendum)
         let personaBlock = renderPersonaBlock(persona)
         let template = Templates.byId(chat.templateId, qwenThinking: qwenThinking)
         let prompt = template.assemble(
@@ -452,7 +452,7 @@ struct PromptBuilder {
     ///
     /// Returns nil when nothing would be emitted, so callers can pass that
     /// through to the templates' `memoryBlock: String?` slot unchanged.
-    static func composeMemoryBlock(chat: Chat, character: Character?, userName: String, cohabitants: [Character] = []) -> String? {
+    static func composeMemoryBlock(chat: Chat, character: Character?, userName: String, cohabitants: [Character] = [], systemPromptAddendum: String = "") -> String? {
         let trimmedName = userName.trimmingCharacters(in: .whitespacesAndNewlines)
         var sections: [String] = []
 
@@ -468,6 +468,18 @@ struct PromptBuilder {
             // anchor for `{{char}}` hallucinate a common name (the
             // 2026-05-09 "Emily → 'Mia'" bug surfaced this gap).
             sections.append(PlaceholderSubstitution.apply(sp, characterName: charName, userName: userName))
+        }
+        // User-side global style guidance (Settings.systemPromptAddendum).
+        // Lands AFTER character.systemPrompt (the role / who they
+        // are leads) and BEFORE the user-name line + card prefix
+        // (style guidance is meta-instruction about how to play
+        // the role; the rest is context about who's in the room).
+        // Substitutes {{char}} / {{user}} in case the user references
+        // either in their guidance text. Empty (or whitespace-only)
+        // is a no-op.
+        let trimmedAddendum = systemPromptAddendum.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAddendum.isEmpty {
+            sections.append(PlaceholderSubstitution.apply(trimmedAddendum, characterName: charName, userName: userName))
         }
         if !trimmedName.isEmpty {
             sections.append("The user's name is \(trimmedName).")

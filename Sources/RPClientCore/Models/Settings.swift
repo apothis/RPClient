@@ -94,6 +94,17 @@ struct Settings: Codable, Equatable {
     /// `TagVocabulary.matches(prefix:customTags:)`.
     var customTags: [String]
 
+    /// Free-form style guidance appended to every chat's system block
+    /// (after the character's `systemPrompt`, before the `userName`
+    /// line). Lets the user nudge global behaviour — reply length,
+    /// register, content-policy preferences — without editing every
+    /// card individually. `{{user}}` and `{{char}}` substitution
+    /// applies. Empty string disables injection. Default ships
+    /// non-empty (paragraph-count + intimate-description guidance)
+    /// based on user feedback 2026-05-09; the user can clear or
+    /// rewrite via Settings UI.
+    var systemPromptAddendum: String
+
     /// Temporary façade preserving the pre-Phase-4 single-server API. Reads
     /// the default profile's baseURL; setter mutates the default profile's
     /// URL in place. Removed in 4b once AppState routes through the registry.
@@ -110,6 +121,19 @@ struct Settings: Codable, Equatable {
     var defaultServer: ServerProfile? {
         servers.first(where: { $0.id == defaultServerId })
     }
+
+    /// Default text for `systemPromptAddendum` — the two pieces of
+    /// guidance the user requested 2026-05-09. Conservative wording:
+    /// the paragraph target is "roughly four", not strict; the
+    /// intimate-detail directive is conditional ("when the scene
+    /// calls for it") so SFW chats aren't pushed toward content the
+    /// scene doesn't ask for. The user can edit / clear via the
+    /// Settings UI.
+    static let defaultSystemPromptAddendum = """
+    Aim for roughly four paragraphs per reply. Vary the rhythm — fewer when a moment calls for brevity, more when a scene needs space to unfold. Don't pad to hit a target.
+
+    When the scene calls for intimate physical description, be specific and anatomically accurate. Account for the character's age and body type — what's plausible for one body isn't for another. Don't generalise or soften.
+    """
 
     static let `default`: Settings = {
         let defaultId = UUID()
@@ -136,7 +160,8 @@ struct Settings: Codable, Equatable {
             qwenThinkingEnabled: false,
             defaultPersonaId: nil,
             voiceModelPath: nil,
-            defaultVoice: nil
+            defaultVoice: nil,
+            systemPromptAddendum: Settings.defaultSystemPromptAddendum
         )
     }()
 
@@ -157,7 +182,8 @@ struct Settings: Codable, Equatable {
          voiceModelPath: String? = nil,
          defaultVoice: VoicePreference? = nil,
          cardCreatorServerId: UUID? = nil,
-         customTags: [String] = []) {
+         customTags: [String] = [],
+         systemPromptAddendum: String = Settings.defaultSystemPromptAddendum) {
         self.servers = servers
         self.defaultServerId = defaultServerId
         self.summarizerServerId = summarizerServerId
@@ -181,6 +207,7 @@ struct Settings: Codable, Equatable {
         self.defaultVoice = defaultVoice
         self.cardCreatorServerId = cardCreatorServerId
         self.customTags = customTags
+        self.systemPromptAddendum = systemPromptAddendum
     }
 
     init(from decoder: Decoder) throws {
@@ -225,6 +252,7 @@ struct Settings: Codable, Equatable {
         defaultVoice = try c.decodeIfPresent(VoicePreference.self, forKey: .defaultVoice)
         cardCreatorServerId = try c.decodeIfPresent(UUID.self, forKey: .cardCreatorServerId)
         customTags = try c.decodeIfPresent([String].self, forKey: .customTags) ?? []
+        systemPromptAddendum = try c.decodeIfPresent(String.self, forKey: .systemPromptAddendum) ?? d.systemPromptAddendum
     }
 
     enum CodingKeys: String, CodingKey {
@@ -240,6 +268,7 @@ struct Settings: Codable, Equatable {
         case defaultVoice
         case cardCreatorServerId
         case customTags
+        case systemPromptAddendum
     }
 
     func encode(to encoder: Encoder) throws {
@@ -269,5 +298,6 @@ struct Settings: Codable, Equatable {
         if !customTags.isEmpty {
             try c.encode(customTags, forKey: .customTags)
         }
+        try c.encode(systemPromptAddendum, forKey: .systemPromptAddendum)
     }
 }

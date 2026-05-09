@@ -75,6 +75,7 @@ enum TokenBudget {
         speakerId: UUID? = nil,
         cast: [Character] = [],
         overrides: ChatPathOverrides = ChatPathOverrides(),
+        systemPromptAddendum: String = "",
         kobold: KoboldClient,
         completion: @escaping (PromptAssembly) -> Void
     ) {
@@ -113,7 +114,8 @@ enum TokenBudget {
             chat: chat,
             character: character,
             userName: userName,
-            cohabitants: cohabitants
+            cohabitants: cohabitants,
+            systemPromptAddendum: systemPromptAddendum
         ) ?? ""
         // User-side persona block (4f). Per-template placement: Gemma folds
         // it into the first user turn, Qwen into the system block.

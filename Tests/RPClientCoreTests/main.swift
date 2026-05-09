@@ -75,6 +75,7 @@ let suites: [TestSuite] = [
     promptBuilderOverridesTests(),
     placeholderSubstitutionTests(),
     characterEntitySeedTests(),
+    systemPromptAddendumTests(),
 ]
 
 // `TestRunner.run` is `@MainActor`-isolated so test bodies can drive

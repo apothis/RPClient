@@ -19,6 +19,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var probeStatusDraft: [UUID: String] = [:]
 
     private let userNameField = NSTextField()
+    /// 2026-05-09 — global style guidance appended to every chat's
+    /// system block. Multi-line free text. See `Settings.systemPromptAddendum`.
+    private let systemPromptAddendumView = NSTextView()
+    private let systemPromptAddendumScroll = NSScrollView()
+    private let systemPromptAddendumResetButton = NSButton(title: "Reset to defaults", target: nil, action: nil)
     private let templatePopup = NSPopUpButton()
     private let presetPopup = NSPopUpButton()
     private let personaPopup = NSPopUpButton()
@@ -102,6 +107,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         serversHelp.translatesAutoresizingMaskIntoConstraints = false
 
         let userNameLabel = NSTextField(labelWithString: "Your name:")
+        let systemPromptAddendumLabel = NSTextField(labelWithString: "Style guidance:")
+        let systemPromptAddendumHelp = NSTextField(wrappingLabelWithString:
+            "Free-form text appended to every chat's system block, after the character's own systemPrompt. Use it to nudge global behaviour — reply length, register, content-policy preferences. {{user}} and {{char}} are substituted. Empty disables the injection.")
+        systemPromptAddendumHelp.font = Theme.font(10)
+        systemPromptAddendumHelp.textColor = .secondaryLabelColor
+        systemPromptAddendumHelp.translatesAutoresizingMaskIntoConstraints = false
         let templateLabel = NSTextField(labelWithString: "Default template:")
         let presetLabel = NSTextField(labelWithString: "Default sampler preset:")
         let personaLabel = NSTextField(labelWithString: "Default persona:")
@@ -127,6 +138,32 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         userNameField.placeholderString = "(blank — model won't address you by name)"
         ctxField.placeholderString = "0"
+
+        // Style guidance multi-line editor. Bezel-bordered scroll
+        // hosting an NSTextView. Resizable vertically via NSStackView
+        // arrangement; fixed height of ~120pt fits ~4 lines, plenty
+        // for the default + small additions.
+        systemPromptAddendumScroll.borderType = .bezelBorder
+        systemPromptAddendumScroll.hasVerticalScroller = true
+        systemPromptAddendumScroll.translatesAutoresizingMaskIntoConstraints = false
+        systemPromptAddendumView.isRichText = false
+        systemPromptAddendumView.font = Theme.font(11)
+        systemPromptAddendumView.isAutomaticQuoteSubstitutionEnabled = false
+        systemPromptAddendumView.isAutomaticDashSubstitutionEnabled = false
+        systemPromptAddendumView.minSize = NSSize(width: 0, height: 120)
+        systemPromptAddendumView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        systemPromptAddendumView.isVerticallyResizable = true
+        systemPromptAddendumView.isHorizontallyResizable = false
+        systemPromptAddendumView.autoresizingMask = [.width]
+        systemPromptAddendumView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        systemPromptAddendumView.textContainer?.widthTracksTextView = true
+        systemPromptAddendumScroll.documentView = systemPromptAddendumView
+        systemPromptAddendumScroll.heightAnchor.constraint(equalToConstant: 120).isActive = true
+
+        systemPromptAddendumResetButton.bezelStyle = .rounded
+        systemPromptAddendumResetButton.target = self
+        systemPromptAddendumResetButton.action = #selector(resetSystemPromptAddendum)
+        systemPromptAddendumResetButton.translatesAutoresizingMaskIntoConstraints = false
         let intF = NumberFormatter()
         intF.allowsFloats = false
         intF.minimum = 0
@@ -325,6 +362,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             [embeddingsRoleLabel, embeddingsServerPopup],
             [NSView(), separator0],
             [userNameLabel, userNameField],
+            [systemPromptAddendumLabel, systemPromptAddendumScroll],
+            [NSView(), systemPromptAddendumHelp],
+            [NSView(), systemPromptAddendumResetButton],
             [templateLabel, templatePopup],
             [presetLabel, presetPopup],
             [personaLabel, personaPopup],
@@ -532,6 +572,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         rebuildServersUI()
         rebuildRolePopups()
         userNameField.stringValue = s.userName
+        systemPromptAddendumView.string = s.systemPromptAddendum
         if let i = Templates.all.firstIndex(where: { $0.id == s.defaultTemplateId }) {
             templatePopup.selectItem(at: i)
         }
@@ -614,6 +655,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         s.extractorServerId = extractorServerIdDraft
         s.embeddingsServerId = embeddingsServerIdDraft
         s.userName = userNameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Style guidance — preserve internal newlines, just trim outer.
+        s.systemPromptAddendum = systemPromptAddendumView.string.trimmingCharacters(in: .whitespacesAndNewlines)
         s.defaultTemplateId = templateId
         s.defaultSamplerPresetId = presetId
         if let raw = personaPopup.selectedItem?.representedObject as? String,
@@ -828,6 +871,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 }
             }
         }
+    }
+
+    @objc private func resetSystemPromptAddendum() {
+        // Just rewrites the text view; the user still has to hit Save
+        // to commit. Useful when they've experimented and want to get
+        // back to the shipped defaults without remembering them.
+        systemPromptAddendumView.string = Settings.defaultSystemPromptAddendum
     }
 
     @objc private func serverFieldCommitted(_ sender: NSTextField) {

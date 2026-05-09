@@ -185,7 +185,8 @@ func runFixture(_ run: FixtureRun, args: Args, kobold: KoboldClient) -> (respons
         qwenThinking: false,
         speakerId: speakerId,
         cast: run.cast,
-        overrides: resolvedOverrides
+        overrides: resolvedOverrides,
+        systemPromptAddendum: loadedSettingsAddendum
     )
 
     print(promptPreview(assembled.prompt))
@@ -284,6 +285,28 @@ func promptPreview(_ prompt: String) -> String {
 // MARK: - Server probe + entry
 
 let cliArgs = parseArgs()
+
+// Load the production Settings.systemPromptAddendum from disk so
+// the smoke faithfully mirrors the chat-path's prompt assembly. Falls
+// back to the shipped default when no settings.json exists yet (fresh
+// install case). This is the user-side global style guidance that lands
+// in the system block on every send.
+let loadedSettingsAddendum: String = {
+    let url = FileManager.default
+        .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("RPClient", isDirectory: true)
+        .appendingPathComponent("settings.json")
+    guard let data = try? Data(contentsOf: url) else {
+        return Settings.defaultSystemPromptAddendum
+    }
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    if let s = try? decoder.decode(Settings.self, from: data) {
+        return s.systemPromptAddendum
+    }
+    return Settings.defaultSystemPromptAddendum
+}()
+
 print("--- ChatSmoke ---")
 print("server:    \(cliArgs.server.absoluteString)")
 print("template:  \(cliArgs.templateId)")
@@ -293,6 +316,7 @@ if let cid = cliArgs.chatId {
     print("fixture:   \(cliArgs.fixture)")
 }
 print("verbose:   \(cliArgs.verbose)")
+print("addendum:  \(loadedSettingsAddendum.isEmpty ? "(empty)" : "\(loadedSettingsAddendum.count) chars from settings.json")")
 print("--------------------")
 
 // Probe server reachability so a wrong URL fails fast with a clear
