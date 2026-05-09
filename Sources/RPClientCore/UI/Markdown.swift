@@ -3,20 +3,63 @@ import AppKit
 enum Markdown {
     /// Removes `<think>…</think>`, `<thinking>…</thinking>`, and the
     /// koboldcpp/Gemma `<|channel>thought…<channel|>` preamble.
+    /// Convenience wrapper over `extractThinking(_:)` for non-UI callers
+    /// that just want clean prose (Director, TTS, Summariser, Blurber,
+    /// side-call generators). Per the no-fork rule pinned in
+    /// Phase11ThinkExtractTests, this is exactly `extractThinking(s).body`.
     static func stripThinking(_ s: String) -> String {
+        return extractThinking(s).body
+    }
+
+    /// Phase 11 §4.b — split the first thinking block from the body so
+    /// the chat surface can render the body inline AND surface a
+    /// "Thought for Xs" disclosure for the thinking content.
+    ///
+    /// Recognises the same four tag families as `stripThinking`:
+    /// - `<think>…</think>`
+    /// - `<thinking>…</thinking>`
+    /// - koboldcpp/Gemma `<|channel>thought…<channel|>`
+    /// - `<|begin_of_thought|>…<|end_of_thought|>`
+    ///
+    /// Empty / whitespace-only thinking blocks return `think = nil` —
+    /// the empty pre-fill is harmless on Qwen3.6 (Phase 10 finding) and
+    /// suppressing the disclosure keeps the chat surface quiet.
+    /// Multiple blocks: the first non-empty one is returned as `think`;
+    /// all blocks (including the first) are stripped from `body`.
+    static func extractThinking(_ s: String) -> (think: String?, body: String) {
         let patterns = [
-            "<think>[\\s\\S]*?</think>",
-            "<thinking>[\\s\\S]*?</thinking>",
-            "<\\|channel\\>thought[\\s\\S]*?<channel\\|>",
-            "<\\|begin_of_thought\\|>[\\s\\S]*?<\\|end_of_thought\\|>"
+            "<think>([\\s\\S]*?)</think>",
+            "<thinking>([\\s\\S]*?)</thinking>",
+            "<\\|channel\\>thought([\\s\\S]*?)<channel\\|>",
+            "<\\|begin_of_thought\\|>([\\s\\S]*?)<\\|end_of_thought\\|>"
         ]
-        var out = s
+
+        var firstThink: String?
+        var body = s
         for p in patterns {
             guard let re = try? NSRegularExpression(pattern: p, options: []) else { continue }
-            let range = NSRange(out.startIndex..., in: out)
-            out = re.stringByReplacingMatches(in: out, options: [], range: range, withTemplate: "")
+            // Find the first match (with capture) before stripping all matches —
+            // we need the captured content for the disclosure.
+            if firstThink == nil {
+                let range = NSRange(body.startIndex..., in: body)
+                if let m = re.firstMatch(in: body, options: [], range: range),
+                   m.numberOfRanges >= 2,
+                   let cr = Range(m.range(at: 1), in: body) {
+                    let captured = String(body[cr]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !captured.isEmpty {
+                        firstThink = captured
+                    }
+                }
+            }
+            // Strip every match (regardless of which pattern produced
+            // `firstThink`) so the body is fully cleaned.
+            let stripRange = NSRange(body.startIndex..., in: body)
+            body = re.stringByReplacingMatches(
+                in: body, options: [], range: stripRange, withTemplate: ""
+            )
         }
-        return out.trimmingCharacters(in: .whitespacesAndNewlines)
+        body = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (firstThink, body)
     }
 
     /// Render a small subset of markdown: fenced code blocks, **bold**, *italic*, `code`.
@@ -59,8 +102,13 @@ enum Markdown {
         apply(attr, pattern: "\\*\\*([^*\\n]+)\\*\\*", build: { _ in
             [.font: bold(baseFont)]
         })
+        // V2_UI_OVERHAUL §4.7 — italics in the chat transcript re-tint
+        // to secondaryLabelColor. RP authors use *action* semantics; the
+        // secondary tone reads as "narration aside, not dialogue" while
+        // the italic face stays as the primary visual cue. Speech
+        // (unmarked) keeps labelColor.
         apply(attr, pattern: "(?<!\\*)\\*([^*\\n]+)\\*(?!\\*)", build: { _ in
-            [.font: italic(baseFont)]
+            [.font: italic(baseFont), .foregroundColor: NSColor.secondaryLabelColor]
         })
         apply(attr, pattern: "`([^`\\n]+)`", build: { _ in
             let mono = NSFont.monospacedSystemFont(

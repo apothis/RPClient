@@ -111,6 +111,11 @@ final class TurnView: NSView, NSTextViewDelegate {
 
     private var baseFont: NSFont { Theme.font(15) }
 
+    /// Wallclock the turn was recorded at. Read by the speaker-header
+    /// timestamp label (V2_UI_OVERHAUL §4.3 — assistant turn header is
+    /// `<name> · <time>`). Persisted from `turn.ts` at init time.
+    private let turnTs: Date
+
     private var rawText: String = ""
     private var isEditing: Bool = false {
         didSet {
@@ -270,34 +275,51 @@ final class TurnView: NSView, NSTextViewDelegate {
 
     private let bubblePadX: CGFloat = 14
     private let bubblePadY: CGFloat = 10
-    /// Width of the leading speaker column on assistant turns. Reserves space
-    /// for a 32-px circular avatar (V2_PLAN §6.2) plus an 8-px gap before the
-    /// reply bubble starts.
-    private let glyphCol: CGFloat = 40
-    private let avatarSize: CGFloat = 32
+    /// Width of the leading speaker column on assistant turns. Reserves
+    /// space for the avatar gutter plus the avatar-to-body gap so the
+    /// reply body starts at a consistent x-offset (V2_UI_OVERHAUL §4.3).
+    /// Resolves to 40pt today (32 + 8); changes follow the design-language
+    /// tokens, never a hardcoded literal.
+    private let glyphCol: CGFloat = DesignTokens.Chat.avatarGutter
+        + DesignTokens.Chat.avatarToBodyGap
+    private let avatarSize: CGFloat = DesignTokens.Chat.avatarSize
     private let toolbarHeight: CGFloat = 22
     private let toolbarTopGap: CGFloat = 4
 
-    /// Phase 8 §4.3 — speaker name label below the avatar on multi-cast
-    /// chats. Nil on solo / free-form chats and on user turns. When set,
-    /// the avatar also gets a 2pt accent ring (deterministic per
-    /// `character.id`) so the chip reads at a glance even before the
-    /// label is parsed.
+    /// V2_UI_OVERHAUL §4.3 — speaker name label above the bubble on
+    /// every assistant turn (was multi-cast-only pre-§4.b). Multi-cast
+    /// keeps the 3pt accent ring on the avatar and tints the name with
+    /// the speaker accent for at-a-glance identification; solo chats
+    /// use `labelColor`.
     private var speakerNameLabel: NSTextField?
+    /// V2_UI_OVERHAUL §4.3 — timestamp companion to the speaker name
+    /// label ("· 2:14 PM"). `caption1` size, `tertiaryLabelColor`.
+    /// Created alongside `speakerNameLabel` when the row has one.
+    private var timestampLabel: NSTextField?
     private let multiCast: Bool
 
-    /// Phase 8 §4.3 — vertical space reserved above the bubble for the
-    /// speaker name pill. Zero when no speaker label is shown
-    /// (solo / free-form chats and user turns). Read by both the
-    /// constraint installer (offsets bubble + avatar by this) AND
-    /// `recomputeHeight()` (adds it to total height so the bubble's
-    /// content area isn't squeezed and the toolbar doesn't clip).
-    private var speakerLabelHeight: CGFloat { speakerNameLabel != nil ? 18 : 0 }
+    /// Vertical space reserved above the bubble for the speaker name
+    /// header. Zero on user turns (handled separately in §4.c). Read
+    /// by both the constraint installer AND `recomputeHeight()` so the
+    /// row outer height includes the offset — the first version of
+    /// this code computed the offset locally and forgot to plumb it
+    /// into the height calc, which clipped the toolbar + made the
+    /// textView scroll instead of expand.
+    private var speakerLabelHeight: CGFloat { speakerNameLabel != nil ? 20 : 0 }
+
+    /// V2_UI_OVERHAUL §4.0.a / §4.7 — populated by `renderRendered`
+    /// from `Markdown.extractThinking`. Sub-step 4.b.1 only stores it;
+    /// the visual disclosure pill that surfaces it in the chat lands
+    /// in 4.b.2. Until then the chat surface keeps stripping `<think>`
+    /// from the rendered prose (same behaviour as today) but the data
+    /// is captured and ready for the disclosure UI to consume.
+    private var thinkingText: String?
 
     init(turn: Turn, character: Character? = nil, multiCast: Bool = false) {
         self.turnId = turn.id
         self.role = turn.role
         self.rawText = turn.text
+        self.turnTs = turn.ts
         self.multiCast = multiCast
 
         copyButton = TurnView.makeIconButton(symbol: "doc.on.doc", tooltip: "Copy")
@@ -348,30 +370,54 @@ final class TurnView: NSView, NSTextViewDelegate {
                     forCharacter: character.id, name: character.name)
                 avatar.toolTip = character.name
             } else {
-                avatar.image = placeholderAvatar(initials: "✦")
+                // V2_DESIGN_LANGUAGE §10 anti-pattern: replaced the ✦
+                // custom glyph with the SF Symbol `person.crop.circle`.
+                // Free-form chats (no character bound) fall through here.
+                avatar.image = TurnView.makeAssistantPlaceholderAvatar(
+                    size: avatarSize
+                )
             }
-            // Phase 8 §4.3 — speaker chip. Multi-cast chats get a 3pt
-            // accent ring around the avatar (deterministic per character
-            // id) and a full-width name pill ABOVE the bubble, in the
-            // accent colour, so the speaker is identifiable at a glance
-            // without truncating long names. Below-avatar labels (the
-            // original design) topped out at the 40px gutter width and
-            // truncated names like "Captain Marin" to "Capt…", which
-            // didn't read as a speaker chip — it read as a layout bug.
+            // V2_UI_OVERHAUL §4.3 — every assistant turn carries a
+            // speaker-name header. Multi-cast chats additionally get a
+            // 3pt accent ring on the avatar and tint the name with the
+            // speaker accent (Phase 8 §4.3 carry-over) for at-a-glance
+            // identification across rotating speakers. Long names like
+            // "Captain Marin" used to truncate inside the 40pt gutter
+            // when the label was below the avatar — keeping the label
+            // ABOVE the bubble preserves the full name, which is also
+            // why the multi-cast Phase 8 fix lives here.
+            let nameAccent: NSColor
             if multiCast, let character {
-                let accent = SpeakerColor.accent(for: character.id)
-                avatar.layer?.borderColor = accent.cgColor
+                nameAccent = SpeakerColor.accent(for: character.id)
+                avatar.layer?.borderColor = nameAccent.cgColor
                 avatar.layer?.borderWidth = 3
-                let label = NSTextField(labelWithString: character.name)
-                label.font = Theme.font(11, weight: .semibold)
-                label.textColor = accent
-                label.alignment = .left
-                label.lineBreakMode = .byTruncatingTail
-                label.maximumNumberOfLines = 1
-                label.translatesAutoresizingMaskIntoConstraints = false
-                addSubview(label)
-                speakerNameLabel = label
+            } else {
+                nameAccent = .labelColor
             }
+            let nameStr = character?.name ?? "Assistant"
+            let nameLabel = NSTextField(labelWithString: nameStr)
+            nameLabel.font = DesignTokens.Typography.headline
+            nameLabel.textColor = nameAccent
+            nameLabel.alignment = .left
+            nameLabel.lineBreakMode = .byTruncatingTail
+            nameLabel.maximumNumberOfLines = 1
+            nameLabel.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(nameLabel)
+            speakerNameLabel = nameLabel
+
+            // Companion timestamp. tertiaryLabelColor reads as
+            // "metadata, not content" — the eye finds the name first.
+            let tsLabel = NSTextField(
+                labelWithString: "· " + TurnView.formatTimestamp(turnTs)
+            )
+            tsLabel.font = DesignTokens.Typography.caption1
+            tsLabel.textColor = .tertiaryLabelColor
+            tsLabel.alignment = .left
+            tsLabel.lineBreakMode = .byClipping
+            tsLabel.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(tsLabel)
+            timestampLabel = tsLabel
+
             addSubview(avatar)
         }
 
@@ -473,6 +519,41 @@ final class TurnView: NSView, NSTextViewDelegate {
 
     required init?(coder: NSCoder) { nil }
 
+    /// V2_UI_OVERHAUL §4.3 — timestamp companion to the speaker name.
+    /// `caption1` size, short time format ("2:14 PM" / "14:14" depending
+    /// on locale). Computed once at turn render and not re-formatted on
+    /// the fly (turns don't change wallclock after they're recorded).
+    private static let timestampFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
+    static func formatTimestamp(_ ts: Date) -> String {
+        return timestampFormatter.string(from: ts)
+    }
+
+    /// Free-form-chat assistant avatar fallback (no character bound).
+    /// Renders `person.crop.circle` SF Symbol at the avatar size with
+    /// a tertiary-label tint so it reads as "no character here" without
+    /// shouting. V2_UI_OVERHAUL §4.0.h (replaces the legacy ✦ glyph).
+    private static func makeAssistantPlaceholderAvatar(size: CGFloat) -> NSImage {
+        let cfg = NSImage.SymbolConfiguration(
+            pointSize: size, weight: .regular
+        )
+        if let img = NSImage(
+            systemSymbolName: "person.crop.circle",
+            accessibilityDescription: "Assistant"
+        )?.withSymbolConfiguration(cfg) {
+            return img
+        }
+        // Belt-and-braces fallback for synthetic test environments where
+        // SF Symbols may not resolve. Returns a small placeholder so we
+        // never hand back nil and crash the avatar view.
+        return placeholderAvatar(initials: "?")
+    }
+
     private static func makeIconButton(symbol: String, tooltip: String) -> NSButton {
         let img = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
         let btn = NSButton(image: img ?? NSImage(), target: nil, action: nil)
@@ -516,20 +597,19 @@ final class TurnView: NSView, NSTextViewDelegate {
                 branchGlyph.trailingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: -6)
             ])
         } else {
-            // Phase 8 §4.3 — speaker name label above the bubble (when
-            // multi-cast). The label sits in the same vertical track as
-            // the bubble's top edge, leading-aligned with the bubble, so
-            // it reads as a header for the message. Avatar slides down
-            // by `speakerLabelHeight` to stay top-aligned with the
-            // bubble's header. recomputeHeight reads the same ivar so
-            // the TurnView's outer height includes this offset — the
-            // first version of this code computed the offset locally
-            // and forgot to plumb it into the height calc, which clipped
-            // the toolbar + made the textView scroll instead of expand.
+            // V2_UI_OVERHAUL §4.3 — assistant turn anatomy:
+            //   [avatar | name · ts             ]    <- speaker header (always)
+            //   [       | ▸ Thinking            ]    <- think disclosure (when present)
+            //   [       |  thinking content...  ]    <- expanded body (when toggled)
+            //   [       |  prose body...        ]    <- main content
+            //   [       |  ◀ 1/3 ▶  hover-bar   ]    <- variants + actions
+            //
+            // Avatar is top-aligned to the speaker header, NOT to the
+            // bubble body, so the row reads as "this character said this".
             let labelGap = speakerLabelHeight
 
             NSLayoutConstraint.activate([
-                avatar.topAnchor.constraint(equalTo: topAnchor, constant: labelGap),
+                avatar.topAnchor.constraint(equalTo: topAnchor),
                 avatar.leadingAnchor.constraint(equalTo: leadingAnchor),
                 avatar.widthAnchor.constraint(equalToConstant: avatarSize),
                 avatar.heightAnchor.constraint(equalToConstant: avatarSize),
@@ -555,10 +635,21 @@ final class TurnView: NSView, NSTextViewDelegate {
                 NSLayoutConstraint.activate([
                     nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 2),
                     nameLabel.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
-                    nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: bubble.trailingAnchor),
                     nameLabel.bottomAnchor.constraint(lessThanOrEqualTo: bubble.topAnchor, constant: -2)
                 ])
+                if let tsLabel = timestampLabel {
+                    NSLayoutConstraint.activate([
+                        tsLabel.lastBaselineAnchor.constraint(equalTo: nameLabel.lastBaselineAnchor),
+                        tsLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: DesignTokens.Spacing.xs),
+                        tsLabel.trailingAnchor.constraint(lessThanOrEqualTo: bubble.trailingAnchor)
+                    ])
+                }
             }
+            // Think disclosure stack: pill above the body, expanded
+            // content below the pill (when toggled). Both anchored to
+            // the bubble's leading edge so they line up with prose.
+            // recomputeHeight folds their measured heights into the
+            // total row height; layout() is the constraint owner.
         }
     }
 
@@ -714,8 +805,14 @@ final class TurnView: NSView, NSTextViewDelegate {
         }
         let display: String
         if role == .assistant {
-            display = Markdown.stripThinking(rawText)
+            // V2_UI_OVERHAUL §4.b.1 — capture the thinking content
+            // for the future disclosure pill (4.b.2) while keeping the
+            // body identical to today's strip-only behaviour.
+            let extracted = Markdown.extractThinking(rawText)
+            thinkingText = extracted.think
+            display = extracted.body
         } else {
+            thinkingText = nil
             display = rawText
         }
         let attr = Markdown.render(display, baseFont: baseFont)
