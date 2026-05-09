@@ -594,6 +594,12 @@ Things this research couldn't resolve alone. Each is a subjective taste call or 
 
 11. **`<think>` trace doesn't reach `turn.text` today** — surfaced 2026-05-09 while smoke-verifying the 4.b.2 disclosure UI. [`ThinkBlockFilter`](Sources/RPClientCore/ThinkBlockFilter.swift) strips the trace from the streaming token feed before it reaches `turn.text`, so the `▸ Thinking` disclosure had no data to surface on either historical chats or new thinking-model turns. **RESOLVED 2026-05-09 via option (b)** in commit `8c5cfee`. `TurnVariant.thinkingTrace: String?` carries the captured trace; `ThinkBlockFilter.capturedTrace` exposes it; `AppState`'s stream-finish handler writes it; `TurnView` reads it from the active variant; `turn.text` stays as clean as it always has. Per-variant so swiping regenerations shows the matching reasoning. 17 net-new tests across `Phase11ThinkTraceCapture` (filter behaviour) and `Phase11ThinkTracePersistence` (codable round-trip + legacy decode).
 
+12. **Empty-body turns need a sentinel** — surfaced 2026-05-09 while smoke-verifying 4.e.1's typing-dots indicator. When a thinking-mode model produces a long `<think>` block (5000+ chars in the observed case) and effectively zero body text after `</think>`, the chat surface renders an empty bubble with no indication that anything happened. The disclosure pill is there with the trace, but it's discoverable only if the user notices it. The empty-body case has always rendered as empty (this isn't a §4.e.1 regression), but the new dots indicator made it visually obvious that "something was happening, then nothing landed", which is what surfaced the gap. Possible shapes for the fix:
+    - **(a) Inline sentinel.** Render `(no reply)` in `tertiaryLabelColor` `caption1` when `rawText` is empty AND `thinkingTrace` is non-empty AND `isStreaming` is false — distinct from the legitimate "fresh placeholder turn pre-stream" state.
+    - **(b) Auto-expand the disclosure.** When the body is empty but a trace exists, default the disclosure pill to expanded so the user immediately sees what the model was thinking about. Lower friction than (a); still discoverable.
+    - **(c) Both.** Sentinel for at-a-glance scannability + auto-expand for direct content access.
+    Recommendation: **(c)** — both are cheap to implement and they cover different reading patterns. Land alongside §4.e.3 (Stop pill) since both touch the chat-surface's "what's happening with this turn?" feedback layer.
+
 ---
 
 ## §E — Screenshot index
