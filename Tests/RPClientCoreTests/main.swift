@@ -76,6 +76,7 @@ let suites: [TestSuite] = [
     placeholderSubstitutionTests(),
     characterEntitySeedTests(),
     systemPromptAddendumTests(),
+    phase11ChatTokensTests(),
 ]
 
 // `TestRunner.run` is `@MainActor`-isolated so test bodies can drive

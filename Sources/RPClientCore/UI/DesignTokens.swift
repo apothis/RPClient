@@ -101,4 +101,43 @@ enum DesignTokens {
         /// Chip / pill / token-field token.
         static let chip: CGFloat = 4
     }
+
+    /// Chat-pane semantic tokens. Phase 11 §4.a — these are not new
+    /// values, they're chat-vocabulary names for the same `Spacing` /
+    /// `Radius` tokens. Call sites in TurnView / composer / per-turn
+    /// controls read in chat terms ("turn gap", "avatar gutter") rather
+    /// than reaching for the underlying grid token.
+    ///
+    /// **No-fork rule.** Anything that can be expressed as an alias
+    /// MUST alias — never duplicate the literal. If the language ever
+    /// bumps `Spacing.md`, chat layout follows automatically.
+    enum Chat {
+        /// 720 — content column max width per V2_UI_OVERHAUL §4.3.
+        /// Genuinely new (the only Chat token that isn't an alias);
+        /// it's a content-rule, not a grid-token.
+        static let transcriptMaxWidth: CGFloat = 720
+
+        /// 32 — avatar circle diameter, both assistant and user side
+        /// (§4.0.b / §4.0.c). Aliases `Spacing.xl`.
+        static let avatarSize: CGFloat = Spacing.xl
+
+        /// 32 — leading gutter column width that holds the avatar
+        /// (§4.3 anatomy). Same as `avatarSize`; the separation exists
+        /// so a future variant (e.g. avatar shrinks to 28 inside a
+        /// 32 gutter for visual breathing) doesn't require renaming
+        /// every call site.
+        static let avatarGutter: CGFloat = Spacing.xl
+
+        /// 8 — gap between the avatar gutter and the body content
+        /// (§4.3 `[gutter] [sm gap] [body]`). Aliases `Spacing.sm`.
+        static let avatarToBodyGap: CGFloat = Spacing.sm
+
+        /// 16 — vertical rhythm between turns (§4.3). Aliases `Spacing.md`.
+        static let turnGap: CGFloat = Spacing.md
+
+        /// 14 — corner radius for the user-turn subtle bubble
+        /// (§4.0.a / §4.3). Aliases `Radius.section` since the bubble
+        /// is conceptually a small card surface.
+        static let bubbleRadius: CGFloat = Radius.section
+    }
 }
