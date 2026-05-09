@@ -74,6 +74,10 @@ final class TurnView: NSView, NSTextViewDelegate {
     private let bubble = NSView()
     private let textView = FocusAwareTextView()
     private let scrollView = NSScrollView()
+    /// V2_UI_OVERHAUL §4.5 — typing-dots indicator shown during the
+    /// pre-token gap and any `<think>` block. Replaces the pre-§4.e.1
+    /// "Thinking…" italic-text body + avatar opacity pulse.
+    private let typingDots = TypingDotsView()
     /// Assistant-side speaker indicator. V2_PLAN §6.2 — when the chat has a
     /// character attached, this carries the character avatar resolved via
     /// `AvatarSource`; otherwise it falls back to a tinted ✦ rendered through
@@ -606,6 +610,21 @@ final class TurnView: NSView, NSTextViewDelegate {
         scrollView.drawsBackground = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         bubble.addSubview(scrollView)
+
+        // V2_UI_OVERHAUL §4.5 — typing-dots indicator. Lives on the
+        // assistant side only (user turns never stream); pinned at
+        // the top-leading of the bubble so it sits where text would
+        // start. Hidden by default; renderRendered toggles visibility
+        // based on (isStreaming && rawText.isEmpty) || isThinking.
+        if role == .assistant {
+            typingDots.translatesAutoresizingMaskIntoConstraints = false
+            typingDots.isHidden = true
+            bubble.addSubview(typingDots)
+            NSLayoutConstraint.activate([
+                typingDots.topAnchor.constraint(equalTo: bubble.topAnchor, constant: 4),
+                typingDots.leadingAnchor.constraint(equalTo: bubble.leadingAnchor)
+            ])
+        }
 
         copyButton.target = self;     copyButton.action     = #selector(copyTapped)
         replayButton.target = self;   replayButton.action   = #selector(replayTapped)
@@ -1354,20 +1373,22 @@ final class TurnView: NSView, NSTextViewDelegate {
     }
 
     private func renderRendered() {
-        // While the model is mid-<think>, the bubble shows a placeholder
-        // instead of rawText (which is empty anyway — the streaming filter
-        // swallows everything inside the block). Italic + secondary colour
-        // so it's visibly distinct from a real reply.
-        if isThinking {
-            let attr = NSMutableAttributedString(string: "Thinking…")
-            let italic = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
-            attr.addAttributes(
-                [.font: italic, .foregroundColor: NSColor.secondaryLabelColor],
-                range: NSRange(location: 0, length: attr.length)
-            )
-            textView.textStorage?.setAttributedString(attr)
+        // V2_UI_OVERHAUL §4.5 — typing-dots replace the pre-§4.e.1
+        // "Thinking…" italic-text body. Shown while the assistant is
+        // mid-stream and either no displayable tokens have arrived
+        // yet (pre-token gap) OR the stream is inside a `<think>`
+        // block. Toggled here so renderRendered is the single source
+        // of truth for "what's in the bubble right now".
+        let showTypingDots = role == .assistant &&
+            (isThinking || (isStreaming && rawText.isEmpty))
+        if showTypingDots {
+            typingDots.isHidden = false
+            typingDots.startAnimating()
+            textView.textStorage?.setAttributedString(NSAttributedString(string: ""))
             return
         }
+        typingDots.stopAnimating()
+        typingDots.isHidden = true
         let display: String
         if role == .assistant {
             // V2_UI_OVERHAUL §4.7 — split think trace from prose so
@@ -1451,21 +1472,20 @@ final class TurnView: NSView, NSTextViewDelegate {
 
     private func updateStreamingIndicator() {
         guard role == .assistant else { return }
+        // V2_UI_OVERHAUL §4.5 — pre-§4.e.1 this pulsed the avatar's
+        // opacity 1.0↔0.25 as the streaming signal. The dots view
+        // (handled in renderRendered) is now the visible indicator;
+        // the avatar stays at full opacity throughout. The only
+        // remaining job here is suppressing the hover toolbar mid-
+        // stream so a user mouse-over doesn't reveal regen/edit on a
+        // turn that's actively being written into.
         if isStreaming {
-            // Suppress toolbar even if hovered.
             toolbar.alphaValue = 0
-            let pulse = CABasicAnimation(keyPath: "opacity")
-            pulse.fromValue = 1.0
-            pulse.toValue = 0.25
-            pulse.duration = 0.7
-            pulse.autoreverses = true
-            pulse.repeatCount = .infinity
-            pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            avatar.layer?.add(pulse, forKey: "streamPulse")
-        } else {
-            avatar.layer?.removeAnimation(forKey: "streamPulse")
-            avatar.layer?.opacity = 1.0
         }
+        // Re-render so renderRendered's dots-vs-text decision picks up
+        // the new isStreaming state immediately (rawText.isEmpty +
+        // isStreaming → dots show even before tokens arrive).
+        renderRendered()
     }
 
     // MARK: - Sizing
