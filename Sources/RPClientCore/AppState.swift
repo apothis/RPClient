@@ -1090,6 +1090,18 @@ final class AppState {
             return nil
         }()
         let replyMax = replyMaxOverride ?? preset.maxLength
+        // One line per stream so reply-budget questions ("did the
+        // thinking bump fire on this chat?") have ground truth without
+        // needing a temporary diagnostic. Prefix matches the chat-pane
+        // grep convention from §D.11 / 4.b.2.
+        DebugLog.shared.write(
+            "[chat-pane] reply-budget: replyMax=\(replyMax) " +
+            "thinkingActive=\(thinkingActive) " +
+            "override=\(settings.replyTokensOverride > 0 ? String(settings.replyTokensOverride) : "nil") " +
+            "preset.maxLength=\(preset.maxLength) " +
+            "chat.template=\(chat.templateId) " +
+            "qwenThinkingEnabled=\(settings.qwenThinkingEnabled)"
+        )
         // Phase 8 §4.2c — speaker resolution. For multi-cast chats, the
         // trailing assistant slot was stamped with a speakerId by
         // sendUserMessage / regenerate / forkFrom (whichever opened it).
