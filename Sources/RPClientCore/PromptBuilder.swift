@@ -147,8 +147,29 @@ struct PromptBuilder {
     /// substituting the active speaker's display name. Tiny, cheap, and
     /// the load-bearing trick that makes role-prefix history-formatting
     /// work in practice.
-    static func groupNudge(activeSpeakerName: String) -> String {
-        return "[Write the next reply only as \(activeSpeakerName).]"
+    ///
+    /// Phase 10 §10.c — `style` and `xToX` come from a per-EXACT-model
+    /// `ChatPathOverrides.groupNudgeStyle` lookup at the call site (see
+    /// `PromptBuilder.build`). The `.continuing` variant rewrites the
+    /// directive to `[Continuing as X.]` only when the most-recent
+    /// assistant turn was spoken by the same cast member as the active
+    /// speaker (X→X case) — empirically the failure mode where the
+    /// standard nudge isn't load-bearing on Qwen3.6, per
+    /// V2_PHASE10_CHAT_TUNING_RESEARCH.md §10.0.f. `.stopAugment` and
+    /// `.strongStop` change the assembled stop sequences (handled in
+    /// `build`), not the nudge text — those styles still pick text by
+    /// the same rule as `.standard` / `.strong`.
+    static func groupNudge(activeSpeakerName: String, style: GroupNudgeStyle = .standard, xToX: Bool = false) -> String {
+        switch style {
+        case .standard, .stopAugment:
+            return "[Write the next reply only as \(activeSpeakerName).]"
+        case .strong, .strongStop:
+            return "[\(activeSpeakerName) speaks now. Other cast members are silent for this turn.]"
+        case .continuing:
+            return xToX
+                ? "[Continuing as \(activeSpeakerName).]"
+                : "[Write the next reply only as \(activeSpeakerName).]"
+        }
     }
 
     /// Phase 8 §4.2b — transform history turns for per-speaker prompt
@@ -275,7 +296,7 @@ struct PromptBuilder {
     /// function of its inputs (testable without AppState). Both default to
     /// nil for the free-form chat path. Step 4a plumbs them through; later
     /// sub-steps consume them.
-    static func build(chat: Chat, character: Character? = nil, persona: Persona? = nil, relevantMemories: String? = nil, continuation: Bool = false, qwenThinking: Bool = false, speakerId: UUID? = nil, cast: [Character] = []) -> (prompt: String, stops: [String]) {
+    static func build(chat: Chat, character: Character? = nil, persona: Persona? = nil, relevantMemories: String? = nil, continuation: Bool = false, qwenThinking: Bool = false, speakerId: UUID? = nil, cast: [Character] = [], overrides: ChatPathOverrides = ChatPathOverrides()) -> (prompt: String, stops: [String]) {
         // Phase 8 §4.2b — multi-cast assembly path. Triggered when the
         // chat has more than one cast member AND the caller has resolved
         // a speakerId for this generation. `character` is still the active
@@ -288,7 +309,21 @@ struct PromptBuilder {
             guard isMultiCast, let sid = speakerId else { return nil }
             return cast.first(where: { $0.id == sid })?.name ?? character?.name
         }()
-        let nudge: String? = activeName.map { groupNudge(activeSpeakerName: $0) }
+        // Phase 10 §10.c — apply per-EXACT-model `ChatPathOverrides`.
+        //   - `groupNudgeStyle` selects which nudge text renders.
+        //   - The `.continuing` variant needs to know whether the most-
+        //     recent assistant turn was spoken by the active speaker
+        //     (X→X) — caller doesn't compute this; we walk the chat
+        //     here so it's centralised.
+        //   - `stopSequenceAugmentation` adds caller-supplied stops.
+        //   - `.stopAugment` / `.strongStop` styles auto-add per-cohabitant
+        //     `\nName:` and `Name:` stops on top.
+        let nudgeStyle = overrides.groupNudgeStyle ?? .standard
+        let xToX: Bool = {
+            guard isMultiCast, let sid = speakerId else { return false }
+            return chat.turns.reversed().first(where: { $0.role == .assistant })?.speakerId == sid
+        }()
+        let nudge: String? = activeName.map { groupNudge(activeSpeakerName: $0, style: nudgeStyle, xToX: xToX) }
         let renderedTurns: [Turn] = {
             guard isMultiCast, let sid = speakerId else { return verbatimTurns(chat) }
             return formatHistoryForSpeaker(turns: verbatimTurns(chat), activeSpeakerId: sid, cast: cast)
@@ -312,7 +347,19 @@ struct PromptBuilder {
             turns: renderedTurns,
             continuation: continuation
         )
-        return (prompt, template.stopSequences)
+        var stops = template.stopSequences
+        stops += overrides.stopSequenceAugmentation ?? []
+        if isMultiCast && (nudgeStyle == .stopAugment || nudgeStyle == .strongStop) {
+            // Cohabitant role-prefix stops, in both newline-prefixed and
+            // bare forms. Newline-prefixed catches the canonical
+            // `<turn>\nName:` shape; bare catches the model leading
+            // straight with `Name:` after the assistant prefill.
+            for c in cohabitants {
+                stops.append("\n\(c.name):")
+                stops.append("\(c.name):")
+            }
+        }
+        return (prompt, stops)
     }
 
     /// Soft cap (in characters) on the persona block before we start logging

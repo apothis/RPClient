@@ -74,6 +74,7 @@ enum TokenBudget {
         qwenThinking: Bool = false,
         speakerId: UUID? = nil,
         cast: [Character] = [],
+        overrides: ChatPathOverrides = ChatPathOverrides(),
         kobold: KoboldClient,
         completion: @escaping (PromptAssembly) -> Void
     ) {
@@ -90,7 +91,18 @@ enum TokenBudget {
             guard isMultiCast, let sid = speakerId else { return nil }
             return cast.first(where: { $0.id == sid })?.name ?? character?.name
         }()
-        let nudge: String? = activeSpeakerName.map { PromptBuilder.groupNudge(activeSpeakerName: $0) }
+        // Phase 10 §10.c — per-EXACT-model `groupNudgeStyle` override.
+        // Same X→X detection as `PromptBuilder.build`; centralised here
+        // for the production path so `TokenBudget.assemble` doesn't
+        // diverge from the test path.
+        let nudgeStyle = overrides.groupNudgeStyle ?? .standard
+        let xToX: Bool = {
+            guard isMultiCast, let sid = speakerId else { return false }
+            return chat.turns.reversed().first(where: { $0.role == .assistant })?.speakerId == sid
+        }()
+        let nudge: String? = activeSpeakerName.map {
+            PromptBuilder.groupNudge(activeSpeakerName: $0, style: nudgeStyle, xToX: xToX)
+        }
 
         // Memory block composition (system_prompt + userName line + card
         // biographical prefix + chat.memory) lives in
@@ -237,9 +249,22 @@ enum TokenBudget {
                 ctx: effectiveCtx
             )
 
+            // Phase 10 §10.c — augment template stops with per-model
+            // overrides. `stopSequenceAugmentation` is appended verbatim
+            // (caller / Settings UI sets these explicitly); the
+            // .stopAugment / .strongStop nudge styles auto-add per-
+            // cohabitant role-prefix stops on top.
+            var stops = template.stopSequences
+            stops += overrides.stopSequenceAugmentation ?? []
+            if isMultiCast && (nudgeStyle == .stopAugment || nudgeStyle == .strongStop) {
+                for c in cohabitants {
+                    stops.append("\n\(c.name):")
+                    stops.append("\(c.name):")
+                }
+            }
             completion(PromptAssembly(
                 prompt: prompt,
-                stops: template.stopSequences,
+                stops: stops,
                 usage: usage,
                 truncatedTurns: truncatedCount
             ))

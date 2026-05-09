@@ -259,7 +259,7 @@ This is the genuinely tricky case. KoboldCPP can change the model name string wh
 
 ## What's NOT in scope here
 
-- **Auto-applying fixes.** The observation log is text + remediation hints only. Fix application waits for §10.a (`ServerCapabilities` data model + per-server cache) and §10.c (chat-path consumption points).
+- **Auto-applying `thinkingPrefill` and `recommendedSamplerId` overrides** (§10.c follow-up). The chat path currently honours `groupNudgeStyle`, `stopSequenceAugmentation`, and `maxCtxCap` automatically; the other two override fields are recorded in JSON but unread until the template-signature change ships. No encoded records set them today, so the deferral is safe.
 - **Family-level inference.** "All Qwen3 variants do X" is something the user can record in the research doc as commentary, but is NOT something the storage layer encodes. Family inference is a read-time projection.
 - **Continuous-integration runs.** These smokes drive a real KoboldCPP server; they're developer-tools, not unit tests. The unit-test target (`RPClientCoreTests`) covers the harness's own logic.
 

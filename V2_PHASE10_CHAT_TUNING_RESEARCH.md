@@ -20,9 +20,10 @@ Each smoke binary calls `ModelObservationStore.append(...)` with the observation
 |---|---|---|
 | Observation | LANDED (§10.0.b–c) | smokes emit `ModelObservation` to per-model JSON; remediation hint is text-only |
 | ModelCapabilities | LANDED (§10.a) | per-EXACT-model `ChatPathOverrides` record at `model_capabilities/<sanitised>.json`; written via `swift run ModelCapsAdmin set` |
-| Auto-apply | NOT YET (§10.c) | chat path consumption points (template, sampler, stop-tokens, ctx caps) will read `ModelCapabilitiesStore.lookupOrDefault(modelName:)` and apply per-call |
+| Settings UI | LANDED (§10.b) | App menu → Model Capabilities… (⌘⇧,) — separate window, one section per model, per-section Save/Delete |
+| Auto-apply | LANDED partial (§10.c) | `groupNudgeStyle`, `stopSequenceAugmentation`, `maxCtxCap` now read from `ModelCapabilitiesStore.lookupOrDefault` in `PromptBuilder.build` (test path) and `TokenBudget.assemble` (production via AppState `effectiveContext(for:)` + `resolveOverrides(for:)`). `thinkingPrefill` and `recommendedSamplerId` consumption are §10.c follow-ups (no encoded records use them yet) |
 
-So at this point in the phase, observed quirks land in the observation log with a remediation hint, validated fixes land in the `ModelCapabilities` record, and the chat-path consumption (which actually applies overrides) waits for §10.c. The `continuing` group-nudge override for the Qwen3.6 baseline is the first concrete record in the store (encoded 2026-05-09).
+So at this point in the phase, observed quirks land in the observation log with a remediation hint, validated fixes land in the `ModelCapabilities` record, and the chat path AUTOMATICALLY applies the encoded overrides at every send. The `continuing` group-nudge override for the Qwen3.6 baseline is the first concrete record (encoded 2026-05-09); end-to-end ChatSmoke runs without `--nudge-variant` now print `[nudge-variant] from record: continuing` and the prompt rendering matches the §10.0.f validation pass (group-chat 2/3 clean, nsfw-group-scene 0/3 — fixture-design hard).
 
 ---
 

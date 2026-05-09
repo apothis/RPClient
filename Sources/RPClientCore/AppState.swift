@@ -126,6 +126,33 @@ final class AppState {
         return maxContext
     }
 
+    /// Phase 10 §10.c — per-chat effective context that consults the
+    /// active server's per-EXACT-model `maxCtxCap` override (e.g.
+    /// Llama 4 Scout's chunked-attention cap at 8192 even when the
+    /// model card claims 10M). Falls through to `effectiveContext`
+    /// when no override is set for the loaded model.
+    func effectiveContext(for chat: Chat) -> Int {
+        let base = effectiveContext
+        let overrides = resolveOverrides(for: chat)
+        guard let cap = overrides.maxCtxCap, cap > 0 else { return base }
+        return min(base, cap)
+    }
+
+    /// Phase 10 §10.c — resolve per-EXACT-model `ChatPathOverrides`
+    /// for `chat` by looking up the active server's reported model
+    /// name in `ModelCapabilitiesStore`. Returns empty defaults if
+    /// no record exists, the server profile isn't found, or its
+    /// capabilities cache hasn't been populated yet (in which case
+    /// the chat path uses global defaults until the next probe).
+    func resolveOverrides(for chat: Chat) -> ChatPathOverrides {
+        let client = registry.client(for: .general, chatOverride: chat.serverId)
+        let profile = settings.servers.first(where: { $0.baseURL == client.baseURL })
+        guard let modelName = profile?.capabilities?.modelName, !modelName.isEmpty else {
+            return ChatPathOverrides()
+        }
+        return ModelCapabilitiesStore.lookupOrDefault(modelName: modelName).overrides
+    }
+
     let registry: KoboldClientRegistry
     /// Single-voice TTS pipeline (V2_PLAN §7.0). Mirrors `settings.voiceEnabled`
     /// and reads finished assistant turns aloud through the system default
@@ -952,7 +979,11 @@ final class AppState {
             streamThinkFilter = nil
         }
         let preset = SamplerPreset.presets.first(where: { $0.id == chat.samplerPresetId }) ?? .balanced
-        let ctx = effectiveContext
+        // Phase 10 §10.c — chat-scoped ctx so the per-EXACT-model
+        // `maxCtxCap` override applies (Llama 4 Scout chunked-attention
+        // case is the canonical example; current Qwen3.6 record sets no
+        // cap, so this is a no-op for that model).
+        let ctx = effectiveContext(for: chat)
 
         // Run retrieval first (no-op if disabled or no chunks indexed yet),
         // then assemble the prompt with the retrieval block included.
@@ -1038,6 +1069,7 @@ final class AppState {
             qwenThinking: settings.qwenThinkingEnabled,
             speakerId: trailingSpeakerId,
             cast: resolvedCast,
+            overrides: resolveOverrides(for: chat),
             kobold: kobold
         ) { [weak self] assembly in
             guard let self = self else { return }
@@ -1250,12 +1282,13 @@ final class AppState {
     private func recomputeUsage() {
         guard !isStreaming, let chat = currentChat else { return }
         let preset = SamplerPreset.presets.first(where: { $0.id == chat.samplerPresetId }) ?? .balanced
-        let ctx = effectiveContext
+        let ctx = effectiveContext(for: chat)
         TokenBudget.assemble(
             chat: chat,
             effectiveCtx: ctx,
             replyReserve: preset.maxLength,
             qwenThinking: settings.qwenThinkingEnabled,
+            overrides: resolveOverrides(for: chat),
             kobold: kobold
         ) { [weak self] assembly in
             guard let self = self else { return }
