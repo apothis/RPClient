@@ -5,6 +5,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
     private var splitVC: NSSplitViewController!
     private var settingsWC: SettingsWindowController?
+    private var modelCapsWC: ModelCapabilitiesWindowController?
     private var factEvalWC: FactExtractorEvalWindow?
     private var libraryWC: LibraryWindowController?
     private var cardCreatorWCs: [CardCreatorWindowController] = []
@@ -83,6 +84,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             title: "Settings…",
             action: #selector(showSettings),
             keyEquivalent: ","))
+        // Phase 10 §10.b — separate window for per-EXACT-model
+        // overrides. Distinct from app-wide Settings because the
+        // concern is per-model, not per-app: one record per loaded
+        // model, edited / deleted in isolation per the runbook's
+        // per-EXACT-model invariant.
+        let modelCapsItem = NSMenuItem(
+            title: "Model Capabilities…",
+            action: #selector(showModelCapabilities),
+            keyEquivalent: ",")
+        modelCapsItem.keyEquivalentModifierMask = [.command, .shift]
+        appMenu.addItem(modelCapsItem)
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(NSMenuItem(
             title: "Hide RPClient",
@@ -238,6 +250,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         settingsWC?.showWindow(nil)
         settingsWC?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func showModelCapabilities() {
+        if modelCapsWC == nil {
+            modelCapsWC = ModelCapabilitiesWindowController()
+        }
+        modelCapsWC?.showWindow(nil)
+        modelCapsWC?.window?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func newChat() {
