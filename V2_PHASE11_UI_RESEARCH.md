@@ -600,6 +600,8 @@ Things this research couldn't resolve alone. Each is a subjective taste call or 
     - **(c) Both.** Sentinel for at-a-glance scannability + auto-expand for direct content access.
     Recommendation: **(c)** — both are cheap to implement and they cover different reading patterns. Land alongside §4.e.3 (Stop pill) since both touch the chat-surface's "what's happening with this turn?" feedback layer.
 
+13. **Per-character mute deferred to a follow-up phase** — surfaced 2026-05-09 while planning 4.f. V2_UI_OVERHAUL §4.4 / §C.3 calls for the chat-header voice toggle to be replaced by a per-character mute hover-icon on each assistant avatar (per-(chat, character) state, persisted on `Chat.mutedCharacterIds: Set<UUID>` or similar). Three coordinated changes — schema + codable round-trip, Speaker.swift TTS skip logic, TurnView hover-icon over avatar — meaningful enough that bundling into 4.f (which is otherwise a header-deletion sub-step) overweights the diff. The current chat-wide `Settings.voiceActive` toggle works fine and isn't blocking the chat-pane redesign; deferring to a separate sub-phase (4.k or similar) so 4.f stays focused on header cleanup. Tracked here so it's not lost.
+
 ---
 
 ## §E — Screenshot index
