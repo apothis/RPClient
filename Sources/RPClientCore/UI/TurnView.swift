@@ -622,11 +622,14 @@ final class TurnView: NSView, NSTextViewDelegate {
         replayButton.isHidden = !(role == .assistant)
         saveButton.isHidden = true
         cancelButton.isHidden = true
-        // Pager stays hidden until setVariantState reports >1 variant.
-        prevVariantButton.isHidden = true
-        nextVariantButton.isHidden = true
-        variantLabel.isHidden = true
-        discardVariantButton.isHidden = true
+        // V2_UI_OVERHAUL §4.d.1 — the variantsPill itself hides as a
+        // unit when count <= 1; its children stay visible inside it.
+        // The pre-§4.d.1 init also set isHidden on each pager button
+        // individually because they used to live in the main toolbar
+        // strip alongside other actions; that's no longer the shape,
+        // and leaving those flags as `true` left the pill rendering
+        // empty when shown. discardVariant moved to the overflow menu
+        // entirely so its visibility flag no longer affects rendering.
 
         variantLabel.font = Theme.font(11, weight: .medium)
         variantLabel.textColor = .secondaryLabelColor
@@ -1296,6 +1299,25 @@ final class TurnView: NSView, NSTextViewDelegate {
 
     func textDidChange(_ notification: Notification) {
         recomputeHeight()
+    }
+
+    /// V2_UI_OVERHAUL §4.d.1 — right-click over the text body must
+    /// produce the per-turn context menu (primary actions + overflow),
+    /// not NSTextView's default edit menu (cut/copy/paste/look up/…).
+    /// The default menu is the right surface inside an *editable* text
+    /// view (during edit mode); when we're displaying read-only prose,
+    /// the per-turn actions are what the user actually wants.
+    func textView(
+        _ view: NSTextView,
+        menu: NSMenu,
+        for event: NSEvent,
+        at charIndex: Int
+    ) -> NSMenu? {
+        if isEditing {
+            // Editing — keep AppKit's edit menu (cut/copy/paste/etc.).
+            return menu
+        }
+        return self.menu(for: event)
     }
 
     // MARK: - Hover reveal for toolbar
