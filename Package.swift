@@ -116,5 +116,25 @@ let package = Package(
             dependencies: ["RPClientCore", "SmokeFixtures"],
             path: "Sources/ChatSmoke"
         ),
+        // Phase 10 §10.0.c — summariser smoke. Drives Summarizer.run
+        // against long-history fixtures to exercise the rolling-summary
+        // side-call (and the "wrap a single user turn through PromptBuilder"
+        // pattern that all side-calls share).
+        // Run with `swift run SummariserSmoke [--fixture sfw-long] [--ctx N]`.
+        .executableTarget(
+            name: "SummariserSmoke",
+            dependencies: ["RPClientCore", "SmokeFixtures"],
+            path: "Sources/SummariserSmoke"
+        ),
+        // Phase 10 §10.0.c — director smoke. Drives DirectorPicker.next
+        // against multi-cast fixtures to exercise the speaker-router
+        // side-call (5s internal timeout, substring-match parser,
+        // round-robin fallback on nil).
+        // Run with `swift run DirectorSmoke [--fixture group-chat] [--repeats N]`.
+        .executableTarget(
+            name: "DirectorSmoke",
+            dependencies: ["RPClientCore", "SmokeFixtures"],
+            path: "Sources/DirectorSmoke"
+        ),
     ]
 )
