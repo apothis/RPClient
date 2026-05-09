@@ -65,8 +65,12 @@ final class CardMultiFieldOrchestrator {
         setState(.fetching(targetCount: fields.count))
 
         let targetsStr = fields.map(\.rawValue).joined(separator: ",")
+        let tagsList = draft.tags.joined(separator: ",")
+        let hintPreview = authorDirection?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .prefix(40) ?? ""
         DebugLog.shared.write(
-            "cardgen: mode2 fill \(fields.count) fields ← exemplar=\(request.exemplarId), targets=\(targetsStr)"
+            "cardgen: mode2 fill \(fields.count) fields ← exemplar=\(request.exemplarId), targets=\(targetsStr), tags=[\(tagsList)], hint=\"\(hintPreview)\""
         )
         let started = Date()
 
@@ -139,6 +143,17 @@ final class CardMultiFieldOrchestrator {
                 DebugLog.shared.write(
                     "cardgen: mode2 → \(proposals.count) proposals (\(totalChars)c, \(refusalCount) refusals) in \(String(format: "%.1f", dt))s"
                 )
+                // Per-field preview for parity with Mode 3 (caught
+                // contamination + name-leak bugs at a glance during
+                // §5.4.c smoke).
+                for p in proposals {
+                    let preview = p.text
+                        .replacingOccurrences(of: "\n", with: " ⏎ ")
+                        .prefix(80)
+                    DebugLog.shared.write(
+                        "cardgen: mode2 proposal[\(p.field.rawValue)] (\(p.text.count)c) = \(preview)"
+                    )
+                }
                 inFlight = nil
                 setState(.ready(proposals))
             }

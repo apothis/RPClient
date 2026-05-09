@@ -468,6 +468,148 @@ func phase9eMultiFieldTests() -> TestSuite {
         }
     }
 
+    // MARK: - Live-smoke regression pins
+    //
+    // Each test below pins a prompt-content fix made during §5.4.c live
+    // smoke. The model output that triggered the fix is in the comment.
+    // If the prompt is refactored and the fix lost, these regressions
+    // fail loudly instead of slipping through.
+
+    s.test("regression: name humanName carries SOME 'just the name, no extras' directive") {
+        // Live smoke: hint "Gemma is a 19yo courtesan" produced
+        // name="Gemma, the courtesan" until the humanName banned the
+        // suffix shape. Test asserts the *intent* is present — any of
+        // several equivalent phrasings counts. Don't pin exact wording.
+        let r = CardMultiFieldGenerator.buildRequest(for: [.name], draft: CardDraftSnapshot(tags: [], fields: [:]))
+        let lower = r.userMessage.lowercased()
+        let hasJustNameDirective = (
+            lower.contains("no occupation")
+            || lower.contains("just the name")
+            || lower.contains("name only")
+            || lower.contains("name onl")
+            || lower.contains("given name")
+        )
+        try expectTrue(
+            hasJustNameDirective,
+            "name humanName should carry SOME directive against extra-content suffixes; got: \(r.userMessage.prefix(500))"
+        )
+    }
+
+    s.test("regression: details_age humanName carries SOME 'no qualifier' directive") {
+        // Live smoke: details_age came back as "22 years old" instead
+        // of "22". Any phrasing that signals a bare-value preference is
+        // fine — don't pin the exact "Do NOT append" wording.
+        let r = CardMultiFieldGenerator.buildRequest(for: [.detailsAge], draft: CardDraftSnapshot(tags: [], fields: [:]))
+        let lower = r.userMessage.lowercased()
+        let hasNoQualifierDirective = (
+            lower.contains("years old")
+            || lower.contains("no qualifier")
+            || lower.contains("bare number")
+            || lower.contains("number only")
+            || lower.contains("do not append")
+            || lower.contains("don't append")
+        )
+        try expectTrue(
+            hasNoQualifierDirective,
+            "details_age humanName should ban the 'X years old' qualifier shape (any phrasing)"
+        )
+    }
+
+    s.test("regression: nickname humanName instructs MUST DIFFER from full name") {
+        // Live smoke: nickname duplicated name. Differ-from-name
+        // requirement must be present in some form.
+        let r = CardMultiFieldGenerator.buildRequest(for: [.nickname], draft: CardDraftSnapshot(tags: [], fields: [:]))
+        let lower = r.userMessage.lowercased()
+        try expectTrue(
+            lower.contains("must differ") || lower.contains("differ from"),
+            "nickname humanName should require the alias differ from the full name"
+        )
+    }
+
+    s.test("regression: AUTHOR DIRECTION block treats a named character as load-bearing") {
+        // Live smoke: hint with a name produced different names across
+        // runs until the block was strengthened. Test for *intent* only.
+        let r = CardMultiFieldGenerator.buildRequest(
+            for: [.description],
+            draft: CardDraftSnapshot(tags: [], fields: [:]),
+            authorDirection: "Gemma is a 19-year-old courtesan in a seedy bar"
+        )
+        try expectTrue(r.userMessage.contains("AUTHOR DIRECTION"))
+        let lower = r.userMessage.lowercased()
+        let signalsNameLoadBearing = (
+            lower.contains("must use that exact name")
+            || lower.contains("use the direction's name")
+            || lower.contains("use the named character")
+            || lower.contains("name field must")
+            || lower.contains("name verbatim")
+        )
+        try expectTrue(
+            signalsNameLoadBearing,
+            "AUTHOR DIRECTION block should signal that a named character is load-bearing on the name field"
+        )
+    }
+
+    s.test("regression: rules block carves a yield-to-AUTHOR-DIRECTION clause for name") {
+        // Live smoke: with hint "Gemma…" + example character also
+        // happening to be a Gemma-shape, the model picked a third name
+        // to satisfy the "different from example" rule. The rules
+        // block now lets AUTHOR DIRECTION override the anti-copy.
+        let r = CardMultiFieldGenerator.buildRequest(
+            for: [.name],
+            draft: CardDraftSnapshot(tags: [], fields: [:]),
+            authorDirection: "A character named Mira."
+        )
+        let lower = r.userMessage.lowercased()
+        let hasYieldClause = (
+            lower.contains("unless the author direction")
+            || lower.contains("unless author direction")
+            || lower.contains("author direction overrides")
+            || lower.contains("author direction takes precedence")
+        )
+        try expectTrue(
+            hasYieldClause,
+            "Rules block should yield the 'different name from example' constraint to AUTHOR DIRECTION (any phrasing)"
+        )
+    }
+
+    s.test("regression: schema rejects single-char punctuation for details_age via pattern not minLength") {
+        // Live smoke: with minLength=1 and no pattern the model emitted
+        // "," for details_age. Pattern requires bare integer or short
+        // descriptor — no punctuation-only output passes.
+        let r = CardMultiFieldGenerator.buildRequest(for: [.detailsAge], draft: CardDraftSnapshot(tags: [], fields: [:]))
+        let obj = try JSONSerialization.jsonObject(with: r.schemaJSON) as! [String: Any]
+        let prop = try expectNotNil((obj["properties"] as! [String: Any])["details_age"] as? [String: Any])
+        let pattern = try expectNotNil(prop["pattern"] as? String)
+        let regex = try NSRegularExpression(pattern: pattern)
+        func matches(_ s: String) -> Bool {
+            let r = NSRange(s.startIndex..., in: s)
+            guard let m = regex.firstMatch(in: s, range: r) else { return false }
+            return m.range == r
+        }
+        // The exact failure mode caught live:
+        try expectFalse(matches(","), "punctuation-only ',' must be rejected (live smoke value)")
+        try expectFalse(matches("."), "punctuation-only '.' must be rejected")
+        try expectFalse(matches("?"), "punctuation-only '?' must be rejected")
+    }
+
+    s.test("regression: short Identity fields don't have an 8-char minLength forcing padding") {
+        // Live smoke: minLength=8 forced details_sex → "Female: she/her"
+        // (15c) and nickname → "Gemma, the courtesan" (20c, duplicate
+        // of name). Both stretched to satisfy the 8-char floor.
+        let r = CardMultiFieldGenerator.buildRequest(
+            for: [.detailsSex, .nickname, .detailsPronouns, .detailsSpecies, .detailsOrientation],
+            draft: CardDraftSnapshot(tags: [], fields: [:])
+        )
+        let obj = try JSONSerialization.jsonObject(with: r.schemaJSON) as! [String: Any]
+        let properties = obj["properties"] as! [String: Any]
+        for fieldName in ["details_sex", "nickname", "details_pronouns",
+                          "details_species", "details_orientation"] {
+            let prop = try expectNotNil(properties[fieldName] as? [String: Any])
+            let minLen = try expectNotNil(prop["minLength"] as? Int)
+            try expectLessThan(minLen, 8)   // anything 8+ regresses to padding behavior
+        }
+    }
+
     s.test("buildRequest emits draft.tags into the upstream block for tag-dependent fields") {
         // Re-rolls of narrative fields like description / personality
         // depend on .tags upstream — without this, a re-roll of

@@ -68,6 +68,13 @@ final class CardCreatorViewController: NSViewController {
     private let autoButton = NSButton(title: "Generate full card", target: nil, action: nil)
     private let autoSpinner = NSProgressIndicator()
 
+    /// Status row between the header separator and the tab strip,
+    /// surfaced only during a Mode 3 run. Replaces the cramped cost
+    /// readout that used to live on the autoButton title.
+    private let autopilotStatusBar = NSStackView()
+    private let autopilotStatusLabel = NSTextField(labelWithString: "")
+    private let autopilotCancelButton = NSButton(title: "Cancel", target: nil, action: nil)
+
     private let tabView = NSTabView()
     private let serverPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let modelLabel = NSTextField(labelWithString: "")
@@ -254,12 +261,26 @@ final class CardCreatorViewController: NSViewController {
         // state (after a Mode-2 fill returns).
         buildProposalBanner(in: root)
 
+        // Phase 9 §5.4.d — Mode 3 status row. Visible only while an
+        // autopilot run is in flight; carries a readable cost/budget
+        // breakdown plus a Cancel button. Replaces the cramped cost
+        // readout that used to live on the autoButton title.
+        buildAutopilotStatusBar(in: root)
+
         root.addSubview(tabView)
 
         guard let separator = root.subviews.first(where: { $0.identifier?.rawValue == "CardCreator.headerSeparator" }) else { return }
 
         NSLayoutConstraint.activate([
-            proposalBanner.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: DesignTokens.Spacing.sm),
+            autopilotStatusBar.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: DesignTokens.Spacing.sm),
+            autopilotStatusBar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: DesignTokens.Spacing.lg),
+            autopilotStatusBar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -DesignTokens.Spacing.lg),
+
+            // proposalBanner sits below status bar (or below separator
+            // when status bar is hidden — the ≥ relation lets it float
+            // up).
+            proposalBanner.topAnchor.constraint(greaterThanOrEqualTo: separator.bottomAnchor, constant: DesignTokens.Spacing.sm),
+            proposalBanner.topAnchor.constraint(equalTo: autopilotStatusBar.bottomAnchor, constant: DesignTokens.Spacing.sm),
             proposalBanner.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: DesignTokens.Spacing.lg),
             proposalBanner.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -DesignTokens.Spacing.lg),
 
@@ -303,6 +324,35 @@ final class CardCreatorViewController: NSViewController {
         proposalBanner.addArrangedSubview(cancelFillButton)
         proposalBanner.isHidden = true
         root.addSubview(proposalBanner)
+    }
+
+    private func buildAutopilotStatusBar(in root: NSView) {
+        autopilotStatusLabel.font = DesignTokens.Typography.subheadline
+        autopilotStatusLabel.textColor = DesignTokens.Foreground.secondary
+        autopilotStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+        autopilotStatusLabel.lineBreakMode = .byTruncatingTail
+
+        autopilotCancelButton.bezelStyle = .rounded
+        autopilotCancelButton.controlSize = .small
+        autopilotCancelButton.target = self
+        autopilotCancelButton.action = #selector(autopilotCancelClicked)
+        autopilotCancelButton.toolTip = "Stop the in-flight Mode 3 autopilot run. Any partial proposals collected so far still surface in the review sheet."
+
+        autopilotStatusBar.orientation = .horizontal
+        autopilotStatusBar.alignment = .centerY
+        autopilotStatusBar.spacing = DesignTokens.Spacing.sm
+        autopilotStatusBar.translatesAutoresizingMaskIntoConstraints = false
+        autopilotStatusBar.addArrangedSubview(autopilotStatusLabel)
+        autopilotStatusBar.addArrangedSubview(NSView())  // spacer
+        autopilotStatusBar.addArrangedSubview(autopilotCancelButton)
+        autopilotStatusBar.isHidden = true
+        root.addSubview(autopilotStatusBar)
+    }
+
+    @objc private func autopilotCancelClicked() {
+        autopilotOrchestrator?.cancel()
+        // .cancel sets state to .idle which routes through
+        // handleAutopilotState → resetAutopilotChrome, hiding the bar.
     }
 
     private func collectAIAssistableFields() {
@@ -482,15 +532,14 @@ final class CardCreatorViewController: NSViewController {
         case .idle:
             resetAutopilotChrome()
         case .running(let pass, let completed, let total, let calls, let tokens):
-            // Cost bar in the title per V2_PHASE9_CARD_CREATOR §4.8 ask
-            // ("Mode 3: 4 of 7 passes, 2.3k tokens"). 16k is the default
-            // ceiling; when authors raise the budget the denominator
-            // updates automatically since we read it from the running
-            // ctx via .running's tokens param. Format: "Pass N/M
-            // (label) · 4.8k/16k tok · 4/10 calls".
+            // §5.4.d — cost/budget breakdown lives on the dedicated
+            // status bar now (was crammed onto the autoButton title).
+            // Format: "Pass N/M (label) · 4.8k/16k tok · 4/10 calls".
             let tokK = String(format: "%.1fk", Double(tokens) / 1000.0)
             let ceilK = String(format: "%.0fk", Double(CardAutopilotBudget.default.maxTokens) / 1000.0)
-            autoButton.title = "Pass \(completed + 1)/\(total) (\(passLabel(pass))) · \(tokK)/\(ceilK) tok · \(calls)/\(CardAutopilotBudget.default.maxCalls) calls"
+            autopilotStatusLabel.stringValue = "Mode 3 autopilot — Pass \(completed + 1)/\(total) (\(passLabel(pass))) · \(tokK)/\(ceilK) tok · \(calls)/\(CardAutopilotBudget.default.maxCalls) calls"
+            autopilotStatusBar.isHidden = false
+            autoButton.title = "Generating…"
             autoButton.toolTip = "Mode 3 autopilot in flight. Sequential json_schema passes against the per-window card-gen server."
         case .completed(let proposals):
             DebugLog.shared.write("cardgen: mode3 ✓ run done — \(proposals.count) proposals")
@@ -520,6 +569,8 @@ final class CardCreatorViewController: NSViewController {
         autoButton.title = "Generate full card"
         autoButton.toolTip = nil
         autoSpinner.stopAnimation(nil)
+        autopilotStatusBar.isHidden = true
+        autopilotStatusLabel.stringValue = ""
         fillButton.isEnabled = true
     }
 
@@ -700,7 +751,15 @@ final class CardCreatorViewController: NSViewController {
         let proposing = aiAssistableFields.filter { $0.1.isShowingProposal }
         let count = proposing.count
         proposalBanner.isHidden = count == 0
-        let label = count == 1 ? "1 field proposed" : "\(count) fields proposed"
+        // Active voice + action hint per §5.4.d smoke polish — passive
+        // "N fields proposed" didn't tell authors what the buttons mean
+        // or that per-field controls exist on each row below.
+        let label: String
+        if count == 1 {
+            label = "1 AI suggestion ready — review below, or use bulk actions →"
+        } else {
+            label = "\(count) AI suggestions ready — review below, or use bulk actions →"
+        }
         proposalBannerLabel.stringValue = label
     }
 

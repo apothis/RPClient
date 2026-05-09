@@ -190,7 +190,7 @@ final class CardSuggestionsController {
                 )
             } else {
                 DebugLog.shared.write(
-                    "cardgen: gen \(request.field.rawValue) [\(request.style.rawValue)] → \(candidate.text.count)c in \(String(format: "%.1f", dt))s"
+                    "cardgen: gen \(request.field.rawValue) [\(request.style.rawValue)] → \(candidate.text.count)c in \(String(format: "%.1f", dt))s | \(snippet)"
                 )
             }
             ctx.candidates.append(candidate)

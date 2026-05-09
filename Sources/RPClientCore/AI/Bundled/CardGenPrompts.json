@@ -24,7 +24,7 @@
       "wordCount": 2
     },
     "nickname": {
-      "humanName": "casual short alias (1-3 words). Either a shortening of the full name ('Vex' for 'Vexara', 'Gem' for 'Gemma') OR a non-intimate sensory/visual tag rooted in something specific about the character ('the curly-haired one', 'sparrow', 'redshirt', 'star-eyes'). MUST DIFFER from the full name. Avoid generic terms of endearment ('sweetheart', 'princess', 'darling') unless the character's role / setting genuinely calls for one.",
+      "humanName": "casual short alias (1-3 words) that fits the character's voice and setting — could be a shortening of the full name, a callsign, a sensory tag, an inherited sobriquet, anything that feels native. MUST DIFFER from the full name.",
       "wordCount": 2
     },
     "description": {
