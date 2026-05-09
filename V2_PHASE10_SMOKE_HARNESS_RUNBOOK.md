@@ -76,8 +76,7 @@ All smokes live in `Sources/<Name>Smoke/`. Each is an executable target; each wr
 | `ExtractorSmoke` | `FactExtractor.run` | `sfw-long` (15-user-turn window); validates GBNF JSON-mode response shape + non-emptiness |
 | `BlurberSmoke` | `ContextBlurber.run` | `sfw-long` mid-chat 3-turn synthetic chunk; checks 1–2 short factual sentences (no thinking-trace leak, no refusal) |
 | `EmbedSmoke` | `KoboldClient.embed` | `sfw-short` first 8 turns; smallest harness — confirms `/v1/embeddings` reachable + consistent dimensionality |
-
-§10.0.e adds: `SmokeAll` (aggregate runner with diff-against-prior-report).
+| `SmokeAll` | sub-process all of the above; snapshot per-model log to `smoke-reports/<sanitised>-<ts>.json` | full suite, in fixed order; `--diff <prior>` for regression detection across runs |
 
 ### Default invocation (Claude does this on "run the smokes")
 
@@ -85,16 +84,26 @@ All smokes live in `Sources/<Name>Smoke/`. Each is an executable target; each wr
 # 1. Confirm server is reachable + capture model name.
 curl -s --max-time 5 http://192.168.1.201:5001/api/v1/model
 
-# 2. Run each smoke in sequence. They each write to the per-model log on completion.
+# 2. (Preferred — single-command path; §10.0.e.) Build once, run all six smokes,
+#    write per-model snapshot to smoke-reports/<sanitised>-<ts>.json.
+swift build && swift run SmokeAll
+
+# 2-alt. (Per-smoke breakout — useful when iterating on a single surface.)
 swift run ChatSmoke
 swift run SummariserSmoke
 swift run DirectorSmoke --repeats 3
 swift run ExtractorSmoke
 swift run BlurberSmoke
 swift run EmbedSmoke
+
+# 3. Optional: diff against a prior snapshot to highlight regressions /
+#    fixes / detail drift. Identical model name (variant unchanged) is
+#    typical; cross-model diff is informative but per-model fix decisions
+#    still stay isolated per the runbook's per-EXACT-model invariant.
+swift run SmokeAll --diff "$HOME/Library/Application Support/RPClient/smoke-reports/<prior-snapshot>.json"
 ```
 
-Each smoke takes ~5-30s warm. Full §10.0.b–d suite end-to-end currently ~30-60s. (`SmokeAll` aggregate runner replaces this manual loop with one command in §10.0.e.)
+Full suite end-to-end is ~25s warm against Qwen3.6 on the user's hardware.
 
 ### Targeted invocations
 
@@ -260,6 +269,8 @@ This is the genuinely tricky case. KoboldCPP can change the model name string wh
 | `Sources/SmokeFixtures/ModelObservationLog.swift` | per-EXACT-model observation store |
 | `Sources/SmokeFixtures/QuirkDetectors.swift` | rule-based weirdness detectors |
 | `Sources/{Chat,Summariser,Director,Extractor,Blurber,Embed}Smoke/main.swift` | per-surface smoke runners |
+| `Sources/SmokeAll/main.swift` | aggregate runner; sub-processes each smoke, snapshots per-model log, supports `--diff` |
+| `~/Library/Application Support/RPClient/smoke-reports/<sanitised>-<ts>.json` | per-run snapshot (frozen view of post-run observation log; diff-able across runs) |
 | `~/Library/Application Support/RPClient/smoke-observations/<sanitised>.json` | per-EXACT-model observation log |
 | `V2_PHASE10_CHAT_TUNING_RESEARCH.md` | per-model findings + fix-registry roadmap |
 | (future) `~/Library/Application Support/RPClient/server_capabilities/<sanitised>.json` | per-EXACT-model capability cache (§10.a) |

@@ -163,5 +163,16 @@ let package = Package(
             dependencies: ["RPClientCore", "SmokeFixtures"],
             path: "Sources/EmbedSmoke"
         ),
+        // Phase 10 §10.0.e — aggregate runner. Spawns each per-surface
+        // smoke as a sub-process, captures timing + exit, snapshots the
+        // per-EXACT-model observation log to smoke-reports/<name>-<ts>.json,
+        // and supports `--diff <prior>` for regression detection across
+        // runs (or across model swaps).
+        // Run with `swift build && swift run SmokeAll`.
+        .executableTarget(
+            name: "SmokeAll",
+            dependencies: ["RPClientCore", "SmokeFixtures"],
+            path: "Sources/SmokeAll"
+        ),
     ]
 )

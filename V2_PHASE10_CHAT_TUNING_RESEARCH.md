@@ -69,7 +69,8 @@ So at this point in the phase, observed quirks land in the log with a remediatio
 **Pending probes against this model (next session):**
 - A retry of the role-confusion fixtures with the proposed mitigations (stop-sequence augmentation; stronger nudge wording) — to validate the candidate fixes before encoding them in ServerCapabilities.
 - A repeat ChatSmoke pass with `--verbose` so per-token cadence is captured (probe candidate P4 from `V2_PHASE10_CHAT_TUNING_SCOPING.md` §2.3).
-- §10.0.e SmokeAll aggregate runner so the whole suite runs in one command + produces the consolidated JSON report shape that ServerCapabilities will consume.
+
+**§10.0.e SmokeAll baseline:** full suite (6 sub-processed smokes) lands at ~25s warm against this server; snapshots write to `smoke-reports/<sanitised>-<ts>.json`. `--diff <prior-snapshot>` confirmed working — caught a real-model nondeterminism shift on the `ChatSmoke|group-chat|short-reply` quirk between consecutive runs (ratio drifted 0.18 → 0.20). The diff layer flags `NEW`, `GONE`, `CHANGED` per dedupe key — exactly the input shape §10.a's `ServerCapabilities` regression-detection consumer needs.
 
 ---
 
