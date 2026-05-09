@@ -1170,17 +1170,41 @@ final class AppState {
                         // the same append path so observers see it.
                         if var filter = self.streamThinkFilter {
                             let tail = filter.flush()
+                            // Phase 11 §D.11 (option 2) — preserve the
+                            // captured `<think>…</think>` trace on the
+                            // active variant so TurnView's disclosure
+                            // pill has data to surface. Whitespace-only
+                            // (Qwen3 empty pre-fill) and unset cases
+                            // both leave the field nil; the chat surface
+                            // hides the pill when nil so empty pre-fills
+                            // stay quiet. `text` itself never sees the
+                            // trace — downstream consumers (chunker,
+                            // summariser, retrieval, TTS) keep working
+                            // off the same clean prose they always have.
+                            let trace = filter.capturedTrace.trimmingCharacters(
+                                in: .whitespacesAndNewlines
+                            )
                             self.streamThinkFilter = nil
                             self.isThinking = false
-                            if !tail.isEmpty,
-                               let id = self.currentChatId,
+                            if let id = self.currentChatId,
                                let idx = self.chats.firstIndex(where: { $0.id == id }),
                                let lastIdx = self.chats[idx].turns.indices.last,
                                self.chats[idx].turns[lastIdx].role == .assistant {
-                                self.chats[idx].turns[lastIdx].appendToActiveVariant(tail)
-                                NotificationCenter.default.post(
-                                    name: AppNotification.streamTokenAppended, object: tail
-                                )
+                                if !tail.isEmpty {
+                                    self.chats[idx].turns[lastIdx].appendToActiveVariant(tail)
+                                    NotificationCenter.default.post(
+                                        name: AppNotification.streamTokenAppended, object: tail
+                                    )
+                                }
+                                if !trace.isEmpty {
+                                    let active = self.chats[idx].turns[lastIdx].activeVariant
+                                    if self.chats[idx].turns[lastIdx].variants.indices.contains(active) {
+                                        self.chats[idx].turns[lastIdx].variants[active].thinkingTrace = trace
+                                        DebugLog.shared.write(
+                                            "[chat-pane] thinkingTrace persisted (\(trace.count) chars) on variant \(active)"
+                                        )
+                                    }
+                                }
                             }
                         }
                         // Stream-level network error fast-paths the offline alert

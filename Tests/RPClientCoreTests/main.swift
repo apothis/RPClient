@@ -81,6 +81,8 @@ let suites: [TestSuite] = [
     phase11ItalicTintTests(),
     phase11ThinkDisclosureHeightTests(),
     phase11UserDisplayNameTests(),
+    phase11ThinkTraceCaptureTests(),
+    phase11ThinkTracePersistenceTests(),
 ]
 
 // `TestRunner.run` is `@MainActor`-isolated so test bodies can drive

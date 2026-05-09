@@ -33,6 +33,16 @@ struct ThinkBlockFilter {
     /// padding to leak through as if it were reply content.
     private var trimLeadingWhitespaceOnNextChunk: Bool = false
 
+    /// Phase 11 §D.11 (option 2) — content accumulated between
+    /// `<think>` and `</think>`. Captured verbatim (no trimming) so the
+    /// caller can decide whether the trace is meaningful (Qwen3's
+    /// empty pre-fill is whitespace-only and routinely no-op'd here).
+    /// Default empty; populated when the filter sees a complete or
+    /// flushed think block. Read by `AppState.appendStreamToken`'s
+    /// finish handler and routed into `Turn.thinkingTrace` so the
+    /// disclosure pill in TurnView has data to surface.
+    private(set) var capturedTrace: String = ""
+
     /// True while the model is mid-`<think>` block. Drives the UI
     /// "thinking…" indicator. Stays false during `.waiting` (we don't yet
     /// know whether thinking is happening) and `.done` (it's over or never
@@ -62,6 +72,11 @@ struct ThinkBlockFilter {
         case .inside:
             buf += chunk
             guard let r = buf.range(of: "</think>") else { return "" }
+            // Capture the trace BEFORE clearing buf — everything from
+            // the start of the inside-state buffer to just before
+            // </think>. Multi-chunk traces accumulate naturally
+            // because buf has been growing chunk-by-chunk.
+            capturedTrace = String(buf[..<r.lowerBound])
             let after = buf[r.upperBound...]
             buf = ""
             state = .done
@@ -118,7 +133,10 @@ struct ThinkBlockFilter {
         case .inside:
             // No close tag ever arrived. Nothing inside the think block is
             // meant to be displayed — surface a marker so the user sees the
-            // reply was malformed rather than silently empty.
+            // reply was malformed rather than silently empty. Phase 11
+            // §D.11 — also keep what we captured so the disclosure pill
+            // can show the partial trace.
+            capturedTrace = buf
             buf = ""
             state = .done
             return "[unterminated <think> block — reply suppressed]"

@@ -315,6 +315,11 @@ final class TurnView: NSView, NSTextViewDelegate {
     /// block (or only an empty pre-fill, per Phase 10's finding).
     private var thinkingText: String?
     private var thinkingExpanded: Bool = false
+    /// Phase 11 §D.11 — trace captured from the active variant at init
+    /// time. Preferred over `Markdown.extractThinking(rawText)` when
+    /// non-nil; the inline-extractor stays as a fallback for legacy
+    /// chats whose text still has `<think>` tags embedded.
+    private let persistedThinkingTrace: String?
     private let thinkPill = NSButton()
     private let thinkBodyView = NSTextField(wrappingLabelWithString: "")
     /// Bubble's top constraint, kept as an ivar so the disclosure
@@ -354,6 +359,12 @@ final class TurnView: NSView, NSTextViewDelegate {
         self.rawText = turn.text
         self.turnTs = turn.ts
         self.multiCast = multiCast
+        // Phase 11 §D.11 (option 2) — read the trace from the active
+        // variant. Falls back through the `<think>` extractor below
+        // for legacy chats that have the tags inline in `text`.
+        self.persistedThinkingTrace = turn.variants.indices.contains(turn.activeVariant)
+            ? turn.variants[turn.activeVariant].thinkingTrace
+            : nil
 
         copyButton = TurnView.makeIconButton(symbol: "doc.on.doc", tooltip: "Copy")
         replayButton = TurnView.makeIconButton(symbol: "speaker.wave.2", tooltip: "Replay audio")
@@ -1063,9 +1074,13 @@ final class TurnView: NSView, NSTextViewDelegate {
         if role == .assistant {
             // V2_UI_OVERHAUL §4.7 — split think trace from prose so
             // the trace can surface in the disclosure pill while the
-            // textView renders only the prose.
+            // textView renders only the prose. Phase 11 §D.11 — prefer
+            // the side-channel `persistedThinkingTrace` (captured by
+            // the streaming filter and stored on the active variant);
+            // the inline extractor is the legacy fallback for chats
+            // whose `text` still has tags embedded.
             let extracted = Markdown.extractThinking(rawText)
-            thinkingText = extracted.think
+            thinkingText = persistedThinkingTrace ?? extracted.think
             display = extracted.body
         } else {
             thinkingText = nil

@@ -26,6 +26,16 @@ struct TurnVariant: Codable, Identifiable, Equatable {
     /// decode time) and on hand-edited entries with no recorded provenance —
     /// treated as not-stale because we genuinely can't tell.
     var contextFingerprint: String?
+    /// Phase 11 §D.11 (option 2) — the model's `<think>…</think>`
+    /// reasoning trace, captured by `ThinkBlockFilter` at stream time
+    /// and preserved alongside the variant's prose. `text` stays clean
+    /// (the streaming filter strips the trace before it reaches `text`),
+    /// so downstream consumers — chunker, summariser, retrieval, TTS —
+    /// see no change. The chat-pane's disclosure pill (V2_UI_OVERHAUL
+    /// §4.7) reads this field; nil hides the pill. Per-variant so a
+    /// regen produces a new trace alongside the new prose; swiping
+    /// between variants surfaces the matching reasoning.
+    var thinkingTrace: String?
 
     init(
         id: UUID = UUID(),
@@ -33,7 +43,8 @@ struct TurnVariant: Codable, Identifiable, Equatable {
         edited: Bool = false,
         ts: Date = Date(),
         samplerPresetId: String? = nil,
-        contextFingerprint: String? = nil
+        contextFingerprint: String? = nil,
+        thinkingTrace: String? = nil
     ) {
         self.id = id
         self.text = text
@@ -41,6 +52,7 @@ struct TurnVariant: Codable, Identifiable, Equatable {
         self.ts = ts
         self.samplerPresetId = samplerPresetId
         self.contextFingerprint = contextFingerprint
+        self.thinkingTrace = thinkingTrace
     }
 }
 
