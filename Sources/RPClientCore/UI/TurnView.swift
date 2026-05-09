@@ -33,6 +33,33 @@ protocol TurnViewDelegate: AnyObject {
     func turnViewDidRequestReplayAudio(_ view: TurnView)
 }
 
+/// V2_UI_OVERHAUL §4.0.d / §4.d.2 — capsule-styled pill background that
+/// auto-adapts to light/dark + popover-active states. Used by the
+/// variants pill and branches pill. `accentBackground = true` flips
+/// the fill to a translucent accent for "popover is anchored to me"
+/// (only the branches pill uses this today; variants leaves it false).
+final class CapsulePill: NSStackView {
+    var accentBackground: Bool = false {
+        didSet {
+            guard oldValue != accentBackground else { return }
+            needsDisplay = true
+        }
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        // Resolved at draw time so light/dark switches the fill
+        // correctly. The pre-§4.e.1.fixup code assigned
+        // controlBackgroundColor.cgColor once at init, which froze the
+        // colour to whichever appearance the view was created in.
+        let bg: NSColor = accentBackground
+            ? NSColor.controlAccentColor.withAlphaComponent(0.18)
+            : NSColor.controlBackgroundColor
+        layer?.backgroundColor = bg.cgColor
+    }
+}
+
 private final class FocusAwareTextView: NSTextView {
     var onBecomeFirstResponder: (() -> Void)?
     var onResignFirstResponder: (() -> Void)?
@@ -95,7 +122,7 @@ final class TurnView: NSView, NSTextViewDelegate {
     /// the toolbar so it can be always-visible (not hover-revealed)
     /// per the spec. Wraps `prevVariantButton` + `variantLabel` +
     /// `nextVariantButton`.
-    private let variantsPill = NSStackView()
+    private let variantsPill = CapsulePill()
     /// V2_UI_OVERHAUL §4.d.1 — `⋯` button at the trailing edge of the
     /// hover bar; opens a popup menu of secondary actions per role.
     /// Right-click on the row produces the same menu plus the primary
@@ -132,7 +159,7 @@ final class TurnView: NSView, NSTextViewDelegate {
     /// NSButton with bezelStyle=.inline + a custom layer background
     /// fights AppKit's built-in inline-button rendering and produces
     /// inconsistent intrinsic widths.
-    private let branchesPill = NSStackView()
+    private let branchesPill = CapsulePill()
     /// Backing label for `branchesPill`; updated by updateBranchesPill.
     private let branchesLabel = NSTextField(labelWithString: "")
     /// V2_UI_OVERHAUL §4.d.2 — horizontal NSStackView that wraps the
@@ -234,14 +261,12 @@ final class TurnView: NSView, NSTextViewDelegate {
     /// clicked. Mirrors the pre-§4.d.2 setBranchPopoverOpen behaviour
     /// from when this lived on the gutter glyph.
     func setBranchPopoverOpen(_ open: Bool) {
-        if open {
-            branchesLabel.textColor = .controlAccentColor
-            branchesPill.layer?.backgroundColor = NSColor.controlAccentColor
-                .withAlphaComponent(0.18).cgColor
-        } else {
-            branchesLabel.textColor = .secondaryLabelColor
-            branchesPill.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-        }
+        // CapsulePill's updateLayer reads `accentBackground` and picks
+        // the matching fill (light/dark-adaptive). Label colour stays
+        // explicit since NSTextField doesn't share the same layer-redraw
+        // story — the labelColor token already adapts to appearance.
+        branchesLabel.textColor = open ? .controlAccentColor : .secondaryLabelColor
+        branchesPill.accentBackground = open
     }
 
     func setVariantState(active: Int, count: Int, activeIsStale: Bool = false) {
@@ -655,8 +680,10 @@ final class TurnView: NSView, NSTextViewDelegate {
         branchesPill.spacing = 0
         branchesPill.translatesAutoresizingMaskIntoConstraints = false
         branchesPill.wantsLayer = true
-        branchesPill.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         branchesPill.layer?.cornerRadius = 11
+        // Background fill is owned by CapsulePill.updateLayer so it
+        // adapts to light/dark and the popover-active accent flip
+        // automatically (setBranchPopoverOpen toggles accentBackground).
         branchesPill.edgeInsets = NSEdgeInsets(
             top: 0,
             left: DesignTokens.Spacing.sm,
@@ -713,8 +740,9 @@ final class TurnView: NSView, NSTextViewDelegate {
         variantsPill.alignment = .centerY
         variantsPill.translatesAutoresizingMaskIntoConstraints = false
         variantsPill.wantsLayer = true
-        variantsPill.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         variantsPill.layer?.cornerRadius = 11
+        // Background fill is owned by CapsulePill.updateLayer so it
+        // adapts to light/dark and any popover-active flip automatically.
         variantsPill.edgeInsets = NSEdgeInsets(
             top: 0,
             left: DesignTokens.Spacing.sm,

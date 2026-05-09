@@ -21,7 +21,7 @@ struct SamplerPreset: Codable, Equatable {
         minP: 0.05,
         repPen: 1.07,
         repPenRange: 1024,
-        maxLength: 2048,
+        maxLength: 4096,
         samplerOrder: [6, 0, 1, 3, 4, 2, 5]
     )
 
@@ -34,7 +34,7 @@ struct SamplerPreset: Codable, Equatable {
         minP: 0.02,
         repPen: 1.05,
         repPenRange: 1024,
-        maxLength: 2048,
+        maxLength: 4096,
         samplerOrder: [6, 0, 1, 3, 4, 2, 5]
     )
 
@@ -47,7 +47,7 @@ struct SamplerPreset: Codable, Equatable {
         minP: 0.1,
         repPen: 1.1,
         repPenRange: 1024,
-        maxLength: 2048,
+        maxLength: 4096,
         samplerOrder: [6, 0, 1, 3, 4, 2, 5]
     )
 
