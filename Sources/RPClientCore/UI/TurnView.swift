@@ -82,6 +82,21 @@ final class TurnView: NSView, NSTextViewDelegate {
     private let avatar = NSImageView()
 
     private let toolbar = NSStackView()
+    /// V2_UI_OVERHAUL §4.d.1 — vertical stack housing
+    /// `[variantsPill, toolbar]` below the bubble. NSStackView handles
+    /// hidden-subview collapsing so we don't have to dynamically swap
+    /// constraints when the variant pager appears/disappears.
+    private let belowBubbleStack = NSStackView()
+    /// V2_UI_OVERHAUL §4.0.d — `◀ N/M ▶` capsule pill, broken out of
+    /// the toolbar so it can be always-visible (not hover-revealed)
+    /// per the spec. Wraps `prevVariantButton` + `variantLabel` +
+    /// `nextVariantButton`.
+    private let variantsPill = NSStackView()
+    /// V2_UI_OVERHAUL §4.d.1 — `⋯` button at the trailing edge of the
+    /// hover bar; opens a popup menu of secondary actions per role.
+    /// Right-click on the row produces the same menu plus the primary
+    /// actions, mirroring native macOS context-menu convention.
+    private let overflowButton: NSButton
     private let copyButton: NSButton
     private let replayButton: NSButton
     private let editButton: NSButton
@@ -229,11 +244,14 @@ final class TurnView: NSView, NSTextViewDelegate {
             variantLabel.stringValue = ""
             variantLabel.toolTip = nil
         }
+        // V2_UI_OVERHAUL §4.0.d / §4.d.1 — variants pill is the
+        // capsule-styled `◀ N/M ▶` block; visible whenever count > 1
+        // on an assistant turn (always-visible, not hover-revealed).
+        // Discard moves to the overflow popup, so it's no longer
+        // toggled here. The underlying buttons inside the pill stay
+        // shown; the pill itself is what hides/shows.
         let show = role == .assistant && count > 1
-        prevVariantButton.isHidden = !show
-        variantLabel.isHidden = !show
-        nextVariantButton.isHidden = !show
-        discardVariantButton.isHidden = !show
+        variantsPill.isHidden = !show
         refreshVariantPagerEnabled()
     }
 
@@ -335,6 +353,10 @@ final class TurnView: NSView, NSTextViewDelegate {
     /// tests; changes here require updating the test values too so
     /// the contract stays explicit.
     static let thinkPillHeight: CGFloat = 20
+    /// V2_UI_OVERHAUL §4.d.1 — variants pill capsule height (matches
+    /// the per-button toolbar height so they read as siblings on the
+    /// same row when both are visible).
+    static let variantsPillHeight: CGFloat = 22
 
     /// Pure height math for the disclosure area above the bubble.
     /// Total extra row height contributed by the disclosure (and its
@@ -379,6 +401,7 @@ final class TurnView: NSView, NSTextViewDelegate {
         deleteButton = TurnView.makeIconButton(symbol: "trash", tooltip: "Delete")
         saveButton = TurnView.makeIconButton(symbol: "checkmark", tooltip: "Save (⌘↵)")
         cancelButton = TurnView.makeIconButton(symbol: "xmark", tooltip: "Cancel (esc)")
+        overflowButton = TurnView.makeIconButton(symbol: "ellipsis", tooltip: "More actions")
         prevVariantButton = TurnView.makeIconButton(symbol: "chevron.left", tooltip: "Previous variant (⌘←)")
         nextVariantButton = TurnView.makeIconButton(symbol: "chevron.right", tooltip: "Next variant (⌘→)")
         discardVariantButton = TurnView.makeIconButton(symbol: "minus.circle", tooltip: "Discard this variant")
@@ -572,6 +595,7 @@ final class TurnView: NSView, NSTextViewDelegate {
         deleteButton.target = self;   deleteButton.action   = #selector(deleteTapped)
         saveButton.target = self;     saveButton.action     = #selector(saveTapped)
         cancelButton.target = self;   cancelButton.action   = #selector(cancelTapped)
+        overflowButton.target = self; overflowButton.action = #selector(overflowTapped)
         prevVariantButton.target = self; prevVariantButton.action = #selector(prevVariantTapped)
         nextVariantButton.target = self; nextVariantButton.action = #selector(nextVariantTapped)
         discardVariantButton.target = self; discardVariantButton.action = #selector(discardVariantTapped)
@@ -612,18 +636,67 @@ final class TurnView: NSView, NSTextViewDelegate {
         // active index changes.
         variantLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 30).isActive = true
 
+        // V2_UI_OVERHAUL §4.d.1 — variants pill is broken out of the
+        // toolbar and is ALWAYS visible (not hover-revealed) when
+        // variantCount > 1. Capsule background, `controlBackgroundColor`,
+        // tucks under the bubble's leading edge.
+        variantsPill.orientation = .horizontal
+        variantsPill.spacing = DesignTokens.Spacing.xs
+        variantsPill.alignment = .centerY
+        variantsPill.translatesAutoresizingMaskIntoConstraints = false
+        variantsPill.wantsLayer = true
+        variantsPill.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        variantsPill.layer?.cornerRadius = 11
+        variantsPill.edgeInsets = NSEdgeInsets(
+            top: 0,
+            left: DesignTokens.Spacing.sm,
+            bottom: 0,
+            right: DesignTokens.Spacing.sm
+        )
+        variantsPill.addArrangedSubview(prevVariantButton)
+        variantsPill.addArrangedSubview(variantLabel)
+        variantsPill.addArrangedSubview(nextVariantButton)
+        variantsPill.isHidden = true   // setVariantState reveals it
+
+        // V2_UI_OVERHAUL §4.d.1 — toolbar primary set is role-dependent:
+        //   assistant: copy, regen, edit, fork, ⋯
+        //   user:      edit, delete, ⋯
+        // Save / Cancel are always present so edit-mode can swap them
+        // in via updateToolbarForEditState. Secondaries (replay /
+        // continue / discard / delete-on-assistant / copy-on-user) live
+        // in the overflow popup menu, built dynamically per click so
+        // visibility tracks state (e.g., Continue only on the trailing
+        // turn, Discard only with multiple variants).
         toolbar.orientation = .horizontal
         toolbar.spacing = 2
         toolbar.alignment = .centerY
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         toolbar.alphaValue = 0
-        for b in [prevVariantButton as NSView, variantLabel, nextVariantButton,
-                  discardVariantButton,
-                  copyButton, editButton, regenButton, forkButton, continueButton, replayButton, deleteButton,
-                  saveButton, cancelButton] {
-            toolbar.addArrangedSubview(b)
+        if role == .assistant {
+            toolbar.addArrangedSubview(copyButton)
+            toolbar.addArrangedSubview(regenButton)
+            toolbar.addArrangedSubview(editButton)
+            toolbar.addArrangedSubview(forkButton)
+        } else {
+            toolbar.addArrangedSubview(editButton)
+            toolbar.addArrangedSubview(deleteButton)
         }
-        addSubview(toolbar)
+        toolbar.addArrangedSubview(overflowButton)
+        toolbar.addArrangedSubview(saveButton)
+        toolbar.addArrangedSubview(cancelButton)
+
+        // Wrap the variants pill + toolbar in a vertical stack below the
+        // bubble. NSStackView collapses hidden subviews automatically,
+        // so the pill's visibility transition doesn't need any
+        // constraint-juggling — toolbar slides up cleanly when the
+        // pager hides.
+        belowBubbleStack.orientation = .vertical
+        belowBubbleStack.alignment = .leading
+        belowBubbleStack.spacing = DesignTokens.Spacing.xs
+        belowBubbleStack.translatesAutoresizingMaskIntoConstraints = false
+        belowBubbleStack.addArrangedSubview(variantsPill)
+        belowBubbleStack.addArrangedSubview(toolbar)
+        addSubview(belowBubbleStack)
 
         installConstraints()
 
@@ -646,6 +719,28 @@ final class TurnView: NSView, NSTextViewDelegate {
 
     static func formatTimestamp(_ ts: Date) -> String {
         return timestampFormatter.string(from: ts)
+    }
+
+    /// V2_UI_OVERHAUL §4.d.1 — items that appear in the per-turn `⋯`
+    /// overflow menu. Pure data; no AppKit dependency, so the contract
+    /// stays testable without standing up a window. ≤4 items per
+    /// V2_UI_OVERHAUL §C.2 — items beyond four belong somewhere else.
+    /// Pinned by Phase11OverflowMenuTests.
+    static func overflowItems(
+        role: TurnRole,
+        isLastAssistant: Bool,
+        variantCount: Int
+    ) -> [String] {
+        switch role {
+        case .assistant:
+            var items = ["Replay audio"]
+            if isLastAssistant { items.append("Continue") }
+            if variantCount > 1 { items.append("Discard this variant") }
+            items.append("Delete")
+            return items
+        case .user:
+            return ["Copy"]
+        }
     }
 
     /// V2_UI_OVERHAUL §4.c — display name for the user-turn caption.
@@ -760,10 +855,10 @@ final class TurnView: NSView, NSTextViewDelegate {
                 scrollView.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: bubblePadX),
                 scrollView.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -bubblePadX),
 
-                toolbar.topAnchor.constraint(equalTo: bubble.bottomAnchor, constant: toolbarTopGap),
-                toolbar.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
+                belowBubbleStack.topAnchor.constraint(equalTo: bubble.bottomAnchor, constant: toolbarTopGap),
+                belowBubbleStack.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
+                belowBubbleStack.bottomAnchor.constraint(equalTo: bottomAnchor),
                 toolbar.heightAnchor.constraint(equalToConstant: toolbarHeight),
-                toolbar.bottomAnchor.constraint(equalTo: bottomAnchor),
 
                 // Branch glyph below the avatar (mirrors the assistant
                 // layout). The pre-§4.c "outside leading edge" placement
@@ -812,10 +907,10 @@ final class TurnView: NSView, NSTextViewDelegate {
                 scrollView.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
                 scrollView.trailingAnchor.constraint(equalTo: bubble.trailingAnchor),
 
-                toolbar.topAnchor.constraint(equalTo: bubble.bottomAnchor, constant: toolbarTopGap),
-                toolbar.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
+                belowBubbleStack.topAnchor.constraint(equalTo: bubble.bottomAnchor, constant: toolbarTopGap),
+                belowBubbleStack.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
+                belowBubbleStack.bottomAnchor.constraint(equalTo: bottomAnchor),
                 toolbar.heightAnchor.constraint(equalToConstant: toolbarHeight),
-                toolbar.bottomAnchor.constraint(equalTo: bottomAnchor),
 
                 branchGlyph.topAnchor.constraint(equalTo: avatar.bottomAnchor, constant: 6),
                 branchGlyph.centerXAnchor.constraint(equalTo: avatar.centerXAnchor)
@@ -941,6 +1036,89 @@ final class TurnView: NSView, NSTextViewDelegate {
         delegate?.turnViewDidRequestSiblingPopover(self, anchor: branchGlyph)
     }
 
+    @objc private func overflowTapped() {
+        let menu = buildOverflowMenu()
+        guard !menu.items.isEmpty else { return }
+        let p = NSPoint(x: 0, y: overflowButton.bounds.maxY)
+        menu.popUp(positioning: nil, at: p, in: overflowButton)
+    }
+
+    /// V2_UI_OVERHAUL §4.d.1 — secondary actions tucked behind the
+    /// `⋯` button in the toolbar. Items are filtered against the
+    /// turn's current state (last/non-last, variant count) per the
+    /// pure-data rule pinned by Phase11OverflowMenuTests.
+    private func buildOverflowMenu() -> NSMenu {
+        let menu = NSMenu()
+        let titles = TurnView.overflowItems(
+            role: role,
+            isLastAssistant: isLastAssistant,
+            variantCount: variantCount
+        )
+        for title in titles {
+            menu.addItem(menuItem(for: title))
+        }
+        return menu
+    }
+
+    /// V2_UI_OVERHAUL §4.d.1 — right-click context menu mirrors the
+    /// hover bar + overflow exactly (Apple Messages convention).
+    /// Returned from `menu(for:)`. Primary actions appear first, then
+    /// a separator, then the overflow set.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        let primary: [String] = primaryActionTitles()
+        for title in primary {
+            menu.addItem(menuItem(for: title))
+        }
+        let overflowTitles = TurnView.overflowItems(
+            role: role,
+            isLastAssistant: isLastAssistant,
+            variantCount: variantCount
+        )
+        if !overflowTitles.isEmpty {
+            menu.addItem(NSMenuItem.separator())
+            for title in overflowTitles {
+                menu.addItem(menuItem(for: title))
+            }
+        }
+        return menu.items.isEmpty ? super.menu(for: event) : menu
+    }
+
+    private func primaryActionTitles() -> [String] {
+        switch role {
+        case .assistant:
+            var items = ["Copy"]
+            if isLastAssistant { items.append("Regenerate") }
+            items.append("Edit")
+            if canFork { items.append("Fork branch") }
+            return items
+        case .user:
+            return ["Edit", "Delete"]
+        }
+    }
+
+    /// Map an action title to a target/action menu item routed to
+    /// the same delegate methods the hover-bar buttons fire.
+    private func menuItem(for title: String) -> NSMenuItem {
+        let action: Selector
+        switch title {
+        case "Copy":                 action = #selector(copyTapped)
+        case "Regenerate":           action = #selector(regenTapped)
+        case "Edit":                 action = #selector(editTapped)
+        case "Fork branch":          action = #selector(forkTapped)
+        case "Continue":             action = #selector(continueTapped)
+        case "Replay audio":         action = #selector(replayTapped)
+        case "Delete":               action = #selector(deleteTapped)
+        case "Discard this variant": action = #selector(discardVariantTapped)
+        default:                     action = #selector(noopTapped)
+        }
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        return item
+    }
+
+    @objc private func noopTapped() { /* placeholder */ }
+
     /// V2_UI_OVERHAUL §4.7 — toggle the `<think>` disclosure body. The
     /// disclosure pill's chevron flips right→down on expand; the body
     /// fades in below. `applyDisclosureLayout` does the visibility +
@@ -1028,28 +1206,32 @@ final class TurnView: NSView, NSTextViewDelegate {
 
     private func updateToolbarForEditState() {
         let editing = isEditing
+        // V2_UI_OVERHAUL §4.d.1 — primary toolbar contents are
+        // role-dependent (assistant: copy/regen/edit/fork/⋯; user:
+        // edit/delete/⋯). The non-arranged buttons (replay, continue,
+        // discard, delete-on-assistant, copy-on-user) live in the
+        // overflow popup; their isHidden flags don't affect rendering
+        // since they're not in the toolbar's stack — but we still
+        // honour them as the "is action available right now?" gate
+        // that buildOverflowMenu reads.
         copyButton.isHidden = editing
         editButton.isHidden = editing
         regenButton.isHidden = editing || !(role == .assistant && isLastAssistant)
         forkButton.isHidden = editing || !(role == .assistant && canFork)
         continueButton.isHidden = editing || !(role == .assistant && isLastAssistant)
-        // Phase 8 deferred polish — replay button visible on every
-        // assistant turn (not just the trailing one), hidden during
-        // edit. Lets the user re-trigger TTS for any historic reply
-        // to debug attribution / voice assignment without regenerating.
         replayButton.isHidden = editing || role != .assistant
         deleteButton.isHidden = editing
+        // Overflow button hidden during edit — Save/Cancel are the
+        // only valid actions then, and the menu would mostly contain
+        // disabled items.
+        overflowButton.isHidden = editing
         saveButton.isHidden = !editing
         cancelButton.isHidden = !editing
-        // Pager visibility tracks both edit state and the variant count —
-        // hide everywhere while editing (Save/Cancel are the only valid
-        // actions), and otherwise only show when there's actually more than
-        // one variant to page through.
+        // V2_UI_OVERHAUL §4.0.d — variants pill stays always-visible
+        // on assistant turns with multiple variants, but hides during
+        // edit so Save/Cancel get the visual focus.
         let showPager = !editing && role == .assistant && variantCount > 1
-        prevVariantButton.isHidden = !showPager
-        variantLabel.isHidden = !showPager
-        nextVariantButton.isHidden = !showPager
-        discardVariantButton.isHidden = !showPager
+        variantsPill.isHidden = !showPager
         if editing {
             // Force-visible while editing so the user sees Save/Cancel without hovering.
             toolbar.alphaValue = 1
@@ -1213,10 +1395,19 @@ final class TurnView: NSView, NSTextViewDelegate {
             expanded: thinkingExpanded,
             bodyHeight: thinkingExpanded ? measuredThinkBodyHeight() : 0
         )
+        // V2_UI_OVERHAUL §4.d.1 — below the bubble: variants pill (when
+        // count > 1) above the toolbar, both inside `belowBubbleStack`.
+        // Pill collapses out via NSStackView's hidden-collapse so the
+        // toolbar slides up cleanly when the pager isn't shown.
+        let pillVisible = role == .assistant && variantCount > 1 && !isEditing
+        let pillH: CGFloat = pillVisible
+            ? TurnView.variantsPillHeight + DesignTokens.Spacing.xs
+            : 0
         let h = speakerLabelHeight
             + disclosureH
             + bubbleH
             + toolbarTopGap
+            + pillH
             + toolbarHeight
         if heightConstraint == nil {
             heightConstraint = heightAnchor.constraint(equalToConstant: h)
