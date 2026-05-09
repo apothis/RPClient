@@ -1,0 +1,138 @@
+# Phase 10 — Chat-tuning empirical findings
+
+**Status: live document.** Grows with each smoke run against a new model. Authoritative source for the per-EXACT-model observation log is `~/Library/Application Support/RPClient/smoke-observations/<sanitised-model-name>.json` — this doc summarises that log + adds prose context the JSON can't carry.
+
+Smokes producing data here: `ChatSmoke`, `SummariserSmoke`, `DirectorSmoke` (Phase 10 §10.0.b–c). The remaining smokes (`ExtractorSmoke`, `BlurberSmoke`, `EmbedSmoke`) land in §10.0.d.
+
+The plan ([V2_PHASE10_SMOKE_HARNESS_PLAN.md](V2_PHASE10_SMOKE_HARNESS_PLAN.md)) calls for this doc to grow as §10.0.f's deliverable. Started early (after §10.0.b–c) because §10.0.b surfaced enough quirks worth pinning down before more smokes pile on.
+
+---
+
+## Observation-log conventions
+
+**Keying is by EXACT model name string** — whatever `/api/v1/model` returns. Different fine-tunes / quants of the "same" model behave differently in practice (Q4 vs Q5 quantisation, base vs uncensored, etc.); family-level grouping is a render-time concern, not a storage concern.
+
+Each smoke binary calls `ModelObservationStore.append(...)` with the observations it emitted via `QuirkDetectors`. Re-runs that hit the same `(smoke, fixture, kind)` triple bump `seenCount` rather than duplicating; the log carries `firstSeen` / `lastSeen` for triage.
+
+**Fix-application status, by layer:**
+
+| Layer | Status | What it does |
+|---|---|---|
+| Observation | LANDED (§10.0.b–c) | smokes emit `ModelObservation` to per-model JSON; remediation hint is text-only |
+| ServerCapabilities | NOT YET (§10.a) | smokes' findings will feed a `Codable` capability cache per server profile |
+| Auto-apply | NOT YET (§10.c) | chat path consumption points (template, sampler, stop-tokens, ctx caps) read from ServerCapabilities |
+
+So at this point in the phase, observed quirks land in the log with a remediation-hint text but **are NOT auto-applied to the chat path**. Per-model fixes get wired through ServerCapabilities (§10.a) once that data model exists.
+
+---
+
+## Per-model log
+
+### `koboldcpp/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M`
+
+**First observed:** 2026-05-09. **Probe count so far:** ChatSmoke (×2 dev iterations), SummariserSmoke (×1), DirectorSmoke (×1).
+
+**Observations recorded (after fixture-shape cleanup):**
+
+| Smoke | Fixture | Kind | Status | Note |
+|---|---|---|---|---|
+| ChatSmoke | `nsfw-group-scene` | role-confusion-in-group | UNFIXED — needs §10.a wiring | Model wrote as Rae despite group-nudge specifying Cass. The active speaker just spoke (last turn was Cass's), so the model treats "next reply" as "next *speaker's* reply" and picks Rae. |
+| ChatSmoke | `group-chat` | role-confusion-in-group | UNFIXED — needs §10.a wiring | Same shape: nudge says Mira, model writes as Anya. |
+| ChatSmoke | `group-chat` | short-reply | UNFIXED — needs §10.a wiring or fixture redesign | 97 chars / 400 expected (ratio 0.24). Doubled-prefill artifact. The fixture ends on Mira's last assistant turn → template emits a fresh assistant prefill → model writes a brief "next" reply. |
+| SummariserSmoke | `sfw-long` | (none) | CLEAN | Summariser produced an 904-char factual recap; no thinking-trace leak; no refusal. |
+| DirectorSmoke | `nsfw-group-scene` | (none) | CLEAN | All 3 repeats picked Rae deterministically (~120ms warm). |
+| DirectorSmoke | `group-chat` | (none) | CLEAN | All 3 repeats picked Kit Voss deterministically. |
+
+**Findings worth carrying forward:**
+
+1. **The empty `<think></think>` pre-fill is harmless on this model** — the chat path emits it on every assistant block (per `QwenTemplate`), and Qwen3.6-Uncensored consumes it cleanly. No `thinking-trace-leak` observations across the runs to date. Zero remediation needed; this matches the §5.4.0 finding and is the baseline expectation when ServerCapabilities lands `thinkingPrefill = .needed` for Qwen3 family.
+
+2. **Group-nudge `[Write the next reply only as X.]` is NOT load-bearing on this model** when X has just spoken. The model interprets "next" as the next speaker in the rotation rather than as the addressee of the directive. Two independent reproductions (`nsfw-group-scene` → Cass→Rae, `group-chat` → Mira→Anya). Possible mitigations to evaluate in §10.a:
+   - **Stop-sequence augmentation:** add `\nRae Lindhart:` / `\nAlex Rivers:` etc. to `stopSequences` so the model cuts off if it tries to switch. Cheapest fix; doesn't help when the model leads with the cohabitant name without a newline.
+   - **Stronger directive in the nudge:** something like `[Mira speaks now. Other cast members are silent for this turn.]` — empirically untested on this model; worth a one-fixture probe.
+   - **Skip the nudge when the active speaker just spoke:** detect the "X→X" case in PromptBuilder and add an extra `[Continuing as X.]` framing line.
+   - The right per-model fix for THIS exact model name will be encoded in ServerCapabilities once §10.a lands.
+
+3. **Doubled-prefill quirk on assistant-trailing fixtures.** Initially I tried setting `continuation: true` for these; **that empirically made things worse** — the model interpreted the open assistant turn as already complete and emitted end-of-turn immediately on closed-feeling prose. Two reverts and a fixture rewrite later: `sfw-short` and `sfw-long` now end on conversational user hooks; the remaining assistant-trailing fixtures (`nsfw-explicit`, `nsfw-kink`, `post-conflict`, etc.) are kept as-is because they intentionally probe the doubled-prefill semantics. The QuirkDetector flags `short-reply` on these but the remediation hint is now correct ("end on a user turn" rather than the misleading "set continuation:true").
+
+4. **Director picks are deterministic at temperature 0.3** on this model. 3 repeats × 2 multi-cast fixtures returned the same pick every time, sub-150ms warm. No need to bump the picker's 5s timeout for this server.
+
+**Pending probes against this model (next session):**
+- ExtractorSmoke / BlurberSmoke / EmbedSmoke (§10.0.d).
+- A retry of the role-confusion fixtures with the proposed mitigations (stop-sequence augmentation; stronger nudge wording) — to validate the candidate fixes before encoding them in ServerCapabilities.
+- A repeat ChatSmoke pass with `--verbose` so per-token cadence is captured (probe candidate P4 from `V2_PHASE10_CHAT_TUNING_SCOPING.md` §2.3).
+
+---
+
+## Cross-model summary (planned — populated as more models are tested)
+
+Format will be a table with one column per exact model name and one row per known quirk kind. Aggregation across "same family" variants (e.g. all `Qwen3.6` variants) is a render-time view computed from the per-exact logs — not a separate storage layer. The user explicitly called out the need to track variants separately ("a new version of that later"), so the aggregation layer must always be derivable from the underlying exact-keyed logs, never replace them.
+
+When the user swaps to a new model:
+
+1. Run `swift run ChatSmoke` and the other smokes against it.
+2. The per-exact log file gets created automatically at `~/Library/Application Support/RPClient/smoke-observations/<sanitised-model-name>.json`.
+3. Add a section above for the new model name, mirroring the Qwen3.6 section's structure.
+4. Compare against prior model's observations; flag deltas as candidates for ServerCapabilities differentiation.
+
+---
+
+## Fix-registry roadmap (when §10.a lands)
+
+The user's guidance: *"Fixes for each model should be applied, and used whenever that model is used. Even over different variants of say the qwen 3.6 model … the full model name needs to be accounted for, not just qwen 3.6."*
+
+This carves the ServerCapabilities work into two layers:
+
+### Layer 1 — `ServerCapabilities` keyed by exact model name (§10.a)
+
+```swift
+// Per V2_PHASE10_CHAT_TUNING_SCOPING.md §3, sketched. Adds:
+struct ServerCapabilities: Codable {
+    let exactModelName: String   // /api/v1/model verbatim — primary key
+    // …existing fields per §3 sketch…
+
+    /// Per-exact-model overrides for chat-path consumption points.
+    /// Resolved from observation log + manual user edits in §10.b
+    /// Settings UI. Nil = use the global default.
+    var overrides: ChatPathOverrides
+}
+
+struct ChatPathOverrides: Codable {
+    var thinkingPrefill: ThinkingPrefill?
+    var samplerPreset: SamplerPreset?
+    var stopSequenceAugmentation: [String]?
+    var groupNudgeStyle: GroupNudgeStyle?  // .standard, .strong, .skipWhenSelfFollowsSelf
+    var maxCtxCap: Int?
+    var refusalPostureOverride: RefusalPosture?
+    // ...
+}
+```
+
+### Layer 2 — chat-path consumption (§10.c)
+
+Each touch-point reads via `ServerCapabilities.shared.lookup(modelName:)?.overrides` with a `nil`-coalesce to the existing global default. The chat path stays operational on unknown / unprobed models (just uses the defaults that work today).
+
+### Aggregation view (post-§10.a, no separate storage)
+
+When the user inspects "what do we know about this model family?", a view computes:
+
+```swift
+extension ServerCapabilitiesStore {
+    /// Returns capabilities for every exact model name whose name
+    /// shares a prefix / family marker with `referenceModelName`.
+    /// Read-only — never folds variants into a single record.
+    func relatedVariants(of: String) -> [ServerCapabilities]
+}
+```
+
+This is the "all my Qwen3.6 quants" view, derived from the exact-keyed underlying records. Variant-level differences stay distinguishable.
+
+---
+
+## References
+
+- [V2_PHASE10_SMOKE_HARNESS_PLAN.md](V2_PHASE10_SMOKE_HARNESS_PLAN.md) — the parent plan; §10.0.f is the doc-this-research target.
+- [V2_PHASE10_CHAT_TUNING_SCOPING.md](V2_PHASE10_CHAT_TUNING_SCOPING.md) — phase-level scoping; §3 sketches `ServerCapabilities`.
+- [V2_PHASE9_AI_ASSIST_RESEARCH.md](V2_PHASE9_AI_ASSIST_RESEARCH.md) §8.3 — the refusal-posture probe taxonomy that informed `CardGenRefusalDetector` and indirectly `QuirkDetectors.detectChat`.
+- `Sources/SmokeFixtures/ModelObservationLog.swift` — schema + storage layer.
+- `Sources/SmokeFixtures/QuirkDetectors.swift` — rule set that converts smoke output to observations.
