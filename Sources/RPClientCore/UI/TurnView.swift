@@ -1434,7 +1434,26 @@ final class TurnView: NSView, NSTextViewDelegate {
             display = rawText
         }
         let attr = Markdown.render(display, baseFont: baseFont)
-        textView.textStorage?.setAttributedString(attr)
+        // V2_UI_OVERHAUL §4.5 stage-2 — streaming caret. Appends a
+        // thin `▍` glyph in controlAccentColor at the end of the
+        // streamed body so the user sees "more is coming" without a
+        // separate animated subview. Removed automatically on the
+        // next render after isStreaming flips false (Claude pattern).
+        // Only on assistant turns mid-stream with non-empty display
+        // text — the dots indicator handles the empty-body cases.
+        let final: NSAttributedString
+        if role == .assistant && isStreaming && !display.isEmpty {
+            let mutable = NSMutableAttributedString(attributedString: attr)
+            let caret = NSAttributedString(string: "▍", attributes: [
+                .font: baseFont,
+                .foregroundColor: NSColor.controlAccentColor
+            ])
+            mutable.append(caret)
+            final = mutable
+        } else {
+            final = attr
+        }
+        textView.textStorage?.setAttributedString(final)
         if role == .assistant {
             applyDisclosureLayout()
         }
