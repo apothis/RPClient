@@ -85,9 +85,59 @@ So at this point in the phase, observed quirks land in the observation log with 
 
 ---
 
+### `koboldcpp/Qwen3.6-27B-Uncensored-HauhauCS-Aggressive-Q4_K_P`
+
+**First observed:** 2026-05-09. **Probe count so far:** SmokeAll (×1 = ChatSmoke + SummariserSmoke + DirectorSmoke + ExtractorSmoke + BlurberSmoke + EmbedSmoke), nudge-variant validation sweep (3 reps × 2 variants × 2 fixtures).
+
+Different exact model name from the `35B-A3B-Q4_K_M` above (different param count, dropped A3B suffix, different quant — `Q4_K_P` vs `Q4_K_M`). Same family fine-tune lineage (`Qwen3.6-Uncensored-HauhauCS-Aggressive`). Per the per-EXACT-model invariant, this gets its own record + log; the Q4_K_M's `continuing` override does NOT inherit and was re-validated on this exact name before encoding.
+
+**Observations recorded (post-validation sweep):**
+
+| Smoke | Fixture | Kind | Status | Note |
+|---|---|---|---|---|
+| ChatSmoke | `group-chat` | role-confusion-in-group | UNFIXED at the smoke layer (encoded fix in ModelCapabilities — see below) | Mira→Kit Voss reproduction. Same X→X family weakness as Q4_K_M. |
+| SummariserSmoke | `sfw-long` | (none) | CLEAN | 811-char factual recap, ~6.5s warm (slower than Q4_K_M's 2.2s — 27B-Q4_K_P appears slower per-token despite the smaller param count, possibly the K_P quant variant). |
+| DirectorSmoke | both multi-cast fixtures | (none) | CLEAN | Deterministic picks across 3 reps each, ~210ms warm. Same as Q4_K_M. |
+| ExtractorSmoke | `sfw-long` | (none) | CLEAN | 7 well-formed facts, valid JSON, ~10.8s warm. |
+| BlurberSmoke | `sfw-long` | (none) | CLEAN | 206-char two-sentence factual blurb, ~1.4s warm. |
+| EmbedSmoke | `sfw-short` | (none) | CLEAN | 5×768-dim vectors, ~325ms. Same dimensionality as Q4_K_M. |
+
+**Nudge-variant validation pass** (3 reps each):
+
+| variant | `group-chat` | `nsfw-group-scene` |
+|---|---|---|
+| `standard` (baseline) | 2/3 clean | 0/3 clean |
+| `continuing` | 2/3 clean | 1/3 clean |
+
+Weaker signal than the Q4_K_M validation — `continuing` is no-worse-than-standard on `group-chat` and marginally better on `nsfw-group-scene`. Encoded anyway because:
+1. Directionally correct (no regression on either fixture)
+2. The X→X family-level weakness rationale applies (last assistant turn was the active speaker; standard nudge interpreted as "next speaker in rotation" not "addressee of directive")
+3. No conflict with the standard behaviour the chat path falls back to when no record exists
+
+**Encoded ModelCapabilities** (per the per-EXACT-model invariant — applies ONLY to this exact name):
+```
+group-nudge:        continuing
+thinking-prefill:   needed
+```
+
+End-to-end auto-apply confirmed: `swift run ChatSmoke --fixture group-chat` (no flag) prints `[nudge-variant] from record: continuing` and the prompt renders `[Continuing as Mira.]`.
+
+**Cross-variant deltas vs Q4_K_M:**
+- All side-call smokes ~1.5-2.5× slower despite the smaller param count. Worth a `serverprobe: P3 throughput` observation when §10.a's probe runner lands.
+- Nudge-variant validation signal weaker (smaller margin between `standard` and `continuing` on group-chat) — possibly noise at 3 reps, possibly real. Worth re-validating with 5+ reps if the user reports model-specific multi-cast issues.
+
+---
+
 ## Cross-model summary (planned — populated as more models are tested)
 
 Format will be a table with one column per exact model name and one row per known quirk kind. Aggregation across "same family" variants (e.g. all `Qwen3.6` variants) is a render-time view computed from the per-exact logs — not a separate storage layer. The user explicitly called out the need to track variants separately ("a new version of that later"), so the aggregation layer must always be derivable from the underlying exact-keyed logs, never replace them.
+
+**Family-level commentary (Qwen3.6-Uncensored-HauhauCS-Aggressive lineage)** — derived from the two exact records above, not a storage substitute:
+- Both quants exhibit the X→X group-nudge weakness; both validate `continuing` as no-worse-than-standard.
+- Both handle the empty `<think></think>` prefill cleanly (zero thinking-trace leak across all smoke runs).
+- Both honour the GBNF grammar in ExtractorSmoke (valid JSON every run).
+- Both have an embeddings model loaded (768-dim, same dimensionality).
+- The 27B-Q4_K_P is meaningfully slower per-token than the 35B-A3B-Q4_K_M despite fewer parameters — quant variant matters.
 
 When the user swaps to a new model:
 
