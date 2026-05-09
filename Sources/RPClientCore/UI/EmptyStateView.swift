@@ -26,11 +26,55 @@ final class EmptyStateView: NSView {
     /// no scenario / alternate-greetings to seed from. Generic but
     /// neutral — the character-sourced chips are the path that gets
     /// the user into a scene faster.
-    private let staticStarters: [String] = [
+    private static let staticStarters: [String] = [
         "Set the scene",
         "Continue from where we left off",
         "Surprise me"
     ]
+
+    /// V2_UI_OVERHAUL §4.6 / §4.h.2 — pure-data resolver for which
+    /// strings appear as chips on the empty state. Pinned by
+    /// Phase11ChipSeedTests so the priority chain stays explicit
+    /// (alternateGreetings → scenario sentences → static fallbacks).
+    /// Up to 3 chips.
+    static func chipSeeds(for character: Character?) -> [String] {
+        guard let c = character else { return staticStarters }
+        let alts = c.alternateGreetings
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if !alts.isEmpty {
+            return alts.prefix(3).map { clip($0, max: 100) }
+        }
+        let scenario = c.scenario.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !scenario.isEmpty {
+            let sentences = splitSentences(scenario)
+            if !sentences.isEmpty {
+                return sentences.prefix(3).map { clip($0, max: 100) }
+            }
+        }
+        return staticStarters
+    }
+
+    /// Split prose on sentence-ending punctuation. Cheap regex; not
+    /// linguistically perfect but correct enough for the typical
+    /// 1-3 sentence scenario field.
+    private static func splitSentences(_ s: String) -> [String] {
+        let parts = s.components(separatedBy: CharacterSet(charactersIn: ".!?"))
+        return parts
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Truncate to `max` chars with an ellipsis suffix; preserves word
+    /// boundary when possible.
+    private static func clip(_ s: String, max: Int) -> String {
+        guard s.count > max else { return s }
+        let cut = s.prefix(max - 1)
+        if let lastSpace = cut.lastIndex(of: " "), cut.distance(from: cut.startIndex, to: lastSpace) > max / 2 {
+            return String(cut[..<lastSpace]) + "…"
+        }
+        return String(cut) + "…"
+    }
 
     /// Diameter of the centred character avatar. 64pt — bigger than
     /// the per-turn 32pt gutter avatar so it reads as "this is the
@@ -79,12 +123,9 @@ final class EmptyStateView: NSView {
         chipsStack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(chipsStack)
 
-        for s in staticStarters {
-            let btn = ChipButton(title: s)
-            btn.target = self
-            btn.action = #selector(chipTapped(_:))
-            chipsStack.addArrangedSubview(btn)
-        }
+        // Initial chips — replaced at configure(character:) time once
+        // the bound character (if any) is known.
+        rebuildChips(EmptyStateView.staticStarters)
 
         // V2_UI_OVERHAUL §4.6 — bifurcated layout:
         //   • avatar + title + subtitle pinned near the top of the
@@ -141,6 +182,23 @@ final class EmptyStateView: NSView {
             avatar.toolTip = nil
             title.stringValue = "Start a new chat"
             subtitle.stringValue = "Send a message to begin"
+        }
+        rebuildChips(EmptyStateView.chipSeeds(for: character))
+    }
+
+    /// Tear down + repopulate the chip stack with fresh ChipButton
+    /// instances for the given titles. Called from init (with static
+    /// starters) and from configure (with the resolved seeds).
+    private func rebuildChips(_ titles: [String]) {
+        for view in chipsStack.arrangedSubviews {
+            chipsStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        for title in titles {
+            let btn = ChipButton(title: title)
+            btn.target = self
+            btn.action = #selector(chipTapped(_:))
+            chipsStack.addArrangedSubview(btn)
         }
     }
 
