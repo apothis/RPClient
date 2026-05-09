@@ -198,9 +198,13 @@ extension AutopilotSeedSheetController: NSTokenFieldDelegate {
         indexOfToken tokenIndex: Int,
         indexOfSelectedItem selectedIndex: UnsafeMutablePointer<Int>?
     ) -> [Any]? {
-        let needle = substring.lowercased()
-        guard !needle.isEmpty else { return [] }
+        guard !substring.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         let custom = AppState.shared.settings.customTags
-        return TagVocabulary.shared.matches(prefix: needle, customTags: custom).map { $0 as Any }
+        // Same prefix-as-novel-tag fix as the Identity tab: typing
+        // "fem" with "female" in the vocab returns ["fem", "female"]
+        // so a plain comma commits "fem".
+        return TagVocabulary.shared
+            .autocompleteCandidates(for: substring, customTags: custom)
+            .map { $0 as Any }
     }
 }

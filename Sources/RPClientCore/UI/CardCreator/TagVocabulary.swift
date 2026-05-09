@@ -44,6 +44,30 @@ final class TagVocabulary {
         return Array(results.sorted().prefix(12))
     }
 
+    /// Autocomplete candidate list for an NSTokenField. Wraps `matches`
+    /// with one critical UX correction: when the user's literal input
+    /// is a strict prefix of an existing tag (e.g. typing "fem" while
+    /// "female" is in the vocab), `matches` returns ["female"] only —
+    /// and NSTokenField then commits "female" on `,` / `Tab`, with no
+    /// way to add "fem" as a novel tag.
+    ///
+    /// Fix: prepend the user's literal substring (lowercased) when it
+    /// isn't already in the matched list. The literal becomes the
+    /// first/highlighted item in the dropdown so a plain comma commits
+    /// it as a novel tag; the user reaches the longer matches via
+    /// arrow-down. When `matches` is empty we return an empty list so
+    /// no dropdown appears (NSTokenField commits the literal directly).
+    public func autocompleteCandidates(for substring: String, customTags: [String] = []) -> [String] {
+        let needle = substring.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return [] }
+        let matched = matches(prefix: substring, customTags: customTags)
+        if matched.isEmpty { return [] }
+        if matched.contains(where: { $0.lowercased() == needle }) {
+            return matched
+        }
+        return [needle] + matched
+    }
+
     /// Decide whether a freshly-committed tag should be appended to
     /// `Settings.customTags`. Returns the new full custom-tags list (with
     /// the lowercased + trimmed tag appended) when the input is novel

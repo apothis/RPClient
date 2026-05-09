@@ -401,10 +401,14 @@ extension IdentityTabViewController: NSTextFieldDelegate {
 
 extension IdentityTabViewController: NSTokenFieldDelegate {
     func tokenField(_ tokenField: NSTokenField, completionsForSubstring substring: String, indexOfToken tokenIndex: Int, indexOfSelectedItem selectedIndex: UnsafeMutablePointer<Int>?) -> [Any]? {
-        let needle = substring.lowercased()
-        guard !needle.isEmpty else { return [] }
+        guard !substring.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         let custom = AppState.shared.settings.customTags
-        return TagVocabulary.shared.matches(prefix: needle, customTags: custom).map { $0 as Any }
+        // autocompleteCandidates prepends the literal when it's a strict
+        // prefix of an existing tag, so users can add "fem" as a novel
+        // tag even when "female" is in the vocabulary.
+        return TagVocabulary.shared
+            .autocompleteCandidates(for: substring, customTags: custom)
+            .map { $0 as Any }
     }
 
     func control(_ control: NSControl, textShouldEndEditing fieldEditor: NSText) -> Bool {

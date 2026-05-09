@@ -123,5 +123,47 @@ func phase9cTagsPersistTests() -> TestSuite {
         try expectTrue(TagVocabulary.shared.addIfNovel("   ", customTags: []) == nil)
     }
 
+    // MARK: - TagVocabulary.autocompleteCandidates
+
+    s.test("autocompleteCandidates prepends literal when prefix matches a longer existing tag") {
+        // Live UX bug: typing "fem" with "female" in the vocab let
+        // NSTokenField commit "female" on comma, with no way to add
+        // "fem" as a novel tag. Fix: prepend the user's literal so it
+        // becomes the (highlighted) first option in the dropdown.
+        let result = TagVocabulary.shared.autocompleteCandidates(for: "fem", customTags: [])
+        try expectTrue(result.count >= 2, "expected at least literal + one match, got \(result)")
+        try expectEqual(result.first, "fem")
+        try expectTrue(result.contains("female"))
+    }
+
+    s.test("autocompleteCandidates does NOT prepend when literal is an exact match in the vocabulary") {
+        // Typing the full tag should not duplicate it in the dropdown.
+        let result = TagVocabulary.shared.autocompleteCandidates(for: "female", customTags: [])
+        try expectTrue(result.contains("female"))
+        // Count of "female" entries should be exactly 1.
+        try expectEqual(result.filter { $0 == "female" }.count, 1)
+    }
+
+    s.test("autocompleteCandidates exact-match check is case-insensitive") {
+        // "FEMALE" typed by user — vocabulary stores "female". Should
+        // not prepend an extra "FEMALE" entry on top of the existing.
+        let result = TagVocabulary.shared.autocompleteCandidates(for: "FEMALE", customTags: [])
+        // "female" appears exactly once; literal "FEMALE" is NOT prepended.
+        try expectEqual(result.filter { $0.lowercased() == "female" }.count, 1)
+    }
+
+    s.test("autocompleteCandidates returns empty for empty input") {
+        try expectEqual(TagVocabulary.shared.autocompleteCandidates(for: "", customTags: []), [])
+        try expectEqual(TagVocabulary.shared.autocompleteCandidates(for: "   ", customTags: []), [])
+    }
+
+    s.test("autocompleteCandidates returns empty when there are no matches (NSTokenField commits literal directly)") {
+        // For a needle with no matches we don't need a dropdown at all
+        // — NSTokenField will commit the literal text on its own. Empty
+        // result keeps the dropdown out of the user's way.
+        let result = TagVocabulary.shared.autocompleteCandidates(for: "qzxqzxqzx-no-such-tag", customTags: [])
+        try expectEqual(result, [])
+    }
+
     return s
 }
