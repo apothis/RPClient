@@ -61,8 +61,10 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(scrollView)
 
-        // Chat header bar — server picker (Phase 4 §5.4). Future home for
-        // template + sampler pickers if/when we surface those per-chat too.
+        // V2_UI_OVERHAUL §4.g — Server / Voice / Attribution pickers
+        // and the speaker mute button live in the InputBar's metadata
+        // pill row now (above the input pill). The chat header retains
+        // its frame for §4.f to fill with title + subhead later.
         chatHeader.translatesAutoresizingMaskIntoConstraints = false
         chatHeader.wantsLayer = true
         let serverLabel = NSTextField(labelWithString: "Server:")
@@ -73,10 +75,7 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         serverPicker.action = #selector(serverPickerChanged(_:))
         serverPicker.bezelStyle = .rounded
         serverPicker.translatesAutoresizingMaskIntoConstraints = false
-        chatHeader.addSubview(serverLabel)
-        chatHeader.addSubview(serverPicker)
         configureSpeakerButton()
-        chatHeader.addSubview(speakerButton)
 
         voiceLabel.font = Theme.font(11)
         voiceLabel.textColor = .secondaryLabelColor
@@ -86,8 +85,6 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         voicePicker.bezelStyle = .rounded
         voicePicker.font = Theme.font(11)
         voicePicker.translatesAutoresizingMaskIntoConstraints = false
-        chatHeader.addSubview(voiceLabel)
-        chatHeader.addSubview(voicePicker)
 
         attributionLabel.font = Theme.font(11)
         attributionLabel.textColor = .secondaryLabelColor
@@ -97,29 +94,14 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         attributionPicker.bezelStyle = .rounded
         attributionPicker.font = Theme.font(11)
         attributionPicker.translatesAutoresizingMaskIntoConstraints = false
-        chatHeader.addSubview(attributionLabel)
-        chatHeader.addSubview(attributionPicker)
 
         v.addSubview(chatHeader)
         NSLayoutConstraint.activate([
-            chatHeader.heightAnchor.constraint(equalToConstant: 28),
-            serverLabel.leadingAnchor.constraint(equalTo: chatHeader.leadingAnchor, constant: 12),
-            serverLabel.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
-            serverPicker.leadingAnchor.constraint(equalTo: serverLabel.trailingAnchor, constant: 6),
-            serverPicker.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
-            speakerButton.trailingAnchor.constraint(equalTo: chatHeader.trailingAnchor, constant: -12),
-            speakerButton.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
-            speakerButton.widthAnchor.constraint(equalToConstant: 22),
-            speakerButton.heightAnchor.constraint(equalToConstant: 22),
-            voicePicker.trailingAnchor.constraint(equalTo: speakerButton.leadingAnchor, constant: -8),
-            voicePicker.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
-            voicePicker.widthAnchor.constraint(lessThanOrEqualToConstant: 220),
-            voiceLabel.trailingAnchor.constraint(equalTo: voicePicker.leadingAnchor, constant: -6),
-            voiceLabel.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
-            attributionPicker.trailingAnchor.constraint(equalTo: voiceLabel.leadingAnchor, constant: -12),
-            attributionPicker.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
-            attributionLabel.trailingAnchor.constraint(equalTo: attributionPicker.leadingAnchor, constant: -6),
-            attributionLabel.centerYAnchor.constraint(equalTo: chatHeader.centerYAnchor),
+            // Header is empty for now (pickers moved to InputBar pill
+            // row in §4.g). §4.f will refill it with title + subhead.
+            // 8pt height keeps a thin chrome strip until then so the
+            // visual rhythm of the chat pane doesn't collapse abruptly.
+            chatHeader.heightAnchor.constraint(equalToConstant: 8)
         ])
 
         // Stack tracks the panel width with a small symmetric gutter; turns
@@ -134,6 +116,20 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         inputBar.delegate = self
         inputBar.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(inputBar)
+
+        // V2_UI_OVERHAUL §4.g — populate the InputBar's metadata pill
+        // row with the existing pickers + speaker mute. ChatViewController
+        // still owns the picker instances; InputBar just provides the
+        // layout slot. Width-responsive collapse + true labelled-pill
+        // styling per spec are 4.g.2/4.g.3 follow-ups.
+        inputBar.setMetadataPills([
+            attributionLabel, attributionPicker,
+            voiceLabel, voicePicker,
+            serverLabel, serverPicker,
+            speakerButton
+        ])
+        speakerButton.widthAnchor.constraint(equalToConstant: 22).isActive = true
+        speakerButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
 
         statusBar.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(statusBar)

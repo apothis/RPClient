@@ -12,6 +12,12 @@ final class InputBar: NSView, NSTextViewDelegate {
     private let scrollView = NSScrollView()
     let textView = NSTextView()
     private let primaryButton = NSButton()
+    /// V2_UI_OVERHAUL §4.9 / §4.g — row of metadata pills (Server,
+    /// Voice, Attribution, etc.) above the input pill. ChatViewController
+    /// fills this via `setMetadataPills(_:)`. Empty by default; an
+    /// empty NSStackView has 0 intrinsic height so the rest of the
+    /// layout collapses cleanly when there's nothing to show.
+    let pillRow = NSStackView()
     /// Phase 8 §4.3 — speaker picker. Hidden on solo / free-form chats
     /// (cast.count <= 1) so it doesn't clutter the input pill. On
     /// multi-cast chats, shows a compact symbol-button that opens a menu
@@ -24,9 +30,30 @@ final class InputBar: NSView, NSTextViewDelegate {
     private enum PrimaryAction { case send, stop }
     private var primaryAction: PrimaryAction = .send
 
+    /// V2_UI_OVERHAUL §4.g — install the row of metadata pills above
+    /// the input pill (Server, Voice, Attribution, etc.). Caller owns
+    /// each view's lifecycle and bindings; InputBar just provides the
+    /// layout slot. Replaces a previous arrangedSubview list (if any)
+    /// so this can be called repeatedly during chat-pane rebuilds.
+    func setMetadataPills(_ pills: [NSView]) {
+        for view in pillRow.arrangedSubviews {
+            pillRow.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        for pill in pills {
+            pillRow.addArrangedSubview(pill)
+        }
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+
+        pillRow.orientation = .horizontal
+        pillRow.alignment = .centerY
+        pillRow.spacing = DesignTokens.Spacing.sm
+        pillRow.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(pillRow)
 
         pill.wantsLayer = true
         pill.layer?.cornerRadius = 18
@@ -94,7 +121,15 @@ final class InputBar: NSView, NSTextViewDelegate {
         speakerToScroll.priority = NSLayoutConstraint.Priority.required
 
         NSLayoutConstraint.activate([
-            pill.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            // V2_UI_OVERHAUL §4.g — pill row sits above the input pill.
+            // When empty (no metadata pills installed) it collapses to
+            // 0 intrinsic height, so the input pill stays right at the
+            // pre-§4.g top position.
+            pillRow.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            pillRow.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            pillRow.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
+
+            pill.topAnchor.constraint(equalTo: pillRow.bottomAnchor, constant: DesignTokens.Spacing.xs),
             pill.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
             pill.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             pill.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
@@ -115,17 +150,13 @@ final class InputBar: NSView, NSTextViewDelegate {
             primaryButton.heightAnchor.constraint(equalToConstant: 30),
 
             heightAnchor.constraint(greaterThanOrEqualToConstant: 70),
-            // Cap the bar's height so the layout engine doesn't dump
-            // all the vertical slack here when the chat content is
-            // short (e.g. empty state) — surfaced 2026-05-10 while
-            // smoking 4.h.1: the empty state's intrinsic height was
-            // only ~344pt while view.height was 800+, so the engine
-            // grew the InputBar to fill the gap (~540pt). textView's
-            // `isVerticallyResizable = true` plus the pill's elastic
-            // top/bottom anchors meant nothing pushed back. The scroll
-            // view inside the pill auto-scrolls past the cap so a
-            // long-typed message stays interactable.
-            heightAnchor.constraint(lessThanOrEqualToConstant: 220)
+            // Cap so the layout engine doesn't dump all the vertical
+            // slack here when the chat content is short (e.g. empty
+            // state). 260 = 220 (pre-§4.g cap) + ~38pt headroom for
+            // the metadata pill row + its top/bottom gaps when
+            // populated. textView auto-scrolls past the input pill's
+            // own ceiling so a long message stays interactable.
+            heightAnchor.constraint(lessThanOrEqualToConstant: 260)
         ])
 
         let nc = NotificationCenter.default
