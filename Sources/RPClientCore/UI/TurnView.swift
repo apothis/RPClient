@@ -1122,22 +1122,6 @@ final class TurnView: NSView, NSTextViewDelegate {
     /// per-pill visibility.
     private func updatePillsRowVisibility() {
         pillsRow.isHidden = variantsPill.isHidden && branchesPill.isHidden
-        // Diagnostic trace per memory/feedback_diagnostic_logging —
-        // ground-truth visibility + frames so we don't have to keep
-        // theorising about which subview is hiding which.
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            DebugLog.shared.write(
-                """
-                [chat-pane] pills-row v.hidden=\(self.variantsPill.isHidden) \
-                v.frame=\(self.variantsPill.frame) v.children=\(self.variantsPill.arrangedSubviews.count) \
-                b.hidden=\(self.branchesPill.isHidden) b.frame=\(self.branchesPill.frame) \
-                b.text='\(self.branchesLabel.stringValue)' \
-                row.hidden=\(self.pillsRow.isHidden) row.frame=\(self.pillsRow.frame) \
-                turn=\(self.turnId)
-                """
-            )
-        }
     }
 
     @objc private func overflowTapped() {
