@@ -56,8 +56,24 @@ let package = Package(
         ),
         .executableTarget(
             name: "RPClientCoreTests",
-            dependencies: ["RPClientCore"],
+            dependencies: ["RPClientCore", "SmokeFixtures"],
             path: "Tests/RPClientCoreTests"
+        ),
+        // Phase 10 §10.0.a — shared fixtures used by every model-interaction
+        // smoke binary (ChatSmoke, SummariserSmoke, ExtractorSmoke,
+        // BlurberSmoke, DirectorSmoke, EmbedSmoke). Library, not
+        // executable: `SyntheticChats` / `SyntheticCharacters` /
+        // `RealChatLoader`. `-enable-testing` so the smokes can
+        // `@testable import SmokeFixtures` and reach internal types
+        // (mirrors the RPClientCore convention; CardGenSmoke does the
+        // same for RPClientCore). See V2_PHASE10_SMOKE_HARNESS_PLAN.md.
+        .target(
+            name: "SmokeFixtures",
+            dependencies: ["RPClientCore"],
+            path: "Sources/SmokeFixtures",
+            swiftSettings: [
+                .unsafeFlags(["-enable-testing"], .when(configuration: .debug)),
+            ]
         ),
         // Phase 6 §7.1k3 prep — one-shot ONNX session introspection so we
         // can confirm which Kokoro export the bundled model is (newer
