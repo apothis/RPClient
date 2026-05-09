@@ -562,6 +562,14 @@ final class TurnView: NSView, NSTextViewDelegate {
         textView.font = baseFont
         textView.delegate = self
         textView.allowsUndo = true
+        // V2_UI_OVERHAUL §4.d.1 fixup — read-only by default; the edit
+        // button is the *only* path into edit mode. Pre-fixup, any
+        // click on the text body (including right-click) called
+        // becomeFirstResponder which triggered enterEditMode and stole
+        // the per-turn context menu, replacing it with AppKit's
+        // cut/copy/paste menu. Selection + copy still works because
+        // `isSelectable` stays true.
+        textView.isEditable = false
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
@@ -997,6 +1005,10 @@ final class TurnView: NSView, NSTextViewDelegate {
     }
 
     @objc private func editTapped() {
+        // V2_UI_OVERHAUL §4.d.1 fixup — the textView is read-only by
+        // default; flip it editable BEFORE focusing so the user can
+        // type. exitEditMode / cancelEdit revert the flag.
+        textView.isEditable = true
         window?.makeFirstResponder(textView)
     }
 
@@ -1203,6 +1215,8 @@ final class TurnView: NSView, NSTextViewDelegate {
         isEditing = false
         textView.string = rawText
         window?.makeFirstResponder(nil)
+        // Lock the textView read-only again (paired with editTapped).
+        textView.isEditable = false
         renderRendered()
         recomputeHeight()
     }
@@ -1255,6 +1269,8 @@ final class TurnView: NSView, NSTextViewDelegate {
         isEditing = false
         rawText = textView.string
         delegate?.turnViewDidEditText(self, newText: rawText)
+        // Lock the textView read-only again (paired with editTapped).
+        textView.isEditable = false
         renderRendered()
         recomputeHeight()
     }
