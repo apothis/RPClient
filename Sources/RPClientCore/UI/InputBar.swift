@@ -114,7 +114,18 @@ final class InputBar: NSView, NSTextViewDelegate {
             primaryButton.widthAnchor.constraint(equalToConstant: 30),
             primaryButton.heightAnchor.constraint(equalToConstant: 30),
 
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 70)
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 70),
+            // Cap the bar's height so the layout engine doesn't dump
+            // all the vertical slack here when the chat content is
+            // short (e.g. empty state) — surfaced 2026-05-10 while
+            // smoking 4.h.1: the empty state's intrinsic height was
+            // only ~344pt while view.height was 800+, so the engine
+            // grew the InputBar to fill the gap (~540pt). textView's
+            // `isVerticallyResizable = true` plus the pill's elastic
+            // top/bottom anchors meant nothing pushed back. The scroll
+            // view inside the pill auto-scrolls past the cap so a
+            // long-typed message stays interactable.
+            heightAnchor.constraint(lessThanOrEqualToConstant: 220)
         ])
 
         let nc = NotificationCenter.default
