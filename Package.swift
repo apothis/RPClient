@@ -136,5 +136,32 @@ let package = Package(
             dependencies: ["RPClientCore", "SmokeFixtures"],
             path: "Sources/DirectorSmoke"
         ),
+        // Phase 10 §10.0.d — extractor smoke. Drives FactExtractor.run
+        // (GBNF JSON-mode side call) against long-history fixtures.
+        // Validates schema conformance + non-emptiness.
+        // Run with `swift run ExtractorSmoke [--fixture sfw-long] [--last-n N]`.
+        .executableTarget(
+            name: "ExtractorSmoke",
+            dependencies: ["RPClientCore", "SmokeFixtures"],
+            path: "Sources/ExtractorSmoke"
+        ),
+        // Phase 10 §10.0.d — context-blurber smoke. Drives ContextBlurber.run
+        // against a synthetic mid-chat chunk; validates 1–2 short factual
+        // sentences (no thinking-trace leak, no refusal, length-bounded).
+        // Run with `swift run BlurberSmoke [--fixture sfw-long]`.
+        .executableTarget(
+            name: "BlurberSmoke",
+            dependencies: ["RPClientCore", "SmokeFixtures"],
+            path: "Sources/BlurberSmoke"
+        ),
+        // Phase 10 §10.0.d — embeddings smoke. Smallest harness:
+        // confirms /v1/embeddings is reachable, returns vectors of
+        // consistent dimensionality.
+        // Run with `swift run EmbedSmoke [--fixture all]`.
+        .executableTarget(
+            name: "EmbedSmoke",
+            dependencies: ["RPClientCore", "SmokeFixtures"],
+            path: "Sources/EmbedSmoke"
+        ),
     ]
 )

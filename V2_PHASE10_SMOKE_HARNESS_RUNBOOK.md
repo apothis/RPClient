@@ -73,8 +73,11 @@ All smokes live in `Sources/<Name>Smoke/`. Each is an executable target; each wr
 | `ChatSmoke` | `KoboldClient.generateStream` via `PromptBuilder.build` | every SyntheticChats fixture (10 of them) |
 | `SummariserSmoke` | `Summarizer.run` | `sfw-long` (51 turns; canonical compress target) |
 | `DirectorSmoke` | `DirectorPicker.next` | every multi-cast SyntheticChats fixture (`group-chat`, `nsfw-group-scene`); `--repeats N` for stability checks |
+| `ExtractorSmoke` | `FactExtractor.run` | `sfw-long` (15-user-turn window); validates GBNF JSON-mode response shape + non-emptiness |
+| `BlurberSmoke` | `ContextBlurber.run` | `sfw-long` mid-chat 3-turn synthetic chunk; checks 1–2 short factual sentences (no thinking-trace leak, no refusal) |
+| `EmbedSmoke` | `KoboldClient.embed` | `sfw-short` first 8 turns; smallest harness — confirms `/v1/embeddings` reachable + consistent dimensionality |
 
-§10.0.d adds: `ExtractorSmoke` (FactExtractor), `BlurberSmoke` (ContextBlurber), `EmbedSmoke` (KoboldClient.embed). §10.0.e adds: `SmokeAll` (aggregate runner with diff-against-prior-report).
+§10.0.e adds: `SmokeAll` (aggregate runner with diff-against-prior-report).
 
 ### Default invocation (Claude does this on "run the smokes")
 
@@ -86,13 +89,12 @@ curl -s --max-time 5 http://192.168.1.201:5001/api/v1/model
 swift run ChatSmoke
 swift run SummariserSmoke
 swift run DirectorSmoke --repeats 3
-# (When §10.0.d lands:)
-# swift run ExtractorSmoke
-# swift run BlurberSmoke
-# swift run EmbedSmoke
+swift run ExtractorSmoke
+swift run BlurberSmoke
+swift run EmbedSmoke
 ```
 
-Each smoke takes ~5-30s warm. Full suite end-to-end currently ~30-60s.
+Each smoke takes ~5-30s warm. Full §10.0.b–d suite end-to-end currently ~30-60s. (`SmokeAll` aggregate runner replaces this manual loop with one command in §10.0.e.)
 
 ### Targeted invocations
 
@@ -257,7 +259,7 @@ This is the genuinely tricky case. KoboldCPP can change the model name string wh
 | `Sources/SmokeFixtures/RealChatLoader.swift` | `--chat <id>` loader from production app-support |
 | `Sources/SmokeFixtures/ModelObservationLog.swift` | per-EXACT-model observation store |
 | `Sources/SmokeFixtures/QuirkDetectors.swift` | rule-based weirdness detectors |
-| `Sources/{Chat,Summariser,Director}Smoke/main.swift` | per-surface smoke runners |
+| `Sources/{Chat,Summariser,Director,Extractor,Blurber,Embed}Smoke/main.swift` | per-surface smoke runners |
 | `~/Library/Application Support/RPClient/smoke-observations/<sanitised>.json` | per-EXACT-model observation log |
 | `V2_PHASE10_CHAT_TUNING_RESEARCH.md` | per-model findings + fix-registry roadmap |
 | (future) `~/Library/Application Support/RPClient/server_capabilities/<sanitised>.json` | per-EXACT-model capability cache (§10.a) |

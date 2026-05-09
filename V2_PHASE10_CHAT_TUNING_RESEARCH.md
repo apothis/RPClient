@@ -30,7 +30,7 @@ So at this point in the phase, observed quirks land in the log with a remediatio
 
 ### `koboldcpp/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M`
 
-**First observed:** 2026-05-09. **Probe count so far:** ChatSmoke (×2 dev iterations), SummariserSmoke (×1), DirectorSmoke (×1).
+**First observed:** 2026-05-09. **Probe count so far:** ChatSmoke (×2 dev iterations), SummariserSmoke (×1), DirectorSmoke (×1), ExtractorSmoke (×1), BlurberSmoke (×1), EmbedSmoke (×1).
 
 **Observations recorded (after fixture-shape cleanup):**
 
@@ -42,6 +42,9 @@ So at this point in the phase, observed quirks land in the log with a remediatio
 | SummariserSmoke | `sfw-long` | (none) | CLEAN | Summariser produced an 904-char factual recap; no thinking-trace leak; no refusal. |
 | DirectorSmoke | `nsfw-group-scene` | (none) | CLEAN | All 3 repeats picked Rae deterministically (~120ms warm). |
 | DirectorSmoke | `group-chat` | (none) | CLEAN | All 3 repeats picked Kit Voss deterministically. |
+| ExtractorSmoke | `sfw-long` | (none) | CLEAN | 8 well-formed facts, valid JSON, GBNF grammar honoured. ~4.2s warm on 15-user-turn window. |
+| BlurberSmoke | `sfw-long` | (none) | CLEAN | 184-char two-sentence factual blurb on a mid-chat 3-turn chunk. ~800ms warm. |
+| EmbedSmoke | `sfw-short` | (none) | CLEAN | 5 inputs → 5 vectors at 768-dim, ~320ms. Embedding model is loaded on this server. |
 
 **Findings worth carrying forward:**
 
@@ -57,10 +60,16 @@ So at this point in the phase, observed quirks land in the log with a remediatio
 
 4. **Director picks are deterministic at temperature 0.3** on this model. 3 repeats × 2 multi-cast fixtures returned the same pick every time, sub-150ms warm. No need to bump the picker's 5s timeout for this server.
 
+**Findings worth carrying forward (continued — §10.0.d data):**
+
+5. **GBNF grammar IS honoured on this server build.** ExtractorSmoke produced 8 well-formed facts with valid JSON, all entity_type values in the allowed alternation. No `schema-deviation`. The `--embeddingsmodel` is loaded too (768-dim vectors from `/v1/embeddings`). Confirms this server is fully equipped for the Phase 7 retrieval pipeline; ServerCapabilities for this model can encode `supportsJsonSchema = true` and `supportsEmbeddings = true` once §10.a lands.
+
+6. **Blurber works at default temp/max-length** with no thinking-trace leak. ~800ms per chunk warm. No need to bind the blurber-role to a smaller model on this server.
+
 **Pending probes against this model (next session):**
-- ExtractorSmoke / BlurberSmoke / EmbedSmoke (§10.0.d).
 - A retry of the role-confusion fixtures with the proposed mitigations (stop-sequence augmentation; stronger nudge wording) — to validate the candidate fixes before encoding them in ServerCapabilities.
 - A repeat ChatSmoke pass with `--verbose` so per-token cadence is captured (probe candidate P4 from `V2_PHASE10_CHAT_TUNING_SCOPING.md` §2.3).
+- §10.0.e SmokeAll aggregate runner so the whole suite runs in one command + produces the consolidated JSON report shape that ServerCapabilities will consume.
 
 ---
 
