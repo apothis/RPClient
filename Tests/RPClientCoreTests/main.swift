@@ -69,6 +69,8 @@ let suites: [TestSuite] = [
     phase9fProposalReviewModelTests(),
     phase9fProposalReviewSectionTests(),
     smokeFixturesTests(),
+    modelObservationLogTests(),
+    quirkDetectorsTests(),
 ]
 
 // `TestRunner.run` is `@MainActor`-isolated so test bodies can drive

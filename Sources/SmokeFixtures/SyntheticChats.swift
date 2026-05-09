@@ -177,6 +177,10 @@ enum SyntheticChats {
     /// SFW short: four user/assistant turns of casual dialogue. The
     /// shape ChatSmoke uses to verify a single end-to-end round-trip
     /// behaves; tracks output length, refusal flag, time-to-first-token.
+    /// Closes on a forward-driving user question (NOT a goodbye / "see
+    /// you tomorrow" line) — `shortReply` should fire only on real
+    /// model misbehaviour, not on a fixture that gives the model
+    /// nothing to respond to.
     private static func makeSFWShort() -> Chat {
         makeChat(
             id: ChatID.sfwShort,
@@ -188,7 +192,7 @@ enum SyntheticChats {
                 Step(.assistant, "*She tucks the envelope into her satchel and looks the traveller over once.* \"Two nights of camp. Carry your own bedroll. Half up front, half on delivery.\""),
                 Step(.user, "Done. What's the road like this time of year?"),
                 Step(.assistant, "*She rolls a stiffness out of her shoulder.* \"Wet through the gap. Bandits keep to the south fork after dusk; we'll skirt north. Bring decent boots.\""),
-                Step(.user, "I'll meet you at the inn at first light."),
+                Step(.user, "Tell me about the bandits — how organised are they, and what do you do if we run into them?"),
             ]
         )
     }
@@ -257,6 +261,11 @@ enum SyntheticChats {
             steps.append(Step(.user, userBeats[i]))
             steps.append(Step(.assistant, assistantBeats[i]))
         }
+        // Final user turn so the prompt the chat-smoke generates from
+        // ends on a hook (not on Mira's closer), driving a substantive
+        // model response. Without this the model emits a brief
+        // acknowledgement and shortReply fires for benign reasons.
+        steps.append(Step(.user, "Walk me through what you're going to do over the next hour, in detail. Don't skip anything."))
         return makeChat(
             id: ChatID.sfwLong,
             chatIdx: 3,

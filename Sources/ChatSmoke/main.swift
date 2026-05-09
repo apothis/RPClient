@@ -114,12 +114,26 @@ func resolveFixtures(args: Args) -> [FixtureRun] {
 // MARK: - Prompt assembly + streaming
 
 @MainActor
-func runFixture(_ run: FixtureRun, args: Args, kobold: KoboldClient) -> (response: String, ms: Int, refusal: RefusalDetection) {
+func runFixture(_ run: FixtureRun, args: Args, kobold: KoboldClient) -> (response: String, ms: Int, refusal: RefusalDetection, observations: [ModelObservation]) {
     let template = Templates.byId(args.templateId, qwenThinking: false)
     // Multi-cast: pick the first cast member as active speaker (no
     // SpeakerPicker in the smoke path; we want determinism so
     // KV-cache prefixes are byte-stable across runs). Solo: nil.
     let speakerId: UUID? = run.chat.cast.count > 1 ? run.chat.cast.first : nil
+
+    // Track whether the last verbatim turn is an assistant turn — the
+    // QuirkDetector uses this to refine its "shortReply" hint (the
+    // doubled-prefill case behaves differently from a model that
+    // genuinely emits end-of-turn early). We do NOT auto-set
+    // `continuation: true` here: an earlier attempt to do so made
+    // things worse because the model interpreted the open assistant
+    // turn as already complete (Qwen3.6 emitted end-token immediately
+    // on closed-feeling trailing prose). Production fixtures should
+    // end on user turns; that's the chat-send invariant. Fixtures
+    // that don't are intentionally probing the doubled-prefill
+    // behaviour — the QuirkDetector flags it but we don't suppress.
+    let lastVerbatimRole = PromptBuilder.verbatimTurns(run.chat).last?.role
+    let promptEndsOnAssistant = lastVerbatimRole == .assistant
 
     let assembled = PromptBuilder.build(
         chat: run.chat,
@@ -191,7 +205,28 @@ func runFixture(_ run: FixtureRun, args: Args, kobold: KoboldClient) -> (respons
     }
     print("[ttft: \(ttft)ms, total: \(totalMs)ms, response: \(collected.count) chars]")
     let refusal = CardGenRefusalDetector.detect(candidate: collected, expectedLengthChars: 400)
-    return (collected, totalMs, refusal)
+
+    // Run the rule-based detector against the fixture result. The
+    // observations are returned to the caller for batched append to
+    // the per-model log at the end of the run.
+    let activeName: String? = {
+        if let sid = speakerId {
+            return run.cast.first(where: { $0.id == sid })?.name
+        }
+        return run.activeCharacter?.name
+    }()
+    let cohabitantNames: [String] = run.cast
+        .filter { $0.name != activeName }
+        .map(\.name)
+    let observations = QuirkDetectors.detectChat(
+        smoke: "ChatSmoke",
+        fixture: run.name,
+        response: collected,
+        expectedLengthChars: 400,
+        promptEndsOnAssistant: promptEndsOnAssistant,
+        castNamesOtherThanActive: cohabitantNames
+    )
+    return (collected, totalMs, refusal, observations)
 }
 
 func promptPreview(_ prompt: String) -> String {
@@ -256,10 +291,12 @@ struct Summary {
     let ms: Int
     let chars: Int
     let refusal: RefusalDetection
+    let observationCount: Int
 }
 
 let exitCode: Int32 = MainActor.assumeIsolated {
     var summaries: [Summary] = []
+    var allObservations: [ModelObservation] = []
     for (i, run) in runs.enumerated() {
         print("")
         print("====================================================")
@@ -278,7 +315,20 @@ let exitCode: Int32 = MainActor.assumeIsolated {
         } else {
             print("refusal:   none detected")
         }
-        summaries.append(Summary(name: run.name, ms: result.ms, chars: result.response.count, refusal: result.refusal))
+        if !result.observations.isEmpty {
+            print("quirks:    \(result.observations.count) observation(s) recorded")
+            for obs in result.observations {
+                print("  • [\(obs.kind)] \(obs.details)")
+                if let hint = obs.remediationHint, !hint.isEmpty {
+                    // Keep hint on its own indented line so it's visually
+                    // separable from the observation's details.
+                    print("    → \(hint)")
+                }
+            }
+        }
+        summaries.append(Summary(name: run.name, ms: result.ms, chars: result.response.count,
+                                 refusal: result.refusal, observationCount: result.observations.count))
+        allObservations.append(contentsOf: result.observations)
     }
 
     print("")
@@ -288,10 +338,40 @@ let exitCode: Int32 = MainActor.assumeIsolated {
     let nameWidth = max(22, summaries.map { $0.name.count }.max() ?? 22)
     for s in summaries {
         let flag = s.refusal.isRefusal ? "⚠" : " "
+        let qFlag = s.observationCount > 0 ? "Q\(s.observationCount)" : "  "
         let pad = String(repeating: " ", count: max(0, nameWidth - s.name.count))
-        print(String(format: " %@ %@%@  %5dms  %5d chars", flag, s.name, pad, s.ms, s.chars))
+        print(String(format: " %@ %@ %@%@  %5dms  %5d chars", flag, qFlag, s.name, pad, s.ms, s.chars))
     }
-    print(String(format: "total: %d fixtures, %dms, %d refusal-flagged", summaries.count, totalMs, refusals))
+    print(String(format: "total: %d fixtures, %dms, %d refusal-flagged, %d observations recorded",
+                 summaries.count, totalMs, refusals, allObservations.count))
+
+    // Persist observations to the per-EXACT-model log. Model name
+    // here is whatever `/api/v1/model` returned at startup. Skipped
+    // when the probe failed (no model name to key on).
+    if let model = probedModelName {
+        if !allObservations.isEmpty {
+            do {
+                let url = try ModelObservationStore.append(allObservations, modelName: model)
+                print("observations: written \(allObservations.count) to \(url.path)")
+            } catch {
+                FileHandle.standardError.write(Data("warning: failed to write observation log — \(error)\n".utf8))
+            }
+        } else {
+            // Still bump the runCount on a clean run so the log
+            // reflects "we exercised this model N times, no quirks
+            // surfaced." This is the difference between
+            // "well-explored model with no issues" vs "never tested."
+            do {
+                let url = try ModelObservationStore.append([], modelName: model)
+                print("observations: clean run recorded at \(url.path)")
+            } catch {
+                FileHandle.standardError.write(Data("warning: failed to write observation log — \(error)\n".utf8))
+            }
+        }
+    } else {
+        FileHandle.standardError.write(Data("warning: model probe failed at startup — observation log NOT written (model-name keying requires a known name).\n".utf8))
+    }
+
     return summaries.isEmpty ? 1 : 0
 }
 
