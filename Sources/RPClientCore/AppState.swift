@@ -1015,13 +1015,10 @@ final class AppState {
         // Continuation streams resume mid-reply, after any think block has
         // already been emitted and stripped — engaging the filter would eat
         // legitimate content, so it stays nil for those.
-        if !continuation,
-           chat.templateId == "qwen",
-           settings.qwenThinkingEnabled {
-            streamThinkFilter = ThinkBlockFilter()
-        } else {
-            streamThinkFilter = nil
-        }
+        let thinkingActive = !continuation
+            && chat.templateId == "qwen"
+            && settings.qwenThinkingEnabled
+        streamThinkFilter = thinkingActive ? ThinkBlockFilter() : nil
         let preset = SamplerPreset.presets.first(where: { $0.id == chat.samplerPresetId }) ?? .balanced
         // Phase 10 §10.c — chat-scoped ctx so the per-EXACT-model
         // `maxCtxCap` override applies (Llama 4 Scout chunked-attention
@@ -1067,12 +1064,32 @@ final class AppState {
                 recencyExclude=\(self.settings.retrieval.recencyExclusion) \
                 tookMs=\(Int(dt * 1000))
                 """)
-            self.assembleAndStream(chat: chat, ctx: ctx, preset: preset, relevantMemories: block, continuation: continuation)
+            self.assembleAndStream(
+                chat: chat, ctx: ctx, preset: preset,
+                relevantMemories: block, continuation: continuation,
+                thinkingActive: thinkingActive
+            )
         }
     }
 
-    private func assembleAndStream(chat: Chat, ctx: Int, preset: SamplerPreset, relevantMemories: String?, continuation: Bool = false) {
-        let replyMax = settings.replyTokensOverride > 0 ? settings.replyTokensOverride : preset.maxLength
+    /// Reply-token cap doubled for thinking-mode streams so the model
+    /// has room for both the `<think>` trace AND a substantial body.
+    /// V2_UI_OVERHAUL §D.12 — surfaced when a Qwen3 regen consumed
+    /// 5791 chars of trace within the 2048-token cap and emitted near-
+    /// zero body. Non-thinking streams stay at the preset default.
+    static let thinkingReplyTokenCap = 4096
+
+    private func assembleAndStream(
+        chat: Chat, ctx: Int, preset: SamplerPreset,
+        relevantMemories: String?, continuation: Bool = false,
+        thinkingActive: Bool = false
+    ) {
+        let replyMaxOverride: Int? = {
+            if settings.replyTokensOverride > 0 { return settings.replyTokensOverride }
+            if thinkingActive { return AppState.thinkingReplyTokenCap }
+            return nil
+        }()
+        let replyMax = replyMaxOverride ?? preset.maxLength
         // Phase 8 §4.2c — speaker resolution. For multi-cast chats, the
         // trailing assistant slot was stamped with a speakerId by
         // sendUserMessage / regenerate / forkFrom (whichever opened it).
@@ -1144,7 +1161,7 @@ final class AppState {
                 stopSequences: assembly.stops,
                 preset: preset,
                 maxContextLength: ctx,
-                maxLengthOverride: self.settings.replyTokensOverride > 0 ? self.settings.replyTokensOverride : nil
+                maxLengthOverride: replyMaxOverride
             )
 
             self.kobold.generateStream(
