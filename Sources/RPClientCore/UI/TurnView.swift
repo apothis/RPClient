@@ -307,13 +307,41 @@ final class TurnView: NSView, NSTextViewDelegate {
     /// textView scroll instead of expand.
     private var speakerLabelHeight: CGFloat { speakerNameLabel != nil ? 20 : 0 }
 
-    /// V2_UI_OVERHAUL §4.0.a / §4.7 — populated by `renderRendered`
-    /// from `Markdown.extractThinking`. Sub-step 4.b.1 only stores it;
-    /// the visual disclosure pill that surfaces it in the chat lands
-    /// in 4.b.2. Until then the chat surface keeps stripping `<think>`
-    /// from the rendered prose (same behaviour as today) but the data
-    /// is captured and ready for the disclosure UI to consume.
+    /// V2_UI_OVERHAUL §4.0.a / §4.7 — `<think>` content extracted from
+    /// the assistant body via `Markdown.extractThinking`. Surfaced as
+    /// a "▸ Thinking" disclosure pill above the prose body; clicking
+    /// the pill toggles inline expansion to show the trace in
+    /// `secondaryLabelColor` body. Nil when the turn has no thinking
+    /// block (or only an empty pre-fill, per Phase 10's finding).
     private var thinkingText: String?
+    private var thinkingExpanded: Bool = false
+    private let thinkPill = NSButton()
+    private let thinkBodyView = NSTextField(wrappingLabelWithString: "")
+    /// Bubble's top constraint, kept as an ivar so the disclosure
+    /// state can update its constant: `labelGap + disclosureExtraHeight`.
+    /// Owned by the assistant branch of `installConstraints`.
+    private var bubbleTopConstraint: NSLayoutConstraint?
+    /// V2_UI_OVERHAUL §4.7 — pill is `caption1` text + chevron icon,
+    /// 20pt high (one-line). Constants pinned by the height-math
+    /// tests; changes here require updating the test values too so
+    /// the contract stays explicit.
+    static let thinkPillHeight: CGFloat = 20
+
+    /// Pure height math for the disclosure area above the bubble.
+    /// Total extra row height contributed by the disclosure (and its
+    /// expanded body, when applicable). Tested in
+    /// Phase11ThinkDisclosureHeightTests; keep the maths here so the
+    /// test pins the contract instead of black-box-measuring the row.
+    static func disclosureExtraHeight(
+        hasThinking: Bool,
+        expanded: Bool,
+        bodyHeight: CGFloat
+    ) -> CGFloat {
+        guard hasThinking else { return 0 }
+        let pill = thinkPillHeight + DesignTokens.Spacing.xs
+        guard expanded else { return pill }
+        return pill + bodyHeight + DesignTokens.Spacing.xs
+    }
 
     init(turn: Turn, character: Character? = nil, multiCast: Bool = false) {
         self.turnId = turn.id
@@ -417,6 +445,37 @@ final class TurnView: NSView, NSTextViewDelegate {
             tsLabel.translatesAutoresizingMaskIntoConstraints = false
             addSubview(tsLabel)
             timestampLabel = tsLabel
+
+            // V2_UI_OVERHAUL §4.7 — `<think>` collapsed disclosure pill.
+            // Hidden until renderRendered detects a non-empty think
+            // block. caption1 + secondaryLabelColor + a chevron icon
+            // that flips between right (collapsed) and down (expanded).
+            thinkPill.title = "Thinking"
+            thinkPill.bezelStyle = .inline
+            thinkPill.isBordered = false
+            thinkPill.font = DesignTokens.Typography.caption1
+            thinkPill.contentTintColor = .secondaryLabelColor
+            thinkPill.image = NSImage(
+                systemSymbolName: "chevron.right",
+                accessibilityDescription: "Show thinking"
+            )
+            thinkPill.imagePosition = .imageLeading
+            thinkPill.imageScaling = .scaleProportionallyDown
+            thinkPill.target = self
+            thinkPill.action = #selector(thinkPillTapped)
+            thinkPill.isHidden = true
+            thinkPill.translatesAutoresizingMaskIntoConstraints = false
+            thinkPill.toolTip = "Show the model's reasoning trace"
+            addSubview(thinkPill)
+
+            // Expanded body — secondary-tinted prose, multi-line wrap.
+            thinkBodyView.font = DesignTokens.Typography.body
+            thinkBodyView.textColor = .secondaryLabelColor
+            thinkBodyView.isHidden = true
+            thinkBodyView.lineBreakMode = .byWordWrapping
+            thinkBodyView.maximumNumberOfLines = 0
+            thinkBodyView.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(thinkBodyView)
 
             addSubview(avatar)
         }
@@ -608,13 +667,18 @@ final class TurnView: NSView, NSTextViewDelegate {
             // bubble body, so the row reads as "this character said this".
             let labelGap = speakerLabelHeight
 
+            let bubbleTop = bubble.topAnchor.constraint(
+                equalTo: topAnchor, constant: labelGap
+            )
+            bubbleTopConstraint = bubbleTop
+
             NSLayoutConstraint.activate([
                 avatar.topAnchor.constraint(equalTo: topAnchor),
                 avatar.leadingAnchor.constraint(equalTo: leadingAnchor),
                 avatar.widthAnchor.constraint(equalToConstant: avatarSize),
                 avatar.heightAnchor.constraint(equalToConstant: avatarSize),
 
-                bubble.topAnchor.constraint(equalTo: topAnchor, constant: labelGap),
+                bubbleTop,
                 bubble.leadingAnchor.constraint(equalTo: leadingAnchor, constant: glyphCol),
                 bubble.trailingAnchor.constraint(equalTo: trailingAnchor),
 
@@ -645,11 +709,25 @@ final class TurnView: NSView, NSTextViewDelegate {
                     ])
                 }
             }
-            // Think disclosure stack: pill above the body, expanded
-            // content below the pill (when toggled). Both anchored to
-            // the bubble's leading edge so they line up with prose.
-            // recomputeHeight folds their measured heights into the
-            // total row height; layout() is the constraint owner.
+            // V2_UI_OVERHAUL §4.7 — `<think>` disclosure pill + body.
+            // Pill sits in the slot the bubble would occupy when no
+            // thinking is present, so its top constraint matches the
+            // bubble's `topAnchor + labelGap`. When thinking IS present,
+            // applyDisclosureLayout() bumps the bubble's top constant
+            // by `disclosureExtraHeight(...)` to make room. Pill +
+            // body always anchor here; visibility (and the bubble
+            // offset) is what changes.
+            NSLayoutConstraint.activate([
+                thinkPill.topAnchor.constraint(equalTo: topAnchor, constant: labelGap),
+                thinkPill.leadingAnchor.constraint(equalTo: leadingAnchor, constant: glyphCol),
+                thinkPill.heightAnchor.constraint(equalToConstant: TurnView.thinkPillHeight),
+
+                thinkBodyView.topAnchor.constraint(
+                    equalTo: thinkPill.bottomAnchor, constant: DesignTokens.Spacing.xs
+                ),
+                thinkBodyView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: glyphCol),
+                thinkBodyView.trailingAnchor.constraint(equalTo: trailingAnchor)
+            ])
         }
     }
 
@@ -721,6 +799,74 @@ final class TurnView: NSView, NSTextViewDelegate {
 
     @objc private func branchGlyphTapped() {
         delegate?.turnViewDidRequestSiblingPopover(self, anchor: branchGlyph)
+    }
+
+    /// V2_UI_OVERHAUL §4.7 — toggle the `<think>` disclosure body. The
+    /// disclosure pill's chevron flips right→down on expand; the body
+    /// fades in below. `applyDisclosureLayout` does the visibility +
+    /// constraint-constant work; `recomputeHeight` reflows the row.
+    @objc private func thinkPillTapped() {
+        guard thinkingText != nil else { return }
+        thinkingExpanded.toggle()
+        applyDisclosureLayout()
+        recomputeHeight()
+    }
+
+    /// Applies the current `(thinkingText, thinkingExpanded)` state to
+    /// the disclosure subviews + bubble top constant. Called from
+    /// renderRendered (when rawText changes) AND from thinkPillTapped
+    /// (when the user toggles). Idempotent.
+    private func applyDisclosureLayout() {
+        let hasThinking = (thinkingText != nil)
+        thinkPill.isHidden = !hasThinking
+        thinkBodyView.isHidden = !(hasThinking && thinkingExpanded)
+        // Chevron orientation. SF Symbols owns the "right" / "down"
+        // glyphs; on a pre-26 macOS the resolution falls back to a
+        // disclosure-triangle-style fallback by name match.
+        let chevronName = thinkingExpanded ? "chevron.down" : "chevron.right"
+        thinkPill.image = NSImage(
+            systemSymbolName: chevronName,
+            accessibilityDescription: thinkingExpanded
+                ? "Hide thinking" : "Show thinking"
+        )
+        // Body wraps to the prose width. preferredMaxLayoutWidth has
+        // to be set BEFORE the body's intrinsic content size is
+        // measured (otherwise the label asks for a single-line height
+        // and the row clips on first render); recomputeHeight reads
+        // the same width.
+        let w = currentTextWidth()
+        if w > 1 { thinkBodyView.preferredMaxLayoutWidth = w }
+        if hasThinking, thinkingExpanded {
+            thinkBodyView.stringValue = thinkingText ?? ""
+        }
+        // Update bubble's top constant — the disclosure consumes the
+        // space between the speaker header and the bubble.
+        let bodyH = thinkingExpanded ? measuredThinkBodyHeight() : 0
+        let extra = TurnView.disclosureExtraHeight(
+            hasThinking: hasThinking, expanded: thinkingExpanded, bodyHeight: bodyH
+        )
+        bubbleTopConstraint?.constant = speakerLabelHeight + extra
+    }
+
+    /// Measure the wrapped height of the think body at the current
+    /// available width. Used both for the bubble offset and for the
+    /// row's recomputeHeight total.
+    private func measuredThinkBodyHeight() -> CGFloat {
+        guard let s = thinkingText, !s.isEmpty else { return 0 }
+        let w = currentTextWidth()
+        guard w > 1 else { return 0 }
+        let attr = NSAttributedString(
+            string: s,
+            attributes: [
+                .font: DesignTokens.Typography.body,
+                .foregroundColor: NSColor.secondaryLabelColor
+            ]
+        )
+        let bbox = attr.boundingRect(
+            with: NSSize(width: w, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+        return ceil(bbox.height)
     }
 
     /// Commit the user's pending edits and exit edit mode.
@@ -805,9 +951,9 @@ final class TurnView: NSView, NSTextViewDelegate {
         }
         let display: String
         if role == .assistant {
-            // V2_UI_OVERHAUL §4.b.1 — capture the thinking content
-            // for the future disclosure pill (4.b.2) while keeping the
-            // body identical to today's strip-only behaviour.
+            // V2_UI_OVERHAUL §4.7 — split think trace from prose so
+            // the trace can surface in the disclosure pill while the
+            // textView renders only the prose.
             let extracted = Markdown.extractThinking(rawText)
             thinkingText = extracted.think
             display = extracted.body
@@ -817,6 +963,9 @@ final class TurnView: NSView, NSTextViewDelegate {
         }
         let attr = Markdown.render(display, baseFont: baseFont)
         textView.textStorage?.setAttributedString(attr)
+        if role == .assistant {
+            applyDisclosureLayout()
+        }
     }
 
     func textDidChange(_ notification: Notification) {
@@ -909,12 +1058,22 @@ final class TurnView: NSView, NSTextViewDelegate {
             textH = 24
         }
         let bubbleH: CGFloat = role == .user ? textH + bubblePadY * 2 : textH
-        // Phase 8 §4.3 — `speakerLabelHeight` is the gap reserved above
-        // the bubble for the multi-cast speaker name pill (zero on solo
-        // chats / user turns). Without adding it here, the bubble's
-        // content area is squeezed and the textView scrolls instead of
-        // expanding to fit the reply.
-        let h = speakerLabelHeight + bubbleH + toolbarTopGap + toolbarHeight
+        // V2_UI_OVERHAUL §4.7 — the disclosure pill (and its expanded
+        // body when toggled) sits between the speaker header and the
+        // bubble. Its space comes from the static helper that's pinned
+        // by Phase11ThinkDisclosureHeightTests so the math stays
+        // explicit. Returns 0 on user turns (no thinking concept) and
+        // on assistant turns with no `<think>` block.
+        let disclosureH = TurnView.disclosureExtraHeight(
+            hasThinking: thinkingText != nil,
+            expanded: thinkingExpanded,
+            bodyHeight: thinkingExpanded ? measuredThinkBodyHeight() : 0
+        )
+        let h = speakerLabelHeight
+            + disclosureH
+            + bubbleH
+            + toolbarTopGap
+            + toolbarHeight
         if heightConstraint == nil {
             heightConstraint = heightAnchor.constraint(equalToConstant: h)
             heightConstraint?.isActive = true
