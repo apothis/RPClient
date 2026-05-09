@@ -34,12 +34,14 @@ final class ModelCapabilitiesWindowController: NSWindowController, NSWindowDeleg
 
     convenience init() {
         let w = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 720),
+            contentRect: NSRect(x: 0, y: 0, width: 1100, height: 680),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
-        w.minSize = NSSize(width: 640, height: 420)
+        // Wider min so at least two cards fit side by side without
+        // the user having to drag-resize on first open.
+        w.minSize = NSSize(width: 720, height: 520)
         w.title = "Model Capabilities"
         self.init(window: w)
         w.delegate = self
@@ -72,15 +74,29 @@ final class ModelCapabilitiesWindowController: NSWindowController, NSWindowDeleg
         helpText.font = Theme.font(10)
         helpText.textColor = .secondaryLabelColor
 
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 18
-        stack.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 12, right: 12)
+        // Horizontal layout: cards side-by-side, one fixed-width
+        // card per record. Horizontal scroll for browsing many
+        // models; vertical scroll falls back to per-card content
+        // expansion (currently each card sizes to fit, not scrolled
+        // internally). The bottom "Add new model" form is pinned
+        // BELOW the scroll so it's always reachable regardless of
+        // how far right the user has scrolled.
+        stack.orientation = .horizontal
+        stack.alignment = .top
+        stack.spacing = 16
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = true
+        // Per-axis flex: horizontal scroll bar is the primary
+        // navigation; vertical exists for the (rare) case where
+        // notes / observations push a card past viewport height.
+        scroll.autohidesScrollers = false
         scroll.borderType = .bezelBorder
+        scroll.drawsBackground = true
+        scroll.backgroundColor = .windowBackgroundColor
         scroll.documentView = stack
 
         refreshButton.bezelStyle = .rounded
@@ -95,9 +111,16 @@ final class ModelCapabilitiesWindowController: NSWindowController, NSWindowDeleg
         topBar.translatesAutoresizingMaskIntoConstraints = false
 
         helpText.translatesAutoresizingMaskIntoConstraints = false
+
+        // Bottom-pinned "Add new model" form — separate from the
+        // horizontal-scrolling card list so the user can add a
+        // record without scrolling all the way right.
+        let addFormContainer = makeAddBox()
+
         cv.addSubview(topBar)
         cv.addSubview(helpText)
         cv.addSubview(scroll)
+        cv.addSubview(addFormContainer)
 
         NSLayoutConstraint.activate([
             topBar.topAnchor.constraint(equalTo: cv.topAnchor, constant: 12),
@@ -109,17 +132,52 @@ final class ModelCapabilitiesWindowController: NSWindowController, NSWindowDeleg
             scroll.topAnchor.constraint(equalTo: helpText.bottomAnchor, constant: 8),
             scroll.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 12),
             scroll.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -12),
-            scroll.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -12),
-            // Stack width tracks scroll view's content area so the
-            // wrap labels reflow properly when the window resizes.
-            stack.widthAnchor.constraint(equalTo: scroll.widthAnchor, constant: -8),
+            scroll.bottomAnchor.constraint(equalTo: addFormContainer.topAnchor, constant: -10),
+            addFormContainer.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 12),
+            addFormContainer.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -12),
+            addFormContainer.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -12),
+        ])
+
+        // NSScrollView with an NSStackView documentView: pin the
+        // stack to the scroll's contentView so the document
+        // geometry is known. For HORIZONTAL scrolling we pin
+        // height (vertical fits viewport) and let width grow with
+        // arranged subviews. Cards extend past the right edge as
+        // they're added; the horizontal scroller exposes them.
+        let docContent = scroll.contentView
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: docContent.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: docContent.leadingAnchor),
+            stack.bottomAnchor.constraint(equalTo: docContent.bottomAnchor),
+            stack.heightAnchor.constraint(equalTo: docContent.heightAnchor),
         ])
     }
 
+    /// Fixed width per record card. Wide enough that the form rows
+    /// (140pt label column + popups / fields) fit comfortably; narrow
+    /// enough that 2-3 cards visible at default window width.
+    static let cardWidth: CGFloat = 420
+
     @objc private func reload() {
+        // Preserve scroll position across rebuilds so a Save on
+        // record #7 doesn't bounce the user back to the start. With
+        // horizontal layout the relevant axis is x; clamp to the new
+        // content's max-x so a delete that shortened the row doesn't
+        // try to over-scroll.
+        let priorOrigin = scroll.documentVisibleRect.origin
         records = (try? ModelCapabilitiesStore.listAll())?
             .sorted(by: { $0.modelName < $1.modelName }) ?? []
         rebuildStack()
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let docView = self.scroll.documentView else { return }
+            let viewport = self.scroll.contentView.bounds.size
+            let maxX = max(0, docView.frame.width - viewport.width)
+            let maxY = max(0, docView.frame.height - viewport.height)
+            let clamped = NSPoint(x: min(priorOrigin.x, maxX),
+                                  y: min(priorOrigin.y, maxY))
+            docView.scroll(clamped)
+        }
     }
 
     private func rebuildStack() {
@@ -131,40 +189,59 @@ final class ModelCapabilitiesWindowController: NSWindowController, NSWindowDeleg
 
         if records.isEmpty {
             let empty = NSTextField(wrappingLabelWithString:
-                "No model records yet. Add one below or run `swift run ModelCapsAdmin set <model-name> ...` (or, when §10.a's probe runner lands, just load a new model and the probe will create a record automatically).")
+                "No model records yet. Add one in the form below, or run `swift run ModelCapsAdmin set <model-name> ...` (or, when §10.a's probe runner lands, just load a new model and the probe will create a record automatically).")
             empty.font = Theme.font(11)
             empty.textColor = .secondaryLabelColor
+            empty.lineBreakMode = .byWordWrapping
+            empty.maximumNumberOfLines = 0
             stack.addArrangedSubview(empty)
+            empty.widthAnchor.constraint(equalToConstant: 480).isActive = true
         } else {
             for record in records {
                 let editor = ModelCapabilityEditor(record: record, owner: self)
                 editors[record.modelName] = editor
                 stack.addArrangedSubview(editor.box)
+                // Each card is fixed-width (Self.cardWidth) so the
+                // horizontal stack lays them out side-by-side. Card
+                // height is intrinsic — the tallest card determines
+                // the row height; shorter cards get top-aligned
+                // whitespace (stack.alignment = .top).
+                editor.box.widthAnchor.constraint(equalToConstant: Self.cardWidth).isActive = true
             }
         }
-
-        // Trailing "+ Add new model" form — even when records is non-empty.
-        let addBox = makeAddBox()
-        stack.addArrangedSubview(addBox)
     }
 
     private func makeAddBox() -> NSView {
-        let box = NSBox()
-        box.title = "Add a new model record"
-        box.translatesAutoresizingMaskIntoConstraints = false
+        // Custom NSView (not NSBox) with a layer-drawn border —
+        // NSBox's interaction with NSStackView turned out to be the
+        // root cause of both the missing borders on the per-record
+        // sections and the y-overlap with the next section. A plain
+        // NSView whose layer carries the cornerRadius + border
+        // sidesteps the whole NSBox layout machinery.
+        let made = ModelCapabilitiesWindowController.makeSectionContainer(title: "Add a new model record")
+        let container = made.container
+        let inner = made.innerStack
 
         let label = NSTextField(labelWithString: "Exact model name (e.g. `koboldcpp/Qwen3.6-…-Q5_K_M`):")
+        label.lineBreakMode = .byWordWrapping
+        label.maximumNumberOfLines = 0
+        label.translatesAutoresizingMaskIntoConstraints = false
+
         newModelField.placeholderString = "model name from /api/v1/model"
         newModelField.translatesAutoresizingMaskIntoConstraints = false
+        newModelField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        newModelField.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         addButton.bezelStyle = .rounded
         addButton.target = self
         addButton.action = #selector(addNewModel)
         addButton.translatesAutoresizingMaskIntoConstraints = false
+        addButton.setContentHuggingPriority(.defaultHigh, for: .horizontal)
 
         let row = NSStackView(views: [newModelField, addButton])
         row.orientation = .horizontal
         row.spacing = 8
+        row.distribution = .fill
         row.translatesAutoresizingMaskIntoConstraints = false
 
         let helpRow = NSTextField(wrappingLabelWithString:
@@ -173,21 +250,60 @@ final class ModelCapabilitiesWindowController: NSWindowController, NSWindowDeleg
             "Useful for pre-encoding a fix you've validated against a quant you're about to load.")
         helpRow.font = Theme.font(10)
         helpRow.textColor = .secondaryLabelColor
+        helpRow.lineBreakMode = .byWordWrapping
+        helpRow.maximumNumberOfLines = 0
         helpRow.translatesAutoresizingMaskIntoConstraints = false
 
-        let inner = NSStackView(views: [label, row, helpRow])
+        for v in [label as NSView, row, helpRow] {
+            inner.addArrangedSubview(v)
+            v.widthAnchor.constraint(equalTo: inner.widthAnchor).isActive = true
+        }
+        return container
+    }
+
+    /// Build a layer-drawn rounded "card" container with an internal
+    /// vertical NSStackView pinned to its 4 edges. Returns both so
+    /// the caller can populate the stack and have the container size
+    /// itself to the stack's intrinsic height. Replaces NSBox at
+    /// every section site — NSBox + NSStackView arrangement was the
+    /// root cause of the screenshot's empty-top-half + sections-
+    /// overlapping-each-other layout pathology.
+    static func makeSectionContainer(title: String?) -> (container: NSView, innerStack: NSStackView) {
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        container.layer?.cornerRadius = 6
+        container.layer?.borderWidth = 1
+        container.layer?.borderColor = NSColor.separatorColor.cgColor
+
+        let inner = NSStackView()
         inner.orientation = .vertical
         inner.alignment = .leading
-        inner.spacing = 6
+        inner.spacing = 8
         inner.translatesAutoresizingMaskIntoConstraints = false
-        inner.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 8, right: 8)
+        container.addSubview(inner)
 
-        box.contentView = inner
+        let topInset: CGFloat = title == nil ? 12 : 32
         NSLayoutConstraint.activate([
-            newModelField.widthAnchor.constraint(greaterThanOrEqualToConstant: 380),
-            inner.widthAnchor.constraint(equalTo: box.widthAnchor, constant: -16),
+            inner.topAnchor.constraint(equalTo: container.topAnchor, constant: topInset),
+            inner.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            inner.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            inner.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -14),
         ])
-        return box
+
+        if let title {
+            let titleLabel = NSTextField(labelWithString: title)
+            titleLabel.font = Theme.bold(12)
+            titleLabel.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(titleLabel)
+            NSLayoutConstraint.activate([
+                titleLabel.topAnchor.constraint(equalTo: container.topAnchor, constant: 10),
+                titleLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+                titleLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            ])
+        }
+        return (container, inner)
     }
 
     @objc private func addNewModel() {
@@ -269,12 +385,13 @@ final class ModelCapabilitiesWindowController: NSWindowController, NSWindowDeleg
 // MARK: - Per-record editor
 
 /// Owns the controls for one section. The window controller stitches
-/// these together; the editor exposes a `.box` view + Save/Delete
-/// callbacks. Holds a copy of the `ModelCapabilities` it was seeded
-/// from; user edits update the in-memory copy until Save commits to
-/// disk.
+/// these together; the editor exposes a `.box` view (the layer-drawn
+/// container) + Save/Delete callbacks. Holds a copy of the
+/// `ModelCapabilities` it was seeded from; user edits update the
+/// in-memory copy until Save commits to disk.
 private final class ModelCapabilityEditor: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
-    let box: NSBox
+    let box: NSView
+    private let inner: NSStackView
     private let owner: ModelCapabilitiesWindowController
     private var record: ModelCapabilities
 
@@ -299,15 +416,27 @@ private final class ModelCapabilityEditor: NSObject, NSTextFieldDelegate, NSText
     init(record: ModelCapabilities, owner: ModelCapabilitiesWindowController) {
         self.record = record
         self.owner = owner
-        self.box = NSBox()
+        // Section title is the model name itself — rendered as a
+        // proper title-bar label inside the rounded card. The cap
+        // letter-glyph is a monospaced font for readability of long
+        // exact model names; truncation is byTruncatingMiddle so
+        // the meaningful suffix (the quant tag) stays visible.
+        let made = ModelCapabilitiesWindowController.makeSectionContainer(title: nil)
+        self.box = made.container
+        self.inner = made.innerStack
         super.init()
         buildUI()
         loadRecord()
     }
 
     private func buildUI() {
-        box.title = record.modelName
-        box.translatesAutoresizingMaskIntoConstraints = false
+        let titleLabel = NSTextField(labelWithString: record.modelName)
+        titleLabel.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
+        titleLabel.lineBreakMode = .byTruncatingMiddle
+        titleLabel.maximumNumberOfLines = 1
+        titleLabel.toolTip = record.modelName
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         recordedLabel.font = Theme.font(10)
         recordedLabel.textColor = .secondaryLabelColor
@@ -330,19 +459,18 @@ private final class ModelCapabilityEditor: NSObject, NSTextFieldDelegate, NSText
         notesScroll.documentView = notesView
         notesScroll.translatesAutoresizingMaskIntoConstraints = false
 
-        // Thinking-prefill popup. Item titles match the rawValue strings
-        // (so Save reads them back via ThinkingPrefill(rawValue:)).
         thinkingPopup.addItem(withTitle: "(use global default)")
         thinkingPopup.addItems(withTitles: ["needed", "harmless", "unknown"])
         thinkingPopup.translatesAutoresizingMaskIntoConstraints = false
 
-        // Sampler popup. Items match SamplerPreset.presets ids.
         samplerPopup.addItem(withTitle: "(use global default)")
         samplerPopup.addItems(withTitles: SamplerPreset.presets.map(\.id))
         samplerPopup.translatesAutoresizingMaskIntoConstraints = false
 
         stopAugmentField.placeholderString = "comma-separated, use \\n for newline (e.g. `\\nMira:,\\nSarah:`)"
         stopAugmentField.translatesAutoresizingMaskIntoConstraints = false
+        stopAugmentField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        stopAugmentField.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         groupNudgePopup.addItem(withTitle: "(use global default)")
         groupNudgePopup.addItems(withTitles: ["standard", "strong", "continuing", "stop-augment", "strong-stop"])
@@ -357,72 +485,99 @@ private final class ModelCapabilityEditor: NSObject, NSTextFieldDelegate, NSText
 
         detectedLabel.font = Theme.font(10)
         detectedLabel.textColor = .secondaryLabelColor
+        detectedLabel.lineBreakMode = .byWordWrapping
+        detectedLabel.maximumNumberOfLines = 0
 
         observationsLabel.font = Theme.font(10)
         observationsLabel.textColor = .secondaryLabelColor
+        observationsLabel.lineBreakMode = .byWordWrapping
+        observationsLabel.maximumNumberOfLines = 0
 
-        saveButton.bezelStyle = .rounded
+        // Action buttons. `.required` compression resistance + hugging
+        // so they NEVER shrink below intrinsic width — the screenshot
+        // showed Save truncated to ":h" because the row was narrow
+        // and the spacer was winning the fill battle.
+        for b in [saveButton, deleteButton, revealButton] {
+            b.bezelStyle = .rounded
+            b.translatesAutoresizingMaskIntoConstraints = false
+            b.setContentCompressionResistancePriority(.required, for: .horizontal)
+            b.setContentHuggingPriority(.required, for: .horizontal)
+        }
+        // NOTE: do NOT set keyEquivalent = "\r" on multiple Save
+        // buttons — AppKit only allows one default button per window
+        // and the conflict ends up rendering all of them as a tiny
+        // blue default-decoration with no visible title (the "ai"
+        // glyph the screenshot showed).
+        saveButton.title = "Save"
         saveButton.target = self
         saveButton.action = #selector(handleSave)
-        saveButton.keyEquivalent = ""
-
-        deleteButton.bezelStyle = .rounded
         deleteButton.target = self
         deleteButton.action = #selector(handleDelete)
         deleteButton.contentTintColor = .systemRed
-
-        revealButton.bezelStyle = .rounded
         revealButton.target = self
         revealButton.action = #selector(handleReveal)
 
-        let buttons = NSStackView(views: [saveButton, deleteButton, NSView(), revealButton])
+        let buttonSpacer = NSView()
+        buttonSpacer.translatesAutoresizingMaskIntoConstraints = false
+        // Spacer absorbs ALL slack so the buttons stay at intrinsic
+        // width on either side. Below-default hugging + below-default
+        // compression resistance is the canonical "stretchy filler"
+        // recipe.
+        buttonSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        buttonSpacer.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        let buttons = NSStackView(views: [saveButton, deleteButton, buttonSpacer, revealButton])
         buttons.orientation = .horizontal
         buttons.spacing = 8
+        buttons.distribution = .fill
         buttons.translatesAutoresizingMaskIntoConstraints = false
 
-        // Form rows. Each row is `<label> <control>` glued in a
-        // horizontal stack with the label width pinned so columns
-        // line up across rows.
+        // Form rows. Each row is `<label> <control>` in a horizontal
+        // stack with the label width pinned and the control growing
+        // to fill remaining space. `distribution = .fill` (default)
+        // honours hugging/compression-resistance to allocate the
+        // residual width to the control.
         func row(_ labelText: String, _ control: NSView) -> NSStackView {
             let l = NSTextField(labelWithString: labelText)
             l.translatesAutoresizingMaskIntoConstraints = false
-            l.widthAnchor.constraint(equalToConstant: 160).isActive = true
+            l.widthAnchor.constraint(equalToConstant: 140).isActive = true
             l.alignment = .right
+            l.setContentHuggingPriority(.required, for: .horizontal)
+            l.setContentCompressionResistancePriority(.required, for: .horizontal)
             let r = NSStackView(views: [l, control])
             r.orientation = .horizontal
             r.alignment = .firstBaseline
+            r.distribution = .fill
             r.spacing = 8
             r.translatesAutoresizingMaskIntoConstraints = false
             return r
         }
 
-        let inner = NSStackView(views: [
-            recordedLabel,
-            row("Notes:", notesScroll),
-            row("Thinking-prefill:", thinkingPopup),
-            row("Sampler:", samplerPopup),
-            row("Stop-augment:", stopAugmentField),
-            row("Group-nudge:", groupNudgePopup),
-            row("Max-ctx cap:", maxCtxCapField),
-            row("Refusal-posture:", refusalPopup),
-            detectedLabel,
-            observationsLabel,
-            buttons,
-        ])
-        inner.orientation = .vertical
-        inner.alignment = .leading
-        inner.spacing = 6
-        inner.translatesAutoresizingMaskIntoConstraints = false
-        inner.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 8, right: 8)
+        let notesRow = row("Notes:", notesScroll)
+        let thinkingRow = row("Thinking-prefill:", thinkingPopup)
+        let samplerRow = row("Sampler:", samplerPopup)
+        let stopRow = row("Stop-augment:", stopAugmentField)
+        let nudgeRow = row("Group-nudge:", groupNudgePopup)
+        let ctxRow = row("Max-ctx cap:", maxCtxCapField)
+        let refusalRow = row("Refusal-posture:", refusalPopup)
 
-        box.contentView = inner
-        NSLayoutConstraint.activate([
-            inner.widthAnchor.constraint(equalTo: box.widthAnchor, constant: -16),
-            notesScroll.heightAnchor.constraint(equalToConstant: 60),
-            notesScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 460),
-            stopAugmentField.widthAnchor.constraint(greaterThanOrEqualToConstant: 460),
-            maxCtxCapField.widthAnchor.constraint(equalToConstant: 100),
-        ])
+        let allRows: [NSView] = [
+            titleLabel, recordedLabel, notesRow, thinkingRow, samplerRow,
+            stopRow, nudgeRow, ctxRow, refusalRow,
+            detectedLabel, observationsLabel, buttons,
+        ]
+        for v in allRows {
+            inner.addArrangedSubview(v)
+            // Pin each row to the inner stack's full width so the
+            // controls actually expand into the available area
+            // instead of clinging to intrinsic width (which gave the
+            // squashed-narrow-column look in the screenshot).
+            v.widthAnchor.constraint(equalTo: inner.widthAnchor).isActive = true
+        }
+        // Notes gets more breathing room with the horizontal layout —
+        // each card is a column, vertical space is no longer at a
+        // premium.
+        notesScroll.heightAnchor.constraint(equalToConstant: 100).isActive = true
+        maxCtxCapField.widthAnchor.constraint(equalToConstant: 120).isActive = true
     }
 
     private func loadRecord() {
