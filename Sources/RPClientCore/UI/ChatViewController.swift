@@ -32,6 +32,11 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     /// `Chat.attributionMode`; consumed by `Speaker` via `SpeakerAttribution`.
     private let attributionPicker = NSPopUpButton()
     private let attributionLabel = NSTextField(labelWithString: "Attribution:")
+    /// V2_UI_OVERHAUL §4.g.4 — persona pill, leading-most in the pill
+    /// row. Self-bound to `currentChat.personaId` + `AppState.personas`
+    /// via internal NotificationCenter observers, so ChatViewController
+    /// only has to install it.
+    private let personaPill = PersonaPill()
     private var turnViews: [TurnView] = []
     private var dividerView: ContextDivider?
     private var dividerWidthConstraint: NSLayoutConstraint?
@@ -123,6 +128,7 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         // layout slot. Width-responsive collapse + true labelled-pill
         // styling per spec are 4.g.2/4.g.3 follow-ups.
         inputBar.setMetadataPills([
+            personaPill,
             attributionLabel, attributionPicker,
             voiceLabel, voicePicker,
             serverLabel, serverPicker,
