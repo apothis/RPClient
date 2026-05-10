@@ -388,6 +388,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         libraryWC?.window?.makeKeyAndOrderFront(nil)
     }
 
+    /// V2_UI_OVERHAUL §4.g.4 — entry point used by the composer's
+    /// persona pill "Manage personas…" row. Same lifecycle as
+    /// `showLibrary` but deep-links to the Personas tab so users
+    /// don't have to hunt for it.
+    func showLibraryAtPersonas() {
+        showLibrary()
+        libraryWC?.selectPersonasTab()
+    }
+
     @objc private func reloadServer() {
         AppState.shared.refreshServerInfo()
     }

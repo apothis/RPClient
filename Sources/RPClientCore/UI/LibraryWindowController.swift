@@ -13,6 +13,16 @@ import UniformTypeIdentifiers
 final class LibraryWindowController: NSWindowController, NSWindowDelegate {
 
     private let tabView = NSTabView()
+
+    /// V2_UI_OVERHAUL §4.g.4 — used by the composer's persona pill so
+    /// the "Manage personas…" affordance can deep-link straight to
+    /// the Personas tab instead of dropping the user on Characters.
+    func selectPersonasTab() {
+        // Personas was added second in viewDidLoad — index 1.
+        if tabView.numberOfTabViewItems > 1 {
+            tabView.selectTabViewItem(at: 1)
+        }
+    }
     private let charactersVC = CharactersTabViewController()
     private let personasVC = PersonasTabViewController()
 

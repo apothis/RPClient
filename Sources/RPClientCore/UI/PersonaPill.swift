@@ -116,6 +116,30 @@ final class PersonaPill: NSView, NSPopoverDelegate {
             }
         }
 
+        // Divider + footer "Manage personas…" row that opens the
+        // Library window pre-selected to the Personas tab. Gives the
+        // popover an exit ramp instead of a dead end when the list is
+        // empty or the user wants to add/edit.
+        let divider = NSBox()
+        divider.boxType = .separator
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(divider)
+        NSLayoutConstraint.activate([
+            divider.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 4),
+            divider.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -4)
+        ])
+
+        let manage = NSButton()
+        manage.bezelStyle = .inline
+        manage.isBordered = false
+        manage.title = "Manage personas…"
+        manage.font = Theme.font(11)
+        manage.contentTintColor = .controlAccentColor
+        manage.target = self
+        manage.action = #selector(openLibraryForPersonas)
+        manage.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(manage)
+
         let host = NSView()
         host.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -155,6 +179,11 @@ final class PersonaPill: NSView, NSPopoverDelegate {
         }
         popover?.close()
         // refresh fires via chatUpdated notification.
+    }
+
+    @objc private func openLibraryForPersonas() {
+        popover?.close()
+        (NSApp.delegate as? AppDelegate)?.showLibraryAtPersonas()
     }
 
     func popoverDidClose(_ notification: Notification) {
