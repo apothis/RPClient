@@ -45,9 +45,11 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     private var dividerView: ContextDivider?
     private var dividerWidthConstraint: NSLayoutConstraint?
     /// True when the user has scrolled away from the bottom; suppresses
-    /// auto-scroll on streamed tokens so we don't fight them.
+    /// auto-scroll on streamed tokens so we don't fight them. The
+    /// distance threshold + at-bottom math live in
+    /// [`ScrollFollow`](ScrollFollow.swift) so the §4.8 invariants
+    /// 1+2 are unit-testable without an NSScrollView.
     private var userScrolledUp: Bool = false
-    private let scrollFollowThreshold: CGFloat = 80
 
     override func loadView() {
         let v = NSView()
@@ -282,10 +284,10 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     }
 
     @objc private func handleScroll() {
-        let docH = scrollView.documentView?.frame.height ?? 0
-        let visibleBottom = scrollView.contentView.bounds.maxY
-        let dist = max(0, docH - visibleBottom)
-        userScrolledUp = dist > scrollFollowThreshold
+        userScrolledUp = ScrollFollow.userIsScrolledUp(
+            docHeight: scrollView.documentView?.frame.height ?? 0,
+            visibleBottomY: scrollView.contentView.bounds.maxY
+        )
         updateScrollLatestVisibility()
     }
 
