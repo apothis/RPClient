@@ -21,7 +21,7 @@ Forward plan for the V2 surface area listed in [`PLAN.md`](PLAN.md) §10. The MV
 | V10 | Avatars / image rendering | ✅ shipped 2026-05-05 (sidebar + assistant turn; inline images deferred) | §2.5 — commits `f6d9192` → `897747a` |
 | V11 | Card creator (full-feature, AI-assisted) | ⏳ next | §5 |
 
-The chat-view UI overhaul (NEXT_STAGES §E) is **not** in this plan — it's a polish track sequenced separately.
+The chat-pane slice of the UI overhaul shipped as **Phase 11** (see §8 below); broader app re-skin (sidebar, library, Settings, popovers) remains deferred.
 
 ---
 
@@ -245,7 +245,25 @@ Moved out of Phase 6 on 2026-05-05 once the attribution-mode picker (§2.6) gave
 
 ---
 
-## 8. Deferred — Complete UI overhaul
+## 8. Phase 11 — Chat pane redesign ✅ shipped 2026-05-10 (broader app overhaul still deferred)
+
+The chat pane slice of the V2_UI_OVERHAUL design landed on the `v2-plan` branch over ~30 commits, ending with [`291e419`](V2_UI_OVERHAUL.md). Authoritative progress table lives in [`V2_UI_OVERHAUL.md` §4.11](V2_UI_OVERHAUL.md). Headline outcomes:
+
+- **Turn rendering** (§4.b–§4.c): `<think>` disclosure UI + variant pager pill (always-visible) + per-turn toolbar restructure (hover bar + ⋯ overflow + right-click context menu) + symmetric user/assistant layout with persona avatar.
+- **Streaming + cancel** (§4.e): typing-dots indicator, streaming caret, dedicated "Stop response" pill (no more send→stop morph). Thinking mode auto-bumps reply token cap to 4096.
+- **Composer** (§4.g): metadata pickers (persona / server / voice / attribution / speaker mute) relocated from the chat header into a width-responsive pill row above the input pill — `FlowPillRow` with three modes per §4.8.6 (≥900pt inline · 700–899 wrap · <700 collapse to ⋯ popover). New persona pill with NSPopover picker + Manage-personas deep-link.
+- **Header** (§4.f): editable title + `with <persona>` subhead + ⓘ inspector toggle + ⋯ chat overflow (Rename / Delete chat). Sits on the toolbar's glass plane.
+- **Empty state** (§4.h): bifurcated avatar + scenario layout with chip seeding from character data.
+- **Per-character mute** (§4.k): inline icon next to the timestamp on assistant turns; orange when muted, dim when active. `Chat.mutedCharacterIds: Set<UUID>` schema additive (Codable migration via decodeIfPresent → empty set). Speaker layer skips muted characters on stream-finish.
+- **Layout-stability tests** (§4.i, partial): `ScrollFollow.userIsScrolledUp` pure helper covers §4.8 invariants 1+2; invariants 3–5 (think-toggle reflow / inspector flicker / resize layout-pass count) deferred — they need an NSWindow XCTest UI target, which the CLT-only test runner can't host.
+- **`uiFontOffset` removal** (§4.j.2): Settings field + UI + Theme.swift offset reader gone per V2_DESIGN_LANGUAGE §10 anti-pattern; replacement is macOS Dynamic Type adoption (still pending separately).
+
+**What's still deferred:**
+
+- The 4.i NSWindow harness for the remaining layout-stability invariants — picks up if/when an Xcode XCTest UI target is added.
+- The broader app re-skin: sidebar (chat list rows, grouping, search, drag-drop), library window (character/persona grids), Settings (tab structure, form density), Voice library window, popovers / sheets / alerts. None are blocking — Phase 11 deliberately scoped to the chat pane because it's the load-bearing surface and the rest can land surface-by-surface against the same `V2_DESIGN_LANGUAGE.md` foundation.
+
+**Original deferral rationale (kept for context):**
 
 The app works; it doesn't yet *feel* good. After ~25 features have layered onto the same skeleton — sidebar + chat view + inspector + settings + library — the cumulative effect is visibly accreted: dense headers (chat header now carries Server + Attribution + Voice + speaker mute, all in 28 px), inspector panes that don't share a visual grammar, the Voice library window in its own one-off frame, etc. Nothing's broken; it's just clearly built feature-by-feature rather than designed.
 
@@ -275,4 +293,4 @@ The app works; it doesn't yet *feel* good. After ~25 features have layered onto 
 - [`NEXT_STAGES.md`](NEXT_STAGES.md) — fragmented forward notes (memory polish §A; chat-view styling §E — folds into the §7 overhaul when picked up).
 - `V2_PHASE7_FULL_BRANCHING.md` — Phase 7 design doc (TBD, drafting next).
 - `V2_VOICE_HEURISTIC_REFINEMENT.md` — heuristic refinement design doc (TBD, see §6).
-- `V2_UI_OVERHAUL.md` — complete UI overhaul design doc (TBD, see §7).
+- [`V2_UI_OVERHAUL.md`](V2_UI_OVERHAUL.md) — complete UI overhaul design doc; chat-pane slice landed as Phase 11 (§8 above), §4.11 sub-step table is the authoritative progress record.
