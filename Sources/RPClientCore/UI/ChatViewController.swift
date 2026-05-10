@@ -17,7 +17,11 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
     /// Phase 4 §5.4 — per-chat server pin. nil/(use default) = chat
     /// generation goes to settings.defaultServerId; otherwise pinned to the
     /// chosen profile.
-    private let chatHeader = NSView()
+    /// V2_UI_OVERHAUL §4.2 / §4.f — chat header populated as of 4.f
+    /// with editable title + `with <persona>` subhead + ⓘ inspector
+    /// toggle + ⋯ chat overflow. Was an empty 8pt strip from §4.g.1
+    /// through §4.g.4.
+    private let chatHeader = ChatHeaderView()
     private let serverPicker = NSPopUpButton()
     /// Phase 6 §7.1i — runtime voice toggle. Click flips
     /// `Settings.voiceActive`; greys out when `voiceEnabled` (the subsystem
@@ -70,8 +74,9 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         // and the speaker mute button live in the InputBar's metadata
         // pill row now (above the input pill). The chat header retains
         // its frame for §4.f to fill with title + subhead later.
-        chatHeader.translatesAutoresizingMaskIntoConstraints = false
-        chatHeader.wantsLayer = true
+        // V2_UI_OVERHAUL §4.2 / §4.f — header is fully self-contained
+        // (title field + subhead + buttons wired via NotificationCenter).
+        // ChatViewController only owns the layout slot now.
         let serverLabel = NSTextField(labelWithString: "Server:")
         serverLabel.font = Theme.font(11)
         serverLabel.textColor = .secondaryLabelColor
@@ -101,13 +106,6 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         attributionPicker.translatesAutoresizingMaskIntoConstraints = false
 
         v.addSubview(chatHeader)
-        NSLayoutConstraint.activate([
-            // Header is empty for now (pickers moved to InputBar pill
-            // row in §4.g). §4.f will refill it with title + subhead.
-            // 8pt height keeps a thin chrome strip until then so the
-            // visual rhythm of the chat pane doesn't collapse abruptly.
-            chatHeader.heightAnchor.constraint(equalToConstant: 8)
-        ])
 
         // Stack tracks the panel width with a small symmetric gutter; turns
         // expand fully as the panel widens.
