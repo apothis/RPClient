@@ -635,10 +635,6 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
         rebuild()
     }
 
-    func inputBarStop(_ bar: InputBar) {
-        AppState.shared.stop()
-    }
-
     // MARK: - TurnViewDelegate
 
     func turnViewDidEditText(_ view: TurnView, newText: String) {

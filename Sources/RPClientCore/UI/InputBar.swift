@@ -2,7 +2,6 @@ import AppKit
 
 protocol InputBarDelegate: AnyObject {
     func inputBarSend(_ bar: InputBar, text: String)
-    func inputBarStop(_ bar: InputBar)
 }
 
 final class InputBar: NSView, NSTextViewDelegate {
@@ -26,9 +25,6 @@ final class InputBar: NSView, NSTextViewDelegate {
     /// switches `chat.speakerSelection` and clears any pending pick.
     private let speakerButton = NSPopUpButton()
     private var speakerLeadingConstraint: NSLayoutConstraint?
-
-    private enum PrimaryAction { case send, stop }
-    private var primaryAction: PrimaryAction = .send
 
     /// V2_UI_OVERHAUL §4.g — install the row of metadata pills above
     /// the input pill (Server, Voice, Attribution, etc.). Caller owns
@@ -191,59 +187,44 @@ final class InputBar: NSView, NSTextViewDelegate {
     }
 
     @objc private func primaryTapped() {
-        switch primaryAction {
-        case .send:
-            let text = textView.string
-            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-            delegate?.inputBarSend(self, text: text)
-            textView.string = ""
-            updateButtons()
-        case .stop:
-            delegate?.inputBarStop(self)
-        }
+        let text = textView.string
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        delegate?.inputBarSend(self, text: text)
+        textView.string = ""
+        updateButtons()
     }
 
     @objc private func streamStateChanged() {
         updateButtons()
     }
 
+    /// V2_UI_OVERHAUL §4.g.2 — pure send button. The send→stop morph
+    /// (ChatGPT anti-pattern flagged in §C.5) is gone; cancel lives on
+    /// the §4.e.3 Stop pill below the composer. Button stays in send
+    /// affordance always, disabled while busy or while the field is empty.
     func updateButtons() {
+        primaryButton.image = NSImage(
+            systemSymbolName: "arrow.up.circle.fill",
+            accessibilityDescription: "Send"
+        )
+        primaryButton.toolTip = "Send"
+
         let s = AppState.shared
         let busy = s.isStreaming || s.isSummarizing || s.isExtracting
-        if busy {
-            primaryAction = .stop
-            primaryButton.image = NSImage(
-                systemSymbolName: "stop.circle.fill",
-                accessibilityDescription: "Stop"
-            )
-            primaryButton.contentTintColor = .systemRed
-            primaryButton.isEnabled = true
-            primaryButton.toolTip = "Stop"
-        } else {
-            primaryAction = .send
-            primaryButton.image = NSImage(
-                systemSymbolName: "arrow.up.circle.fill",
-                accessibilityDescription: "Send"
-            )
-            let hasText = !textView.string
-                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            primaryButton.contentTintColor = hasText
-                ? .controlAccentColor
-                : .tertiaryLabelColor
-            primaryButton.isEnabled = hasText
-            primaryButton.toolTip = "Send"
-        }
+        let hasText = !textView.string
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let canSend = hasText && !busy
+
+        primaryButton.isEnabled = canSend
+        primaryButton.contentTintColor = canSend
+            ? .controlAccentColor
+            : .tertiaryLabelColor
     }
 
     // MARK: - NSTextViewDelegate
 
     func textDidChange(_ notification: Notification) {
-        // Refresh send-button enable state as the user types.
-        if !AppState.shared.isStreaming
-            && !AppState.shared.isSummarizing
-            && !AppState.shared.isExtracting {
-            updateButtons()
-        }
+        updateButtons()
     }
 
     // MARK: - Speaker picker (Phase 8 §4.3)
