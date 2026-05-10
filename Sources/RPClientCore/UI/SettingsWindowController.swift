@@ -51,10 +51,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let thresholdField = NSTextField()
     private let recencyField = NSTextField()
 
-    // Appearance
-    private let fontOffsetStepper = NSStepper()
-    private let fontOffsetField = NSTextField()
-
     // Generation
     private let replyTokensStepper = NSStepper()
     private let replyTokensField = NSTextField()
@@ -117,9 +113,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let presetLabel = NSTextField(labelWithString: "Default sampler preset:")
         let personaLabel = NSTextField(labelWithString: "Default persona:")
         let ctxLabel = NSTextField(labelWithString: "Max context (0 = server max):")
-        let appearanceHeader = NSTextField(labelWithString: "Appearance")
-        appearanceHeader.font = Theme.bold(12)
-        let fontOffsetLabel = NSTextField(labelWithString: "UI font size adjust:")
         let replyTokensLabel = NSTextField(labelWithString: "Reply token cap (0 = preset):")
         let memoryHeader = NSTextField(labelWithString: "Memory (fact extraction)")
         memoryHeader.font = Theme.bold(12)
@@ -224,25 +217,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let separator2 = NSBox()
         separator2.boxType = .separator
         separator2.translatesAutoresizingMaskIntoConstraints = false
-
-        fontOffsetStepper.minValue = -2
-        fontOffsetStepper.maxValue = 8
-        fontOffsetStepper.increment = 1
-        fontOffsetStepper.valueWraps = false
-        fontOffsetStepper.target = self
-        fontOffsetStepper.action = #selector(fontStepperChanged)
-        let fontIntF = NumberFormatter()
-        fontIntF.allowsFloats = false
-        fontIntF.minimum = -2
-        fontIntF.maximum = 8
-        fontOffsetField.formatter = fontIntF
-        fontOffsetField.alignment = .right
-        fontOffsetField.target = self
-        fontOffsetField.action = #selector(fontFieldChanged)
-
-        let fontStack = NSStackView(views: [fontOffsetField, fontOffsetStepper])
-        fontStack.orientation = .horizontal
-        fontStack.spacing = 6
 
         replyTokensStepper.minValue = 0
         replyTokensStepper.maxValue = 8192
@@ -374,8 +348,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             [voiceStorageTitle, voiceStorageStack],
             [defaultVoiceLabel, defaultVoicePopup],
             [NSView(), separator],
-            [NSView(), appearanceHeader],
-            [fontOffsetLabel, fontStack],
             [replyTokensLabel, replyStack],
             [NSView(), separator2],
             [NSView(), memoryHeader],
@@ -442,18 +414,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             topKField.widthAnchor.constraint(equalToConstant: 80),
             thresholdField.widthAnchor.constraint(equalToConstant: 80),
             recencyField.widthAnchor.constraint(equalToConstant: 80),
-            fontOffsetField.widthAnchor.constraint(equalToConstant: 50),
             replyTokensField.widthAnchor.constraint(equalToConstant: 70),
             factExtractField.widthAnchor.constraint(equalToConstant: 60)
         ])
-    }
-
-    @objc private func fontStepperChanged() {
-        fontOffsetField.integerValue = fontOffsetStepper.integerValue
-    }
-
-    @objc private func fontFieldChanged() {
-        fontOffsetStepper.integerValue = fontOffsetField.integerValue
     }
 
     @objc private func replyTokensStepperChanged() {
@@ -597,9 +560,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         thresholdField.doubleValue = Double(s.retrieval.threshold)
         recencyField.integerValue = s.retrieval.recencyExclusion
 
-        fontOffsetStepper.integerValue = s.uiFontOffset
-        fontOffsetField.integerValue = s.uiFontOffset
-
         replyTokensStepper.integerValue = s.replyTokensOverride
         replyTokensField.integerValue = s.replyTokensOverride
 
@@ -678,8 +638,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         s.retrieval.threshold = Float(min(1.0, max(0.0, thresholdField.doubleValue)))
         s.retrieval.recencyExclusion = max(0, recencyField.integerValue)
 
-        let oldOffset = AppState.shared.settings.uiFontOffset
-        s.uiFontOffset = max(-2, min(8, fontOffsetStepper.integerValue))
         s.replyTokensOverride = max(0, min(8192, replyTokensStepper.integerValue))
 
         s.factExtractionEnabled = factExtractCheck.state == .on
@@ -692,9 +650,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         let oldSettings = AppState.shared.settings
         AppState.shared.saveSettings(s)
-        if oldOffset != s.uiFontOffset {
-            NotificationCenter.default.post(name: AppNotification.fontChanged, object: nil)
-        }
         if VoiceStoragePrompt.shouldPrompt(old: oldSettings, new: s),
            let window = window {
             VoiceStoragePromptSheet.present(over: window) { picked in

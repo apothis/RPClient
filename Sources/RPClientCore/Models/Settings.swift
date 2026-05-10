@@ -39,8 +39,6 @@ struct Settings: Codable, Equatable {
     /// Anything > 0 caps the effective context below that.
     var maxContextOverride: Int
     var retrieval: RetrievalSettings
-    /// Offset applied to every UI font's base size. 0 = baseline, +N = larger.
-    var uiFontOffset: Int
     /// Override for the per-reply token cap. 0 = use the sampler preset's value.
     /// Larger values let replies run longer but eat into prompt budget (the
     /// reserve subtracts from effective context).
@@ -152,7 +150,6 @@ struct Settings: Codable, Equatable {
             voiceActive: true,
             maxContextOverride: 0,
             retrieval: .default,
-            uiFontOffset: 1,
             replyTokensOverride: 0,
             factExtractionEnabled: true,
             factExtractionEveryNTurns: 4,
@@ -174,7 +171,7 @@ struct Settings: Codable, Equatable {
          defaultTemplateId: String, defaultSamplerPresetId: String,
          voiceEnabled: Bool, voiceActive: Bool = true,
          maxContextOverride: Int, retrieval: RetrievalSettings,
-         uiFontOffset: Int, replyTokensOverride: Int,
+         replyTokensOverride: Int,
          factExtractionEnabled: Bool, factExtractionEveryNTurns: Int,
          priorityTopicLibrary: [LibraryTopic],
          qwenThinkingEnabled: Bool = false,
@@ -196,7 +193,6 @@ struct Settings: Codable, Equatable {
         self.voiceActive = voiceActive
         self.maxContextOverride = maxContextOverride
         self.retrieval = retrieval
-        self.uiFontOffset = uiFontOffset
         self.replyTokensOverride = replyTokensOverride
         self.factExtractionEnabled = factExtractionEnabled
         self.factExtractionEveryNTurns = factExtractionEveryNTurns
@@ -241,7 +237,6 @@ struct Settings: Codable, Equatable {
         voiceActive = try c.decodeIfPresent(Bool.self, forKey: .voiceActive) ?? d.voiceActive
         maxContextOverride = try c.decodeIfPresent(Int.self, forKey: .maxContextOverride) ?? d.maxContextOverride
         retrieval = try c.decodeIfPresent(RetrievalSettings.self, forKey: .retrieval) ?? d.retrieval
-        uiFontOffset = try c.decodeIfPresent(Int.self, forKey: .uiFontOffset) ?? d.uiFontOffset
         replyTokensOverride = try c.decodeIfPresent(Int.self, forKey: .replyTokensOverride) ?? d.replyTokensOverride
         factExtractionEnabled = try c.decodeIfPresent(Bool.self, forKey: .factExtractionEnabled) ?? d.factExtractionEnabled
         factExtractionEveryNTurns = try c.decodeIfPresent(Int.self, forKey: .factExtractionEveryNTurns) ?? d.factExtractionEveryNTurns
@@ -261,7 +256,7 @@ struct Settings: Codable, Equatable {
         case serverURL  // legacy — migrated on decode, not encoded
         case userName, defaultTemplateId, defaultSamplerPresetId
         case voiceEnabled, voiceActive, maxContextOverride, retrieval
-        case uiFontOffset, replyTokensOverride
+        case replyTokensOverride
         case factExtractionEnabled, factExtractionEveryNTurns
         case priorityTopicLibrary, qwenThinkingEnabled, defaultPersonaId
         case voiceModelPath
@@ -285,7 +280,6 @@ struct Settings: Codable, Equatable {
         try c.encode(voiceActive, forKey: .voiceActive)
         try c.encode(maxContextOverride, forKey: .maxContextOverride)
         try c.encode(retrieval, forKey: .retrieval)
-        try c.encode(uiFontOffset, forKey: .uiFontOffset)
         try c.encode(replyTokensOverride, forKey: .replyTokensOverride)
         try c.encode(factExtractionEnabled, forKey: .factExtractionEnabled)
         try c.encode(factExtractionEveryNTurns, forKey: .factExtractionEveryNTurns)
