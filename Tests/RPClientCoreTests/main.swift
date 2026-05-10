@@ -86,6 +86,7 @@ let suites: [TestSuite] = [
     phase11OverflowMenuTests(),
     phase11BranchesPillTests(),
     phase11ChipSeedTests(),
+    phase11PillFlowTests(),
 ]
 
 // `TestRunner.run` is `@MainActor`-isolated so test bodies can drive

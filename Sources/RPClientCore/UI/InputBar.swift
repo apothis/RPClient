@@ -13,10 +13,12 @@ final class InputBar: NSView, NSTextViewDelegate {
     private let primaryButton = NSButton()
     /// V2_UI_OVERHAUL §4.9 / §4.g — row of metadata pills (Server,
     /// Voice, Attribution, etc.) above the input pill. ChatViewController
-    /// fills this via `setMetadataPills(_:)`. Empty by default; an
-    /// empty NSStackView has 0 intrinsic height so the rest of the
-    /// layout collapses cleanly when there's nothing to show.
-    let pillRow = NSStackView()
+    /// fills this via `setMetadataPills(_:)`. As of §4.g.3 this is a
+    /// custom view that switches between inline / wrap-2-rows /
+    /// collapsed-to-overflow-button layouts based on available width
+    /// (§4.8.6 thresholds). Empty by default; height collapses to 0
+    /// so the rest of the layout falls back to its pre-§4.g position.
+    let pillRow = FlowPillRow()
     /// Phase 8 §4.3 — speaker picker. Hidden on solo / free-form chats
     /// (cast.count <= 1) so it doesn't clutter the input pill. On
     /// multi-cast chats, shows a compact symbol-button that opens a menu
@@ -32,23 +34,13 @@ final class InputBar: NSView, NSTextViewDelegate {
     /// layout slot. Replaces a previous arrangedSubview list (if any)
     /// so this can be called repeatedly during chat-pane rebuilds.
     func setMetadataPills(_ pills: [NSView]) {
-        for view in pillRow.arrangedSubviews {
-            pillRow.removeArrangedSubview(view)
-            view.removeFromSuperview()
-        }
-        for pill in pills {
-            pillRow.addArrangedSubview(pill)
-        }
+        pillRow.setPills(pills)
     }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
 
-        pillRow.orientation = .horizontal
-        pillRow.alignment = .centerY
-        pillRow.spacing = DesignTokens.Spacing.sm
-        pillRow.translatesAutoresizingMaskIntoConstraints = false
         addSubview(pillRow)
 
         pill.wantsLayer = true
