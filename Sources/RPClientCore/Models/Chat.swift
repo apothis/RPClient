@@ -191,6 +191,22 @@ struct Chat: Codable, Equatable, Identifiable {
     /// so a queued pick survives a restart; if it goes stale (points
     /// outside `cast`), `SpeakerPicker.next(in:)` ignores it.
     var pendingSpeakerId: UUID?
+    /// V2_UI_OVERHAUL §4.k / §D.13 — per-character TTS mute. When a
+    /// character's id is in this set, the speaker layer skips them on
+    /// stream-finish but still renders their text in the transcript.
+    /// Replaces the prior chat-wide voice toggle (which was a hover
+    /// affordance on the chat header before §4.g.1 relocated pickers).
+    /// Empty set on existing chats; safe additive field.
+    var mutedCharacterIds: Set<UUID>
+
+    /// V2_UI_OVERHAUL §4.k — pure-data lookup for the speaker layer
+    /// and TurnView. Returns false for `nil` (free-form chats with no
+    /// character bound never get muted) so callers don't need to
+    /// nil-guard at every call site.
+    func isMutedCharacter(_ id: UUID?) -> Bool {
+        guard let id else { return false }
+        return mutedCharacterIds.contains(id)
+    }
 
     init(
         id: UUID = UUID(),
@@ -234,6 +250,7 @@ struct Chat: Codable, Equatable, Identifiable {
         self.cast = []
         self.speakerSelection = .roundRobin
         self.pendingSpeakerId = nil
+        self.mutedCharacterIds = []
     }
 
     init(from decoder: Decoder) throws {
@@ -316,6 +333,7 @@ struct Chat: Codable, Equatable, Identifiable {
         }
         speakerSelection = try c.decodeIfPresent(SpeakerSelectionMode.self, forKey: .speakerSelection) ?? .roundRobin
         pendingSpeakerId = try c.decodeIfPresent(UUID.self, forKey: .pendingSpeakerId)
+        mutedCharacterIds = try c.decodeIfPresent(Set<UUID>.self, forKey: .mutedCharacterIds) ?? []
         schemaVersion = max(decodedVersion, 4)
         tokensSent = try c.decodeIfPresent(Int.self, forKey: .tokensSent) ?? 0
         tokensReceived = try c.decodeIfPresent(Int.self, forKey: .tokensReceived) ?? 0

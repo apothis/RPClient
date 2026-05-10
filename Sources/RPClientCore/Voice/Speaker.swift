@@ -528,6 +528,17 @@ final class Speaker {
             DebugLog.shared.write("speaker: skip \(source) — no asst leaf")
             return
         }
+        // V2_UI_OVERHAUL §4.k — per-character mute. Multi-cast turns
+        // resolve through `last.speakerId`; solo / free-form chats fall
+        // back to `chat.characterId`. Mute is on the speaker, not the
+        // listener, so the same field gates both paths.
+        let speakerCharId: UUID? = last.speakerId ?? chat.characterId
+        if chat.isMutedCharacter(speakerCharId) {
+            DebugLog.shared.write(
+                "speaker: skip \(source) — character \(speakerCharId?.uuidString.prefix(8) ?? "nil") is muted"
+            )
+            return
+        }
         speakTurn(last, in: chat, source: source)
     }
 

@@ -31,6 +31,8 @@ protocol TurnViewDelegate: AnyObject {
     /// iterations on attribution / voice assignment can be tested
     /// without regenerating the reply text.
     func turnViewDidRequestReplayAudio(_ view: TurnView)
+    /// V2_UI_OVERHAUL §4.k / §D.13 — per-character TTS mute toggle.
+    func turnViewDidToggleCharacterMute(_ view: TurnView, characterId: UUID)
 }
 
 /// V2_UI_OVERHAUL §4.0.d / §4.d.2 — capsule-styled pill background that
@@ -111,6 +113,14 @@ final class TurnView: NSView, NSTextViewDelegate {
     /// `placeholderAvatar` so character-less chats keep their current
     /// visual signature.
     private let avatar = NSImageView()
+    /// V2_UI_OVERHAUL §4.k — using NSImageView (not NSButton) so the
+    /// SF Symbol renders flush with the surrounding caption text. A
+    /// click gesture recognizer carries the toggle action; NSButton's
+    /// inset cell metrics floated the icon visibly above the
+    /// timestamp's baseline.
+    private var muteToggleButton: NSImageView?
+    private var isMutedCharacterCache: Bool
+    private var mutableCharacterIdForMute: UUID?
 
     private let toolbar = NSStackView()
     /// V2_UI_OVERHAUL §4.d.1 — vertical stack housing
@@ -414,8 +424,10 @@ final class TurnView: NSView, NSTextViewDelegate {
         turn: Turn,
         character: Character? = nil,
         personaName: String? = nil,
-        multiCast: Bool = false
+        multiCast: Bool = false,
+        isMutedCharacter: Bool = false
     ) {
+        self.isMutedCharacterCache = isMutedCharacter
         self.turnId = turn.id
         self.role = turn.role
         self.rawText = turn.text
@@ -499,6 +511,7 @@ final class TurnView: NSView, NSTextViewDelegate {
                 avatar.image = AvatarSource.shared.image(
                     forCharacter: character.id, name: character.name)
                 avatar.toolTip = character.name
+                mutableCharacterIdForMute = character.id
             } else {
                 // V2_DESIGN_LANGUAGE §10 anti-pattern: replaced the ✦
                 // custom glyph with the SF Symbol `person.crop.circle`.
@@ -580,6 +593,15 @@ final class TurnView: NSView, NSTextViewDelegate {
             addSubview(thinkBodyView)
 
             addSubview(avatar)
+            // V2_UI_OVERHAUL §4.k — mute toggle lives in the speaker
+            // header next to the timestamp (not over the avatar) so
+            // its on/off state is legible without the user having to
+            // squint at a small overlay. Constraints are installed
+            // alongside the timestamp's in the bubble-layout block
+            // below; the install method only creates + addSubviews.
+            if mutableCharacterIdForMute != nil {
+                installMuteToggle()
+            }
         }
 
         textView.isRichText = true
@@ -855,6 +877,62 @@ final class TurnView: NSView, NSTextViewDelegate {
         return "You"
     }
 
+    // MARK: - §4.k mute toggle (next to timestamp)
+
+    /// Build the always-visible mute toggle button. Caller adds the
+    /// horizontal/baseline constraints alongside the timestamp label.
+    /// Splitting create-vs-position here keeps this method orderless
+    /// — the layout block owns sibling-anchored constraints and runs
+    /// after every relevant subview has been added.
+    private func installMuteToggle() {
+        let v = NSImageView()
+        v.imageScaling = .scaleProportionallyUpOrDown
+        v.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(v)
+        muteToggleButton = v
+
+        let click = NSClickGestureRecognizer(
+            target: self, action: #selector(muteToggleTapped)
+        )
+        v.addGestureRecognizer(click)
+
+        refreshMuteToggleAppearance()
+    }
+
+    private func refreshMuteToggleAppearance() {
+        guard let v = muteToggleButton else { return }
+        let symbol = isMutedCharacterCache ? "speaker.slash.fill" : "speaker.wave.2.fill"
+        let tip = isMutedCharacterCache ? "Unmute this character" : "Mute this character"
+        // Match the caption1 text body's optical size — pointSize 10
+        // with a regular weight reads as caption-furniture, not a
+        // chrome control. tertiaryLabelColor on the un-muted face
+        // matches the timestamp's tint so the icon disappears into
+        // the metadata strip until you mute, where systemOrange
+        // pops it loud.
+        let cfg = NSImage.SymbolConfiguration(pointSize: 10, weight: .regular)
+        v.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)?
+            .withSymbolConfiguration(cfg)
+        v.toolTip = tip
+        v.contentTintColor = isMutedCharacterCache
+            ? .systemOrange
+            : .tertiaryLabelColor
+    }
+
+    @objc private func muteToggleTapped() {
+        guard let cid = mutableCharacterIdForMute else { return }
+        delegate?.turnViewDidToggleCharacterMute(self, characterId: cid)
+    }
+
+    /// V2_UI_OVERHAUL §4.k — pushed by ChatViewController on
+    /// `chatUpdated`. Mute toggling doesn't move the active path or
+    /// rebuild turn ids, so `handleChatUpdated`'s in-place branch
+    /// runs; without this setter the icon would never refresh.
+    func setMuted(_ muted: Bool) {
+        guard isMutedCharacterCache != muted else { return }
+        isMutedCharacterCache = muted
+        refreshMuteToggleAppearance()
+    }
+
     /// V2_UI_OVERHAUL §4.0.c — user-side avatar. `secondaryLabelColor`
     /// circle with the persona's initial in `windowBackgroundColor`.
     /// Drawn at the avatar size so it composites cleanly without
@@ -1017,11 +1095,30 @@ final class TurnView: NSView, NSTextViewDelegate {
                     nameLabel.bottomAnchor.constraint(lessThanOrEqualTo: bubble.topAnchor, constant: -2)
                 ])
                 if let tsLabel = timestampLabel {
-                    NSLayoutConstraint.activate([
+                    var headerConstraints: [NSLayoutConstraint] = [
                         tsLabel.lastBaselineAnchor.constraint(equalTo: nameLabel.lastBaselineAnchor),
-                        tsLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: DesignTokens.Spacing.xs),
-                        tsLabel.trailingAnchor.constraint(lessThanOrEqualTo: bubble.trailingAnchor)
-                    ])
+                        tsLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: DesignTokens.Spacing.xs)
+                    ]
+                    if let muteBtn = muteToggleButton {
+                        // V2_UI_OVERHAUL §4.k — mute toggle sits inline
+                        // after the timestamp. centerY against tsLabel
+                        // (not baseline) because NSImageView's image
+                        // is centred in the view rect, so visual
+                        // alignment matches the text x-height best
+                        // when the icon is centred against the text.
+                        headerConstraints.append(contentsOf: [
+                            muteBtn.centerYAnchor.constraint(equalTo: tsLabel.centerYAnchor),
+                            muteBtn.leadingAnchor.constraint(equalTo: tsLabel.trailingAnchor, constant: DesignTokens.Spacing.xs),
+                            muteBtn.widthAnchor.constraint(equalToConstant: 12),
+                            muteBtn.heightAnchor.constraint(equalToConstant: 12),
+                            muteBtn.trailingAnchor.constraint(lessThanOrEqualTo: bubble.trailingAnchor)
+                        ])
+                    } else {
+                        headerConstraints.append(
+                            tsLabel.trailingAnchor.constraint(lessThanOrEqualTo: bubble.trailingAnchor)
+                        )
+                    }
+                    NSLayoutConstraint.activate(headerConstraints)
                 }
             }
             // V2_UI_OVERHAUL §4.7 — `<think>` disclosure pill + body.

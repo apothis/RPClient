@@ -371,7 +371,8 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
                 turn: t,
                 character: character,
                 personaName: personaName,
-                multiCast: isMultiCast
+                multiCast: isMultiCast,
+                isMutedCharacter: chat.isMutedCharacter(character?.id)
             )
             tv.delegate = self
             tv.isLastAssistant = (i == lastAssistantIdx)
@@ -505,6 +506,14 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
             // bubble needs to reflect that immediately.
             if tv.currentText != t.text {
                 tv.setText(t.text)
+            }
+            // V2_UI_OVERHAUL §4.k — push per-character mute state.
+            // Toggling mute keeps the active path stable, so this
+            // in-place branch is the only one that fires; without
+            // the push the icon would never refresh.
+            if t.role == .assistant {
+                let charId: UUID? = t.speakerId ?? chat.characterId
+                tv.setMuted(chat.isMutedCharacter(charId))
             }
             // Phase 11 §D.11 — paging also changes which variant's
             // thinkingTrace applies. Push the matching trace through
@@ -693,6 +702,19 @@ final class ChatViewController: NSViewController, InputBarDelegate, TurnViewDele
 
     func turnViewDidRequestReplayAudio(_ view: TurnView) {
         AppState.shared.speaker.replay(turnId: view.turnId)
+    }
+
+    func turnViewDidToggleCharacterMute(_ view: TurnView, characterId: UUID) {
+        AppState.shared.updateCurrent { c in
+            if c.mutedCharacterIds.contains(characterId) {
+                c.mutedCharacterIds.remove(characterId)
+            } else {
+                c.mutedCharacterIds.insert(characterId)
+            }
+        }
+        DebugLog.shared.write(
+            "[chat-pane] character mute toggled \(characterId.uuidString.prefix(8)) → \(AppState.shared.currentChat?.isMutedCharacter(characterId) == true ? "muted" : "unmuted")"
+        )
     }
 
     func turnViewDidRequestPreviousVariant(_ view: TurnView) {
