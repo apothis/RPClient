@@ -200,5 +200,386 @@ func promptBuilderTests() -> TestSuite {
         try expectEqual(stops, GemmaTemplate().stopSequences)
     }
 
+    s.test("worldInfoHits returns header plus labelled matched entries' content") {
+        var chat = makeChat(turns: [Turn(role: .user, text: "I draw the Mournbringer.")])
+        chat.worldInfo = [
+            WorldInfoEntry(name: "Mournbringer", keys: ["Mournbringer"], content: "humming blade"),
+            WorldInfoEntry(name: "Dragon", keys: ["dragon"], content: "fire-breather"),
+        ]
+        let hits = PromptBuilder.worldInfoHits(chat: chat)
+        try expectEqual(hits.count, 2)
+        try expectEqual(hits[0], PromptBuilder.worldInfoHeader)
+        try expectEqual(hits[1], "[Mournbringer]\nhumming blade")
+    }
+
+    s.test("worldInfoHits truncates content past entry's tokenCap") {
+        var chat = makeChat(turns: [Turn(role: .user, text: "Mournbringer.")])
+        let longContent = String(repeating: "alpha beta ", count: 50) // ~550 chars
+        chat.worldInfo = [
+            WorldInfoEntry(name: "M", keys: ["Mournbringer"], content: longContent, tokenCap: 10),
+        ]
+        let hits = PromptBuilder.worldInfoHits(chat: chat)
+        // [header, "[M]\n<truncated body>"]
+        try expectEqual(hits.count, 2)
+        try expectTrue(hits[1].hasSuffix("…"), "expected ellipsis suffix")
+        // body length excluding the "[M]\n" label
+        let body = hits[1].split(separator: "\n", maxSplits: 1).last.map(String.init) ?? ""
+        try expectTrue(body.count <= 10 * 4 + 1, "expected ≤ 41 chars, got \(body.count)")
+    }
+
+    s.test("worldInfoHits returns [] when no entries match") {
+        var chat = makeChat(turns: [Turn(role: .user, text: "totally unrelated text")])
+        chat.worldInfo = [WorldInfoEntry(name: "M", keys: ["sword"], content: "x")]
+        try expectTrue(PromptBuilder.worldInfoHits(chat: chat).isEmpty)
+    }
+
+    s.test("build injects matched world-info into the prompt") {
+        var chat = makeChat(turns: [Turn(role: .user, text: "Tell me about the Mournbringer.")])
+        chat.templateId = "gemma"
+        chat.worldInfo = [
+            WorldInfoEntry(name: "Mournbringer", keys: ["Mournbringer"], content: "An ancient humming blade."),
+            WorldInfoEntry(name: "Dragon", keys: ["dragon"], content: "Fire-breathing menace."),
+        ]
+        let (prompt, _) = PromptBuilder.build(chat: chat)
+        try expectTrue(prompt.contains("An ancient humming blade."), "matched entry should be in the prompt")
+        try expectTrue(!prompt.contains("Fire-breathing menace."), "non-matching entry should be absent")
+    }
+
+    s.test("truncateToCharCap leaves short text alone") {
+        try expectEqual(PromptBuilder.truncateToCharCap("hi there", capChars: 100), "hi there")
+    }
+
+    s.test("truncateToCharCap word-aligns and adds ellipsis") {
+        let out = PromptBuilder.truncateToCharCap("the quick brown fox", capChars: 12)
+        try expectTrue(out.hasSuffix("…"))
+        try expectTrue(out.count <= 13)
+        try expectTrue(!out.contains("brown"), "should not include the word that crossed the cap")
+    }
+
+    s.test("truncateToCharCap returns empty for cap 0") {
+        try expectEqual(PromptBuilder.truncateToCharCap("anything", capChars: 0), "")
+    }
+
+    // MARK: - composeMemoryBlock (Phase 3 §4.4 step 4b)
+
+    s.test("composeMemoryBlock returns nil when nothing to inject") {
+        let chat = Chat()
+        try expectNil(PromptBuilder.composeMemoryBlock(chat: chat, character: nil, userName: ""))
+    }
+
+    s.test("composeMemoryBlock with no character returns chat.memory + userName line") {
+        var chat = Chat()
+        chat.memory = "Sarah loves Metallica."
+        let block = try expectNotNil(PromptBuilder.composeMemoryBlock(chat: chat, character: nil, userName: "Kev"))
+        try expectTrue(block.contains("The user's name is Kev."))
+        try expectTrue(block.contains("Sarah loves Metallica."))
+        // userName line must come before chat.memory.
+        let nameRange = try expectNotNil(block.range(of: "The user's name is Kev."))
+        let memRange = try expectNotNil(block.range(of: "Sarah loves Metallica."))
+        try expectTrue(nameRange.lowerBound < memRange.lowerBound)
+    }
+
+    s.test("composeMemoryBlock with character but no system_prompt keeps chat.memory in both modes") {
+        var chat = Chat()
+        chat.memory = "user memory"
+        var card = Character(name: "Nyx")
+        card.description = "Mysterious."
+        // override mode (default) — no system_prompt means nothing to override; memory rides through.
+        let overrideBlock = try expectNotNil(PromptBuilder.composeMemoryBlock(chat: chat, character: card, userName: ""))
+        try expectTrue(overrideBlock.contains("Description: Mysterious."))
+        try expectTrue(overrideBlock.contains("user memory"))
+
+        chat.systemPromptMode = .merge
+        let mergeBlock = try expectNotNil(PromptBuilder.composeMemoryBlock(chat: chat, character: card, userName: ""))
+        try expectTrue(mergeBlock.contains("Description: Mysterious."))
+        try expectTrue(mergeBlock.contains("user memory"))
+    }
+
+    s.test("composeMemoryBlock override mode + system_prompt suppresses chat.memory") {
+        var chat = Chat()
+        chat.memory = "USER NOTES"
+        chat.systemPromptMode = .override
+        var card = Character(name: "Nyx")
+        card.systemPrompt = "You are Nyx, a witch of the moor."
+        card.description = "Quiet."
+        let block = try expectNotNil(PromptBuilder.composeMemoryBlock(chat: chat, character: card, userName: ""))
+        try expectTrue(block.contains("You are Nyx, a witch of the moor."))
+        try expectTrue(block.contains("Description: Quiet."), "biographical prefix should still ride along")
+        try expectFalse(block.contains("USER NOTES"), "override mode hides chat.memory when system_prompt present")
+    }
+
+    s.test("composeMemoryBlock merge mode + system_prompt keeps both chat.memory and system_prompt") {
+        var chat = Chat()
+        chat.memory = "USER NOTES"
+        chat.systemPromptMode = .merge
+        var card = Character(name: "Nyx")
+        card.systemPrompt = "You are Nyx."
+        let block = try expectNotNil(PromptBuilder.composeMemoryBlock(chat: chat, character: card, userName: ""))
+        try expectTrue(block.contains("You are Nyx."))
+        try expectTrue(block.contains("USER NOTES"))
+        // system_prompt above chat.memory.
+        let spRange = try expectNotNil(block.range(of: "You are Nyx."))
+        let memRange = try expectNotNil(block.range(of: "USER NOTES"))
+        try expectTrue(spRange.lowerBound < memRange.lowerBound)
+    }
+
+    s.test("composeMemoryBlock card prefix ordering: description, personality, scenario") {
+        var chat = Chat()
+        var card = Character(name: "Nyx")
+        card.description = "DESC"
+        card.personality = "PERS"
+        card.scenario = "SCEN"
+        let block = try expectNotNil(PromptBuilder.composeMemoryBlock(chat: chat, character: card, userName: ""))
+        let d = try expectNotNil(block.range(of: "Description: DESC"))
+        let p = try expectNotNil(block.range(of: "Personality: PERS"))
+        let s = try expectNotNil(block.range(of: "Scenario: SCEN"))
+        try expectTrue(d.lowerBound < p.lowerBound)
+        try expectTrue(p.lowerBound < s.lowerBound)
+        try expectTrue(block.contains(PromptBuilder.cardPrefixHeader))
+    }
+
+    s.test("composeMemoryBlock omits empty card fields without leaving stray separators") {
+        var chat = Chat()
+        var card = Character(name: "Nyx")
+        card.description = "Just a desc."
+        // personality + scenario both empty
+        let block = try expectNotNil(PromptBuilder.composeMemoryBlock(chat: chat, character: card, userName: ""))
+        try expectTrue(block.contains("Description: Just a desc."))
+        try expectFalse(block.contains("Personality:"))
+        try expectFalse(block.contains("Scenario:"))
+    }
+
+    s.test("composeMemoryBlock whitespace-only system_prompt is treated as absent") {
+        var chat = Chat()
+        chat.memory = "USER NOTES"
+        chat.systemPromptMode = .override
+        var card = Character(name: "Nyx")
+        card.systemPrompt = "   \n  "
+        let block = try expectNotNil(PromptBuilder.composeMemoryBlock(chat: chat, character: card, userName: ""))
+        // Override is a no-op when the card has nothing to override with — chat.memory must survive.
+        try expectTrue(block.contains("USER NOTES"))
+    }
+
+    s.test("build injects card system_prompt and biographical prefix into the prompt") {
+        var chat = Chat()
+        chat.templateId = "gemma"
+        chat.turns = [Turn(role: .user, text: "hello")]
+        var card = Character(name: "Nyx")
+        card.systemPrompt = "You are Nyx."
+        card.description = "Witch of the moor."
+        let (prompt, _) = PromptBuilder.build(chat: chat, character: card)
+        try expectTrue(prompt.contains("You are Nyx."))
+        try expectTrue(prompt.contains("Description: Witch of the moor."))
+    }
+
+    // MARK: - effectiveAuthorsNote (Phase 3 §4.4 step 4d)
+
+    s.test("effectiveAuthorsNote returns nil when neither user note nor card phi exist") {
+        let chat = Chat()
+        try expectNil(PromptBuilder.effectiveAuthorsNote(chat: chat, character: nil))
+    }
+
+    s.test("effectiveAuthorsNote returns user-set note even when card has phi") {
+        var chat = Chat()
+        chat.authorsNote = AuthorsNote(text: "User wins.", depth: 2)
+        var card = Character(name: "Nyx")
+        card.postHistoryInstructions = "Card loses."
+        let an = try expectNotNil(PromptBuilder.effectiveAuthorsNote(chat: chat, character: card))
+        try expectEqual(an.text, "User wins.")
+        try expectEqual(an.depth, 2)
+    }
+
+    s.test("effectiveAuthorsNote falls back to card postHistoryInstructions when user note empty") {
+        var chat = Chat()
+        chat.authorsNote = AuthorsNote(text: "", depth: 4)
+        var card = Character(name: "Nyx")
+        card.postHistoryInstructions = "Stay in scene."
+        let an = try expectNotNil(PromptBuilder.effectiveAuthorsNote(chat: chat, character: card))
+        try expectEqual(an.text, "Stay in scene.")
+        try expectEqual(an.depth, 4, "synthesised note inherits chat's existing AN depth")
+    }
+
+    s.test("effectiveAuthorsNote treats whitespace-only user note as empty for fallback purposes") {
+        var chat = Chat()
+        chat.authorsNote = AuthorsNote(text: "   \n  ", depth: 4)
+        var card = Character(name: "Nyx")
+        card.postHistoryInstructions = "Stay in scene."
+        let an = try expectNotNil(PromptBuilder.effectiveAuthorsNote(chat: chat, character: card))
+        try expectEqual(an.text, "Stay in scene.")
+    }
+
+    s.test("effectiveAuthorsNote returns nil when card phi is nil/empty") {
+        var chat = Chat()
+        var card = Character(name: "Nyx")
+        card.postHistoryInstructions = nil
+        try expectNil(PromptBuilder.effectiveAuthorsNote(chat: chat, character: card))
+        card.postHistoryInstructions = "  "
+        try expectNil(PromptBuilder.effectiveAuthorsNote(chat: chat, character: card))
+    }
+
+    s.test("build injects card postHistoryInstructions when user note empty") {
+        var chat = Chat()
+        chat.templateId = "gemma"
+        chat.turns = [Turn(role: .user, text: "hello")]
+        // Default AN depth is 4 — unreachable with 1 turn. Use depth 0
+        // (attach to the latest turn) so the synthesized note actually
+        // lands in the prompt for assertion.
+        chat.authorsNote = AuthorsNote(text: "", depth: 0)
+        var card = Character(name: "Nyx")
+        card.postHistoryInstructions = "Stay in third person."
+        let (prompt, _) = PromptBuilder.build(chat: chat, character: card)
+        try expectTrue(prompt.contains("Stay in third person."))
+    }
+
+    // MARK: - renderPersonaBlock + per-template placement (Phase 3 §4.4 step 4f)
+
+    s.test("renderPersonaBlock returns nil for nil persona and for blank persona") {
+        try expectNil(PromptBuilder.renderPersonaBlock(nil))
+        try expectNil(PromptBuilder.renderPersonaBlock(Persona(name: "", description: "")))
+        try expectNil(PromptBuilder.renderPersonaBlock(Persona(name: "  ", description: "  ")))
+    }
+
+    s.test("renderPersonaBlock formats name + description as <You are NAME>\\nDESC") {
+        let block = try expectNotNil(PromptBuilder.renderPersonaBlock(
+            Persona(name: "Kev", description: "A weary archivist of the Inner Strait.")
+        ))
+        try expectEqual(block, "<You are Kev>\nA weary archivist of the Inner Strait.")
+    }
+
+    s.test("renderPersonaBlock with name only emits the You are line alone") {
+        let block = try expectNotNil(PromptBuilder.renderPersonaBlock(
+            Persona(name: "Kev", description: "")
+        ))
+        try expectEqual(block, "<You are Kev>")
+    }
+
+    s.test("renderPersonaBlock with description only emits the description") {
+        let block = try expectNotNil(PromptBuilder.renderPersonaBlock(
+            Persona(name: "", description: "An archivist with no name.")
+        ))
+        try expectEqual(block, "An archivist with no name.")
+    }
+
+    s.test("Qwen template lands persona inside the system block") {
+        let out = QwenTemplate().assemble(
+            memoryBlock: "MEM",
+            personaBlock: "<You are Kev>\nArchivist.",
+            entitiesBlock: nil,
+            sceneSummaries: [],
+            summary: nil,
+            worldInfoHits: [],
+            authorsNote: nil,
+            relevantMemories: nil,
+            tailMemoryDigest: nil,
+            currentSceneAnchor: nil,
+            groupNudge: nil,
+            turns: [Turn(role: .user, text: "hi")],
+            continuation: false
+        )
+        // Persona must appear inside the <|im_start|>system block, before the user turn opens.
+        let sysOpen = try expectNotNil(out.range(of: "<|im_start|>system"))
+        let sysClose = try expectNotNil(out.range(of: "<|im_end|>", range: sysOpen.upperBound..<out.endIndex))
+        let systemBody = String(out[sysOpen.upperBound..<sysClose.lowerBound])
+        try expectTrue(systemBody.contains("<You are Kev>"))
+        try expectTrue(systemBody.contains("Archivist."))
+        try expectTrue(systemBody.contains("MEM"))
+    }
+
+    s.test("Gemma template folds persona into the first user turn alongside memory") {
+        let out = GemmaTemplate().assemble(
+            memoryBlock: "MEM",
+            personaBlock: "<You are Kev>\nArchivist.",
+            entitiesBlock: nil,
+            sceneSummaries: [],
+            summary: nil,
+            worldInfoHits: [],
+            authorsNote: nil,
+            relevantMemories: nil,
+            tailMemoryDigest: nil,
+            currentSceneAnchor: nil,
+            groupNudge: nil,
+            turns: [Turn(role: .user, text: "hi")],
+            continuation: false
+        )
+        // Gemma has no separate system lane — persona rides at the top of the
+        // first user turn, alongside the memory preamble.
+        let firstTurnOpen = try expectNotNil(out.range(of: "<start_of_turn>user\n"))
+        let firstTurnClose = try expectNotNil(out.range(of: "<end_of_turn>", range: firstTurnOpen.upperBound..<out.endIndex))
+        let userBody = String(out[firstTurnOpen.upperBound..<firstTurnClose.lowerBound])
+        try expectTrue(userBody.contains("<You are Kev>"))
+        try expectTrue(userBody.contains("MEM"))
+        try expectTrue(userBody.hasSuffix("hi"), "user's actual message stays at the end of the turn body, after preamble + persona")
+    }
+
+    s.test("Templates omit persona block entirely when nil") {
+        let qwen = QwenTemplate().assemble(
+            memoryBlock: "MEM",
+            personaBlock: nil,
+            entitiesBlock: nil,
+            sceneSummaries: [],
+            summary: nil,
+            worldInfoHits: [],
+            authorsNote: nil,
+            relevantMemories: nil,
+            tailMemoryDigest: nil,
+            currentSceneAnchor: nil,
+            groupNudge: nil,
+            turns: [Turn(role: .user, text: "hi")],
+            continuation: false
+        )
+        try expectFalse(qwen.contains("<You are"))
+        let gemma = GemmaTemplate().assemble(
+            memoryBlock: "MEM",
+            personaBlock: nil,
+            entitiesBlock: nil,
+            sceneSummaries: [],
+            summary: nil,
+            worldInfoHits: [],
+            authorsNote: nil,
+            relevantMemories: nil,
+            tailMemoryDigest: nil,
+            currentSceneAnchor: nil,
+            groupNudge: nil,
+            turns: [Turn(role: .user, text: "hi")],
+            continuation: false
+        )
+        try expectFalse(gemma.contains("<You are"))
+    }
+
+    s.test("build wires persona through to the prompt for both templates") {
+        var chat = Chat()
+        chat.turns = [Turn(role: .user, text: "hi")]
+        let persona = Persona(name: "Kev", description: "Archivist.")
+
+        chat.templateId = "qwen"
+        let (qwenPrompt, _) = PromptBuilder.build(chat: chat, persona: persona)
+        try expectTrue(qwenPrompt.contains("<You are Kev>"))
+        try expectTrue(qwenPrompt.contains("Archivist."))
+
+        chat.templateId = "gemma"
+        let (gemmaPrompt, _) = PromptBuilder.build(chat: chat, persona: persona)
+        try expectTrue(gemmaPrompt.contains("<You are Kev>"))
+    }
+
+    s.test("build emits no persona content when persona is nil") {
+        var chat = Chat()
+        chat.templateId = "qwen"
+        chat.turns = [Turn(role: .user, text: "hi")]
+        let (prompt, _) = PromptBuilder.build(chat: chat, persona: nil)
+        try expectFalse(prompt.contains("<You are"))
+    }
+
+    s.test("build does NOT inject card postHistoryInstructions when user note is set") {
+        var chat = Chat()
+        chat.templateId = "gemma"
+        chat.turns = [Turn(role: .user, text: "hello")]
+        chat.authorsNote = AuthorsNote(text: "User-defined nudge.", depth: 0)
+        var card = Character(name: "Nyx")
+        card.postHistoryInstructions = "Card-defined nudge."
+        let (prompt, _) = PromptBuilder.build(chat: chat, character: card)
+        try expectTrue(prompt.contains("User-defined nudge."))
+        try expectFalse(prompt.contains("Card-defined nudge."))
+    }
+
     return s
 }

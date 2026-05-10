@@ -9,6 +9,7 @@ final class AuthorsNotePane: NSViewController, NSTextViewDelegate {
         "Injected this many turns from the end. 0 = right before the next reply.")
     private let helpLabel = NSTextField(labelWithString:
         "Author's note. Style/scene cues injected near the end of the prompt.")
+    private let helpButton = HelpButton(pageId: "memory-authors-note")
 
     private var lastChatId: UUID?
 
@@ -23,6 +24,7 @@ final class AuthorsNotePane: NSViewController, NSTextViewDelegate {
         helpLabel.maximumNumberOfLines = 0
         helpLabel.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(helpLabel)
+        v.addSubview(helpButton)
 
         textView.isRichText = false
         textView.font = Theme.font(12)
@@ -69,7 +71,10 @@ final class AuthorsNotePane: NSViewController, NSTextViewDelegate {
         NSLayoutConstraint.activate([
             helpLabel.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
             helpLabel.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),
-            helpLabel.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
+            helpLabel.trailingAnchor.constraint(equalTo: helpButton.leadingAnchor, constant: -6),
+
+            helpButton.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
+            helpButton.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
 
             scrollView.topAnchor.constraint(equalTo: helpLabel.bottomAnchor, constant: 8),
             scrollView.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),

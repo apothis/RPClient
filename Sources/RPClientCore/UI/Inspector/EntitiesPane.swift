@@ -8,6 +8,7 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
     private let scrollView = NSScrollView()
     private let stack = NSStackView()
     private let helpLabel = NSTextField(labelWithString: "Structured entities. Only entities mentioned in recent turns are injected into the prompt.")
+    private let helpButton = HelpButton(pageId: "memory-entities")
     private let countLabel = NSTextField(labelWithString: "")
     private let searchField = NSSearchField()
     private let addButton = NSButton(title: "+ Add entity", target: nil, action: nil)
@@ -28,6 +29,7 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
         helpLabel.maximumNumberOfLines = 0
         helpLabel.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(helpLabel)
+        v.addSubview(helpButton)
 
         searchField.placeholderString = "Search entities…"
         searchField.target = self
@@ -70,7 +72,10 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
         NSLayoutConstraint.activate([
             helpLabel.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
             helpLabel.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),
-            helpLabel.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
+            helpLabel.trailingAnchor.constraint(equalTo: helpButton.leadingAnchor, constant: -6),
+
+            helpButton.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
+            helpButton.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
 
             searchField.topAnchor.constraint(equalTo: helpLabel.bottomAnchor, constant: 8),
             searchField.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),
@@ -158,7 +163,13 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
         // rebuilds when heat decays after a fresh send, not only on edits.
         var bits: [String] = ["t=\(currentUserTurn)"]
         for ent in entities {
-            bits.append("\(ent.id.uuidString):\(ent.name):\(ent.type.rawValue):\(ent.pinnedByUser):\(ent.aliases.joined(separator: ","))")
+            let voiceBit: String
+            if let v = ent.voice {
+                voiceBit = "\(v.voiceIdentifier.rawValue):\(v.rate):\(v.pitch)"
+            } else {
+                voiceBit = "-"
+            }
+            bits.append("\(ent.id.uuidString):\(ent.name):\(ent.type.rawValue):\(ent.pinnedByUser):\(ent.aliases.joined(separator: ",")):v=\(voiceBit)")
             for f in ent.facts {
                 bits.append(" \(f.id.uuidString):\(f.text):\(f.lastReinforcedTurn):\(f.mentionCount):\(f.pinnedByUser)")
             }
@@ -180,12 +191,15 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
     // MARK: - Cards
 
     private func makeCard(for ent: Entity, currentUserTurn: Int) -> NSView {
-        let card = NSView()
+        // Backgrounds + border colours go through updateLayer so they
+        // re-resolve when the system appearance flips between light/dark.
+        // Setting `layer.backgroundColor = NSColor.cgColor` directly snapshots
+        // the current appearance and never updates — that's the bug the rest
+        // of the inspector avoids by using NSColor on AppKit-managed views.
+        let card = EntityCardView()
         card.wantsLayer = true
-        card.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         card.layer?.cornerRadius = 6
         card.layer?.borderWidth = 1
-        card.layer?.borderColor = NSColor.separatorColor.cgColor
         card.translatesAutoresizingMaskIntoConstraints = false
 
         let typePopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -228,6 +242,8 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
         aliasesField.identifier = NSUserInterfaceItemIdentifier("aliases:\(ent.id.uuidString)")
         aliasesField.translatesAutoresizingMaskIntoConstraints = false
 
+        let voiceSection = makeVoiceSection(for: ent)
+
         let factsStack = NSStackView()
         factsStack.orientation = .vertical
         factsStack.spacing = 2
@@ -251,6 +267,7 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
         card.addSubview(pinCheck)
         card.addSubview(deleteBtn)
         card.addSubview(aliasesField)
+        card.addSubview(voiceSection)
         card.addSubview(factsStack)
         card.addSubview(addFactBtn)
 
@@ -275,9 +292,13 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
             aliasesField.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -8),
             aliasesField.topAnchor.constraint(equalTo: typePopup.bottomAnchor, constant: 6),
 
+            voiceSection.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 8),
+            voiceSection.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -8),
+            voiceSection.topAnchor.constraint(equalTo: aliasesField.bottomAnchor, constant: 6),
+
             factsStack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 8),
             factsStack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -8),
-            factsStack.topAnchor.constraint(equalTo: aliasesField.bottomAnchor, constant: 6),
+            factsStack.topAnchor.constraint(equalTo: voiceSection.bottomAnchor, constant: 6),
 
             addFactBtn.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 8),
             addFactBtn.topAnchor.constraint(equalTo: factsStack.bottomAnchor, constant: 4),
@@ -285,6 +306,144 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
         ])
         return card
     }
+
+    /// Voice section: picker + rate/pitch sliders + preview button. Phase 6
+    /// §7.5a (picker, sliders) and §7.5c (preview button). "(use chat default)"
+    /// maps to `Entity.voice == nil` (falls through to `Chat.voice ??
+    /// Settings.defaultVoice` at speak time). Sliders + Preview only appear
+    /// when a voice is set so the row stays quiet for the common case.
+    private func makeVoiceSection(for ent: Entity) -> NSView {
+        let row = NSView()
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let label = NSTextField(labelWithString: "Voice:")
+        label.font = Theme.font(11)
+        label.textColor = .secondaryLabelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.translatesAutoresizingMaskIntoConstraints = false
+        popup.font = Theme.font(11)
+        popup.identifier = NSUserInterfaceItemIdentifier("voice:\(ent.id.uuidString)")
+        popup.target = self
+        popup.action = #selector(voiceChanged(_:))
+
+        VoicePopupBuilder.populate(
+            popup,
+            options: VoicePopupBuilder.currentOptions(),
+            current: ent.voice,
+            sentinelTitle: "(use chat default)"
+        )
+
+        row.addSubview(label)
+        row.addSubview(popup)
+
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            label.centerYAnchor.constraint(equalTo: popup.centerYAnchor),
+
+            popup.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 6),
+            popup.topAnchor.constraint(equalTo: row.topAnchor),
+            popup.trailingAnchor.constraint(lessThanOrEqualTo: row.trailingAnchor),
+        ])
+
+        // Sliders + Preview button only when a voice is set.
+        guard let voice = ent.voice else {
+            popup.bottomAnchor.constraint(equalTo: row.bottomAnchor).isActive = true
+            return row
+        }
+
+        let previewButton = NSButton(title: "Preview", target: self, action: #selector(previewVoice(_:)))
+        previewButton.bezelStyle = .rounded
+        previewButton.controlSize = .small
+        previewButton.font = Theme.font(11)
+        previewButton.identifier = NSUserInterfaceItemIdentifier("voice-preview:\(ent.id.uuidString)")
+        previewButton.translatesAutoresizingMaskIntoConstraints = false
+        let voiceEnabled = AppState.shared.settings.voiceEnabled
+        previewButton.isEnabled = voiceEnabled
+        previewButton.toolTip = voiceEnabled
+            ? "Synthesize a sample line through this voice"
+            : "Enable the voice subsystem in Settings"
+        row.addSubview(previewButton)
+        NSLayoutConstraint.activate([
+            previewButton.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            previewButton.centerYAnchor.constraint(equalTo: popup.centerYAnchor),
+            previewButton.leadingAnchor.constraint(greaterThanOrEqualTo: popup.trailingAnchor, constant: 8),
+        ])
+
+        let rateLabel = NSTextField(labelWithString: "Rate")
+        rateLabel.font = Theme.font(10)
+        rateLabel.textColor = .secondaryLabelColor
+        rateLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let rateSlider = NSSlider(value: Double(voice.rate), minValue: 0.5, maxValue: 2.0, target: self, action: #selector(rateChanged(_:)))
+        rateSlider.identifier = NSUserInterfaceItemIdentifier("voice-rate:\(ent.id.uuidString)")
+        rateSlider.isContinuous = false
+        rateSlider.translatesAutoresizingMaskIntoConstraints = false
+
+        let rateValue = NSTextField(labelWithString: String(format: "%.2fx", voice.rate))
+        rateValue.font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        rateValue.textColor = .secondaryLabelColor
+        rateValue.translatesAutoresizingMaskIntoConstraints = false
+
+        let pitchLabel = NSTextField(labelWithString: "Pitch")
+        pitchLabel.font = Theme.font(10)
+        pitchLabel.textColor = .secondaryLabelColor
+        pitchLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let pitchSlider = NSSlider(value: Double(voice.pitch), minValue: 0.5, maxValue: 2.0, target: self, action: #selector(pitchChanged(_:)))
+        pitchSlider.identifier = NSUserInterfaceItemIdentifier("voice-pitch:\(ent.id.uuidString)")
+        pitchSlider.isContinuous = false
+        pitchSlider.translatesAutoresizingMaskIntoConstraints = false
+
+        let pitchValue = NSTextField(labelWithString: String(format: "%.2fx", voice.pitch))
+        pitchValue.font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        pitchValue.textColor = .secondaryLabelColor
+        pitchValue.translatesAutoresizingMaskIntoConstraints = false
+
+        // Kokoro doesn't honour pitch — note inline so the user isn't surprised.
+        if voice.voiceIdentifier.engine == .kokoro {
+            pitchSlider.isEnabled = false
+            pitchSlider.toolTip = "Kokoro voices ignore pitch — use rate to adjust speech tempo."
+            pitchLabel.toolTip = pitchSlider.toolTip
+        }
+
+        row.addSubview(rateLabel)
+        row.addSubview(rateSlider)
+        row.addSubview(rateValue)
+        row.addSubview(pitchLabel)
+        row.addSubview(pitchSlider)
+        row.addSubview(pitchValue)
+
+        NSLayoutConstraint.activate([
+            rateLabel.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            rateLabel.topAnchor.constraint(equalTo: popup.bottomAnchor, constant: 4),
+            rateLabel.widthAnchor.constraint(equalToConstant: 36),
+
+            rateSlider.leadingAnchor.constraint(equalTo: rateLabel.trailingAnchor, constant: 4),
+            rateSlider.centerYAnchor.constraint(equalTo: rateLabel.centerYAnchor),
+            rateSlider.trailingAnchor.constraint(equalTo: rateValue.leadingAnchor, constant: -4),
+
+            rateValue.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            rateValue.centerYAnchor.constraint(equalTo: rateLabel.centerYAnchor),
+            rateValue.widthAnchor.constraint(equalToConstant: 44),
+
+            pitchLabel.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            pitchLabel.topAnchor.constraint(equalTo: rateLabel.bottomAnchor, constant: 2),
+            pitchLabel.widthAnchor.constraint(equalToConstant: 36),
+            pitchLabel.bottomAnchor.constraint(equalTo: row.bottomAnchor),
+
+            pitchSlider.leadingAnchor.constraint(equalTo: pitchLabel.trailingAnchor, constant: 4),
+            pitchSlider.centerYAnchor.constraint(equalTo: pitchLabel.centerYAnchor),
+            pitchSlider.trailingAnchor.constraint(equalTo: pitchValue.leadingAnchor, constant: -4),
+
+            pitchValue.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            pitchValue.centerYAnchor.constraint(equalTo: pitchLabel.centerYAnchor),
+            pitchValue.widthAnchor.constraint(equalToConstant: 44),
+        ])
+        return row
+    }
+
 
     /// Salience styling thresholds. "Hot" facts were reinforced this turn or
     /// last; "stale" facts haven't been reinforced for ~15+ user turns (or
@@ -421,6 +580,57 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
         }
     }
 
+    @objc private func voiceChanged(_ sender: NSPopUpButton) {
+        // Popup identifier is `voice:<UUID>` (see makeVoiceSection); the
+        // generic entityId() helper expects a bare UUID, so parse the prefix
+        // off here, mirroring the rate/pitch slider handlers below.
+        guard let raw = sender.identifier?.rawValue,
+              raw.hasPrefix("voice:"),
+              let id = UUID(uuidString: String(raw.dropFirst("voice:".count))) else { return }
+        AppState.shared.updateCurrent { c in
+            guard let i = c.entities.firstIndex(where: { $0.id == id }) else { return }
+            c.entities[i].voice = VoicePopupBuilder.preference(
+                fromSelectionOf: sender,
+                previous: c.entities[i].voice
+            )
+        }
+    }
+
+    @objc private func rateChanged(_ sender: NSSlider) {
+        guard let raw = sender.identifier?.rawValue,
+              let id = UUID(uuidString: String(raw.dropFirst("voice-rate:".count))) else { return }
+        let value = Float(sender.doubleValue)
+        AppState.shared.updateCurrent { c in
+            guard let i = c.entities.firstIndex(where: { $0.id == id }) else { return }
+            c.entities[i].voice?.rate = value
+        }
+    }
+
+    @objc private func pitchChanged(_ sender: NSSlider) {
+        guard let raw = sender.identifier?.rawValue,
+              let id = UUID(uuidString: String(raw.dropFirst("voice-pitch:".count))) else { return }
+        let value = Float(sender.doubleValue)
+        AppState.shared.updateCurrent { c in
+            guard let i = c.entities.firstIndex(where: { $0.id == id }) else { return }
+            c.entities[i].voice?.pitch = value
+        }
+    }
+
+    /// Phase 6 §7.5c — Preview button on the entity card. Resolves the
+    /// entity's current `VoicePreference` and asks the speaker to synth a
+    /// sample line. No-op if the entity has no voice set or the chat has
+    /// gone away — both are guarded UI states (the button only renders when
+    /// `ent.voice != nil`) but the lookup is cheap.
+    @objc private func previewVoice(_ sender: NSButton) {
+        guard let raw = sender.identifier?.rawValue,
+              raw.hasPrefix("voice-preview:"),
+              let id = UUID(uuidString: String(raw.dropFirst("voice-preview:".count))),
+              let chat = AppState.shared.currentChat,
+              let ent = chat.entities.first(where: { $0.id == id }),
+              let voice = ent.voice else { return }
+        AppState.shared.speaker.preview(voice: voice)
+    }
+
     @objc private func togglePin(_ sender: NSButton) {
         guard let id = entityId(from: sender) else { return }
         let on = sender.state == .on
@@ -511,5 +721,18 @@ final class EntitiesPane: NSViewController, NSTextFieldDelegate {
                 }
             }
         }
+    }
+}
+
+/// Background + border colours re-resolve on light/dark appearance changes.
+/// AppKit calls `updateLayer()` whenever the effective appearance flips, so
+/// re-evaluating `NSColor.controlBackgroundColor.cgColor` here picks up the
+/// new appearance — unlike a one-shot assignment in `makeCard`, which would
+/// snapshot the colour at construction.
+private final class EntityCardView: NSView {
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        layer?.borderColor = NSColor.separatorColor.cgColor
     }
 }

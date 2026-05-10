@@ -21,19 +21,28 @@ func chatCodableTests() -> TestSuite {
         var chat = Chat(title: "Saved")
         chat.created = stamp
         chat.modified = stamp
-        chat.turns = [
-            Turn(role: .user, text: "hi", ts: stamp),
-            Turn(role: .assistant, text: "ok", ts: stamp),
-        ]
+        // Phase 7 §3.1: turns now carry parentId + activePath. The decode
+        // path patches a spine when these are absent (legacy migration), so
+        // the round-trip equality check requires building the chat in its
+        // post-migration shape: parents wired, activePath populated.
+        var u = Turn(role: .user, text: "hi", ts: stamp)
+        var a = Turn(role: .assistant, text: "ok", ts: stamp)
+        a.parentId = u.id
+        chat.turns = [u, a]
+        chat.activePath = [u.id, a.id]
         chat.memory = "facts"
         chat.summary = "rolling"
         chat.summarizedThrough = 3
         chat.tailReinforceMemory = true
         chat.lastExtractedTurn = 7
         chat.factExtractionScanTurns = 12
+        // Phase 7 §3.2: SceneSummary positions are UUID-based now. The
+        // legacy Int fields still decode but get resolved via activePath
+        // post-pass, which would mutate the round-tripped value. Build with
+        // UUIDs to keep the round-trip equality check clean.
         chat.sceneSummaries = [
-            SceneSummary(text: "s1", firstTurn: 0, lastTurn: 4),
-            SceneSummary(text: "s2", firstTurn: 5, lastTurn: 9),
+            SceneSummary(text: "s1", firstTurnId: u.id, lastTurnId: a.id),
+            SceneSummary(text: "s2"),
         ]
         chat.factExtractionPriorities = [
             FactExtractionPriority(text: "names", enabled: true),
@@ -68,6 +77,58 @@ func chatCodableTests() -> TestSuite {
         try expectEqual(chat.factExtractionScanTurns, 0)
         try expectTrue(chat.factExtractionPriorities.isEmpty)
         try expectTrue(chat.sceneSummaries.isEmpty)
+        // Phase 3 §4 — pre-existing chats without the systemPromptMode key
+        // must default to .override (matches SillyTavern, spec'd in V2_PLAN §4.4).
+        try expectEqual(chat.systemPromptMode, .override)
+    }
+
+    s.test("serverId defaults to nil for new chats and round-trips when set") {
+        // Phase 4 §5.4 — chat can pin a specific koboldcpp profile for its
+        // generation calls. Default Chat() has no pin (nil = use settings.default).
+        let stamp = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+        var fresh = Chat(title: "Fresh")
+        fresh.created = stamp
+        fresh.modified = stamp
+        try expectNil(fresh.serverId)
+
+        let pin = UUID()
+        var pinned = Chat(title: "Pinned")
+        pinned.created = stamp
+        pinned.modified = stamp
+        pinned.serverId = pin
+        let data = try encoder.encode(pinned)
+        let decoded = try decoder.decode(Chat.self, from: data)
+        try expectEqual(decoded.serverId, pin)
+    }
+
+    s.test("legacy chat decodes with serverId == nil when key missing") {
+        // Pre-Phase-4 chats were written without a `serverId` key. Their
+        // generation calls must transparently use settings.defaultServerId,
+        // i.e. decode as nil — never default to some random UUID.
+        let now = ISO8601DateFormatter().string(from: Date())
+        let json = """
+        {
+            "id": "\(UUID().uuidString)",
+            "title": "Pre-Phase-4",
+            "created": "\(now)",
+            "modified": "\(now)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced"
+        }
+        """
+        let chat = try decoder.decode(Chat.self, from: Data(json.utf8))
+        try expectNil(chat.serverId)
+    }
+
+    s.test("systemPromptMode round-trips through encode/decode") {
+        let stamp = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+        var chat = Chat(title: "Merge mode")
+        chat.created = stamp
+        chat.modified = stamp
+        chat.systemPromptMode = .merge
+        let data = try encoder.encode(chat)
+        let decoded = try decoder.decode(Chat.self, from: data)
+        try expectEqual(decoded.systemPromptMode, .merge)
     }
 
     s.test("sceneSummaries decode falls back from legacy [String]") {
@@ -149,7 +210,10 @@ func chatCodableTests() -> TestSuite {
         try expectEqual(chat.entities[0].name, "Sarah")
         try expectEqual(chat.entities[0].type, .character)
         try expectEqual(chat.entities[0].facts.count, 2)
-        try expectEqual(chat.schemaVersion, 3)
+        // Phase 8 §4.1: schema bumped to v4. The pre-v3 dedup migration still
+        // runs on the entities array, then Phase 8's cast-seeding migration
+        // brings the chat to v4 in one decode pass.
+        try expectEqual(chat.schemaVersion, 4)
     }
 
     s.test("factExtractionPriorities migrates from comma-separated string") {

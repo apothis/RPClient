@@ -47,12 +47,21 @@ final class RetrievalEngine {
     static let shared = RetrievalEngine()
     private var stores: [UUID: VectorStore] = [:]
     private let lock = NSLock()
+    private let storesDirOverride: URL?
+
+    init(storesDir: URL? = nil) {
+        self.storesDirOverride = storesDir
+    }
+
+    private var storesDir: URL {
+        storesDirOverride ?? Storage.shared.vectorsDir
+    }
 
     func store(for chatId: UUID) -> VectorStore {
         lock.lock()
         defer { lock.unlock() }
         if let s = stores[chatId] { return s }
-        let s = VectorStore(chatId: chatId, dir: Storage.shared.vectorsDir)
+        let s = VectorStore(chatId: chatId, dir: storesDir)
         stores[chatId] = s
         return s
     }
@@ -69,7 +78,8 @@ final class RetrievalEngine {
     /// when contextual retrieval is enabled.
     func index(
         chat: Chat,
-        kobold: KoboldClient,
+        embedder: KoboldEmbedding,
+        blurber: KoboldGenerating,
         contextual: Bool = false,
         effectiveCtx: Int = 4096,
         completion: @escaping (Result<Int, Error>) -> Void
@@ -114,10 +124,10 @@ final class RetrievalEngine {
         // back to embedding the raw chunk text for that one entry.
         annotateWithBlurbs(
             toEmbed, contextual: contextual, chat: chat,
-            kobold: kobold, effectiveCtx: effectiveCtx, store: store
+            blurber: blurber, effectiveCtx: effectiveCtx, store: store
         ) { [weak self] annotated in
             guard let self = self else { return }
-            self.embedBatched(annotated, kobold: kobold, store: store) { result in
+            self.embedBatched(annotated, embedder: embedder, store: store) { result in
                 store.save()
                 completion(result)
             }
@@ -128,7 +138,7 @@ final class RetrievalEngine {
         _ chunks: [Chunk],
         contextual: Bool,
         chat: Chat,
-        kobold: KoboldClient,
+        blurber: KoboldGenerating,
         effectiveCtx: Int,
         store: VectorStore,
         completion: @escaping ([Chunk]) -> Void
@@ -152,7 +162,7 @@ final class RetrievalEngine {
                 return
             }
             ContextBlurber.run(
-                chunk: chunk, chat: chat, kobold: kobold, effectiveCtx: effectiveCtx
+                chunk: chunk, chat: chat, kobold: blurber, effectiveCtx: effectiveCtx
             ) { result in
                 DispatchQueue.main.async {
                     switch result {
@@ -175,7 +185,7 @@ final class RetrievalEngine {
 
     private func embedBatched(
         _ chunks: [Chunk],
-        kobold: KoboldClient,
+        embedder: KoboldEmbedding,
         store: VectorStore,
         batchSize: Int = 16,
         completion: @escaping (Result<Int, Error>) -> Void
@@ -193,7 +203,7 @@ final class RetrievalEngine {
             // Embed `embeddingText` (blurb + text when present, else just
             // text) so the contextual retrieval signal gets baked into the
             // vector itself.
-            kobold.embed(texts: batch.map(\.embeddingText)) { result in
+            embedder.embed(texts: batch.map(\.embeddingText)) { result in
                 switch result {
                 case .failure(let e):
                     completion(.failure(e))
@@ -224,6 +234,11 @@ final class RetrievalEngine {
     ///     catching up to the user's actual most-recent message. Hard rule:
     ///     never inject content that's already verbatim in the prompt.
     /// Public so tests can exercise the rules without mocking the embed call.
+    ///
+    /// Pre-Phase-7 signature, kept for legacy callers (existing tests).
+    /// New code should use `excludePredicate(chat:summarizedThrough:recencyExclusion:)`
+    /// — branch-aware, resolves chunk endpoints via `chat.activePosition(of:)`
+    /// so off-branch chunks aren't caught by the recency / verbatim filter.
     static func excludePredicate(
         turnsCount: Int,
         summarizedThrough: Int,
@@ -237,11 +252,54 @@ final class RetrievalEngine {
         }
     }
 
+    /// Phase 7 §3.2.C — branch-aware exclude predicate. Resolves each
+    /// chunk's `lastTurnId` against the chat's current active path; chunks
+    /// whose endpoint is off-branch (UUID set but doesn't resolve) escape
+    /// the recency/verbatim filter and remain retrievable by similarity.
+    /// Cross-branch memory is exactly what retrieval is for.
+    ///
+    /// Legacy chunks (nil UUIDs) fall back to the Int snapshot so the
+    /// filter still applies during the migration window.
+    static func excludePredicate(
+        chat: Chat,
+        summarizedThrough: Int,
+        recencyExclusion: Int
+    ) -> (Chunk) -> Bool {
+        // Same fallback rule as Chunker / renderableScenes: in-memory chats
+        // bypass the decode-time spine migration and arrive with empty
+        // activePath; treat them as a spine over chat.turns.
+        let pathCount = chat.activePath.isEmpty && !chat.turns.isEmpty
+            ? chat.turns.count
+            : chat.activePath.count
+        let recencyCutoff = pathCount - recencyExclusion
+        let verbatimCutoff = summarizedThrough
+        return { chunk in
+            // Resolve the chunk's last endpoint to a position on the
+            // current active path. Three cases:
+            //   1. Phase 7+ chunk with on-branch endpoint → resolve via UUID,
+            //      apply the recency / verbatim filter.
+            //   2. Phase 7+ chunk with off-branch endpoint → UUID present
+            //      but doesn't resolve; return false (don't exclude — let
+            //      cosine similarity decide).
+            //   3. Legacy chunk (nil UUIDs) → fall back to the Int snapshot
+            //      so the filter still applies during the migration window.
+            let lastPos: Int?
+            if let id = chunk.lastTurnId {
+                lastPos = chat.activePosition(of: id)
+                if lastPos == nil { return false } // off-branch
+            } else {
+                lastPos = chunk.lastTurnIdx
+            }
+            guard let last = lastPos else { return false }
+            return last >= recencyCutoff || last >= verbatimCutoff
+        }
+    }
+
     /// Retrieve top-K relevant chunks for the current state of the chat.
     /// Returns hits in descending similarity order.
     func retrieve(
         chat: Chat,
-        kobold: KoboldClient,
+        embedder: KoboldEmbedding,
         settings: RetrievalSettings,
         completion: @escaping ([VectorStore.Hit]) -> Void
     ) {
@@ -258,14 +316,14 @@ final class RetrievalEngine {
         }.joined(separator: "\n\n")
         guard !query.isEmpty else { completion([]); return }
 
-        kobold.embed(texts: [query]) { result in
+        embedder.embed(texts: [query]) { result in
             DispatchQueue.main.async {
                 guard case .success(let vecs) = result, let q = vecs.first else {
                     completion([])
                     return
                 }
                 let predicate = RetrievalEngine.excludePredicate(
-                    turnsCount: chat.turns.count,
+                    chat: chat,
                     summarizedThrough: chat.summarizedThrough,
                     recencyExclusion: settings.recencyExclusion
                 )

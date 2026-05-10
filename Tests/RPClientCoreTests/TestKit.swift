@@ -8,11 +8,18 @@ struct TestFailure: Error {
 
 final class TestSuite {
     let name: String
-    private(set) var cases: [(String, () throws -> Void)] = []
+    private(set) var cases: [(String, @MainActor () throws -> Void)] = []
 
     init(_ name: String) { self.name = name }
 
-    func test(_ name: String, _ body: @escaping () throws -> Void) {
+    /// Test bodies are `@MainActor`-isolated so they can drive
+    /// MainActor-bound types (e.g. AppKit-adjacent controllers like
+    /// `CardSuggestionsController`). Non-isolated work inside the
+    /// body still compiles fine — a body that touches no MainActor
+    /// types pays no isolation cost. The runner calls each body from
+    /// a MainActor context (`run` is `@MainActor`-isolated; `main.swift`
+    /// uses `MainActor.assumeIsolated`).
+    func test(_ name: String, _ body: @escaping @MainActor () throws -> Void) {
         cases.append((name, body))
     }
 }
@@ -65,7 +72,19 @@ func expectFalse(_ condition: @autoclosure () -> Bool, _ message: @autoclosure (
     }
 }
 
+/// Inverse of the implicit "any throw fails the test" — asserts that the
+/// closure DOES throw. Used for decode-validation tests, etc.
+func expectThrows(_ message: @autoclosure () -> String = "", file: StaticString = #file, line: UInt = #line, _ body: () throws -> Void) throws {
+    do {
+        try body()
+    } catch {
+        return
+    }
+    throw TestFailure(message: message().isEmpty ? "expected the closure to throw" : message(), file: file, line: line)
+}
+
 enum TestRunner {
+    @MainActor
     static func run(_ suites: [TestSuite]) -> Int32 {
         var passed = 0
         var failures: [(suite: String, name: String, failure: TestFailure)] = []

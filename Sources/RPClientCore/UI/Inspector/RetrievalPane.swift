@@ -4,6 +4,7 @@ final class RetrievalPane: NSViewController {
     private let scrollView = NSScrollView()
     private let textView = NSTextView()
     private let statusLabel = NSTextField(labelWithString: "")
+    private let helpButton = HelpButton(pageId: "memory-retrieval")
     private let reindexButton = NSButton(title: "Re-index now", target: nil, action: nil)
 
     override func loadView() {
@@ -17,6 +18,7 @@ final class RetrievalPane: NSViewController {
         statusLabel.maximumNumberOfLines = 0
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(statusLabel)
+        v.addSubview(helpButton)
 
         textView.isRichText = false
         textView.isEditable = false
@@ -49,7 +51,10 @@ final class RetrievalPane: NSViewController {
         NSLayoutConstraint.activate([
             statusLabel.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
             statusLabel.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),
-            statusLabel.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
+            statusLabel.trailingAnchor.constraint(equalTo: helpButton.leadingAnchor, constant: -6),
+
+            helpButton.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
+            helpButton.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
 
             scrollView.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 8),
             scrollView.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),

@@ -5,6 +5,7 @@ final class SummaryPane: NSViewController, NSTextViewDelegate {
     private let textView = NSTextView()
     private let helpLabel = NSTextField(labelWithString:
         "Rolling summary. Auto-compresses older turns when context fills up.")
+    private let helpButton = HelpButton(pageId: "memory-summary")
     private let statusLabel = NSTextField(labelWithString: "")
     private let summarizeButton = NSButton(title: "Summarize now", target: nil, action: nil)
     private let sceneBreakButton = NSButton(title: "Scene break", target: nil, action: nil)
@@ -22,6 +23,7 @@ final class SummaryPane: NSViewController, NSTextViewDelegate {
         helpLabel.maximumNumberOfLines = 0
         helpLabel.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(helpLabel)
+        v.addSubview(helpButton)
 
         textView.isRichText = false
         textView.font = Theme.font(12)
@@ -67,7 +69,10 @@ final class SummaryPane: NSViewController, NSTextViewDelegate {
         NSLayoutConstraint.activate([
             helpLabel.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
             helpLabel.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),
-            helpLabel.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
+            helpLabel.trailingAnchor.constraint(equalTo: helpButton.leadingAnchor, constant: -6),
+
+            helpButton.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
+            helpButton.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
 
             scrollView.topAnchor.constraint(equalTo: helpLabel.bottomAnchor, constant: 8),
             scrollView.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),

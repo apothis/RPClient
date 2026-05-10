@@ -4,74 +4,217 @@ protocol EmptyStateViewDelegate: AnyObject {
     func emptyStateDidPickStarter(_ view: EmptyStateView, text: String)
 }
 
+/// V2_UI_OVERHAUL §4.6 — empty-state for a fresh chat. Centred avatar
+/// + name + scenario one-liner above the composer (composer itself
+/// lives elsewhere; this view sits in the transcript area). Three
+/// stacked suggestion chips below the composer-shaped gap.
+///
+/// `configure(character:)` re-skins the view per the bound character:
+/// avatar from AvatarSource, name as title, scenario as subtitle.
+/// On free-form chats (no character bound) a `person.crop.circle` SF
+/// Symbol stands in (V2_DESIGN_LANGUAGE §10 anti-pattern fix —
+/// replaces the legacy `✦` glyph).
 final class EmptyStateView: NSView {
     weak var delegate: EmptyStateViewDelegate?
 
-    private let glyph = NSTextField(labelWithString: "✦")
+    private let avatar = NSImageView()
     private let title = NSTextField(labelWithString: "Start a new chat")
     private let subtitle = NSTextField(labelWithString: "Send a message to begin")
     private let chipsStack = NSStackView()
 
-    private let starters: [String] = [
+    /// Static-fallback chip starters used when the bound character has
+    /// no scenario / alternate-greetings to seed from. Generic but
+    /// neutral — the character-sourced chips are the path that gets
+    /// the user into a scene faster.
+    private static let staticStarters: [String] = [
         "Set the scene",
-        "Introduce a character",
-        "Pick up where we left off",
+        "Continue from where we left off",
         "Surprise me"
     ]
+
+    /// V2_UI_OVERHAUL §4.6 / §4.h.2 — pure-data resolver for which
+    /// strings appear as chips on the empty state. Pinned by
+    /// Phase11ChipSeedTests so the priority chain stays explicit
+    /// (alternateGreetings → scenario sentences → static fallbacks).
+    /// Up to 3 chips.
+    static func chipSeeds(for character: Character?) -> [String] {
+        guard let c = character else { return staticStarters }
+        let alts = c.alternateGreetings
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if !alts.isEmpty {
+            return alts.prefix(3).map { clip($0, max: 100) }
+        }
+        let scenario = c.scenario.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !scenario.isEmpty {
+            let sentences = splitSentences(scenario)
+            if !sentences.isEmpty {
+                return sentences.prefix(3).map { clip($0, max: 100) }
+            }
+        }
+        return staticStarters
+    }
+
+    /// Split prose on sentence-ending punctuation. Cheap regex; not
+    /// linguistically perfect but correct enough for the typical
+    /// 1-3 sentence scenario field.
+    private static func splitSentences(_ s: String) -> [String] {
+        let parts = s.components(separatedBy: CharacterSet(charactersIn: ".!?"))
+        return parts
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Truncate to `max` chars with an ellipsis suffix; preserves word
+    /// boundary when possible.
+    private static func clip(_ s: String, max: Int) -> String {
+        guard s.count > max else { return s }
+        let cut = s.prefix(max - 1)
+        if let lastSpace = cut.lastIndex(of: " "), cut.distance(from: cut.startIndex, to: lastSpace) > max / 2 {
+            return String(cut[..<lastSpace]) + "…"
+        }
+        return String(cut) + "…"
+    }
+
+    /// Diameter of the centred character avatar. 64pt — bigger than
+    /// the per-turn 32pt gutter avatar so it reads as "this is the
+    /// character you're about to chat with", not just metadata.
+    private let avatarSize: CGFloat = 64
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
 
-        glyph.font = Theme.font(44, weight: .light)
-        glyph.textColor = .tertiaryLabelColor
-        glyph.alignment = .center
-        glyph.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(glyph)
+        avatar.imageScaling = .scaleProportionallyUpOrDown
+        // Tint applies to SF-Symbol template images (the no-character
+        // person.crop.circle fallback) AND to bitmap avatars where it
+        // has no effect — safe either way. Without this the symbol
+        // rendered with no fill, looking invisible.
+        avatar.contentTintColor = .secondaryLabelColor
+        avatar.wantsLayer = true
+        // Bitmap character avatars are square — clip to a circle.
+        // The SF-Symbol fallback is already circular so the clip is a
+        // no-op for it.
+        avatar.layer?.cornerRadius = avatarSize / 2
+        avatar.layer?.masksToBounds = true
+        avatar.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(avatar)
 
-        title.font = Theme.font(22, weight: .semibold)
+        title.font = DesignTokens.Typography.title2
         title.textColor = .labelColor
         title.alignment = .center
+        title.lineBreakMode = .byTruncatingTail
+        title.maximumNumberOfLines = 1
         title.translatesAutoresizingMaskIntoConstraints = false
         addSubview(title)
 
-        subtitle.font = Theme.font(13)
+        subtitle.font = DesignTokens.Typography.body
         subtitle.textColor = .secondaryLabelColor
         subtitle.alignment = .center
+        subtitle.lineBreakMode = .byWordWrapping
+        subtitle.maximumNumberOfLines = 2
+        subtitle.preferredMaxLayoutWidth = 480
         subtitle.translatesAutoresizingMaskIntoConstraints = false
         addSubview(subtitle)
 
-        chipsStack.orientation = .horizontal
-        chipsStack.spacing = 8
-        chipsStack.alignment = .centerY
+        chipsStack.orientation = .vertical
+        chipsStack.spacing = DesignTokens.Spacing.sm
+        chipsStack.alignment = .centerX
         chipsStack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(chipsStack)
 
-        for s in starters {
-            let btn = ChipButton(title: s)
+        // Initial chips — replaced at configure(character:) time once
+        // the bound character (if any) is known.
+        rebuildChips(EmptyStateView.staticStarters)
+
+        // V2_UI_OVERHAUL §4.6 — bifurcated layout:
+        //   • avatar + title + subtitle pinned near the top of the
+        //     empty state (top-anchor with breathing room).
+        //   • chips pinned to the bottom (just above where the composer
+        //     sits in the chat-pane stack — composer is outside this view).
+        // The pre-fixup `centerYAnchor.constraint(constant: -100)` placed
+        // the avatar 100pt above centre, which pushed it offscreen when
+        // the empty state was shorter than ~264pt. Top-anchored breathing
+        // room is height-independent.
+        NSLayoutConstraint.activate([
+            avatar.centerXAnchor.constraint(equalTo: centerXAnchor),
+            avatar.topAnchor.constraint(equalTo: topAnchor, constant: DesignTokens.Spacing.xl * 2),
+            avatar.widthAnchor.constraint(equalToConstant: avatarSize),
+            avatar.heightAnchor.constraint(equalToConstant: avatarSize),
+
+            title.centerXAnchor.constraint(equalTo: centerXAnchor),
+            title.topAnchor.constraint(equalTo: avatar.bottomAnchor, constant: DesignTokens.Spacing.md),
+            title.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: DesignTokens.Spacing.lg),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -DesignTokens.Spacing.lg),
+
+            subtitle.centerXAnchor.constraint(equalTo: centerXAnchor),
+            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: DesignTokens.Spacing.xs),
+            subtitle.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: DesignTokens.Spacing.lg),
+            subtitle.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -DesignTokens.Spacing.lg),
+
+            chipsStack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            chipsStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -DesignTokens.Spacing.xl),
+            chipsStack.topAnchor.constraint(greaterThanOrEqualTo: subtitle.bottomAnchor, constant: DesignTokens.Spacing.lg),
+            chipsStack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: DesignTokens.Spacing.md),
+            chipsStack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -DesignTokens.Spacing.md)
+        ])
+
+        configure(character: nil)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    /// V2_UI_OVERHAUL §4.6 — re-skin per bound character. Pass nil for
+    /// free-form chats (no character) — falls back to the SF Symbol
+    /// person glyph + generic copy. Called by ChatViewController when
+    /// the empty state is installed for a chat.
+    func configure(character: Character?) {
+        if let c = character {
+            avatar.image = AvatarSource.shared.image(forCharacter: c.id, name: c.name)
+            avatar.toolTip = c.name
+            title.stringValue = c.name
+            let scenario = c.scenario.trimmingCharacters(in: .whitespacesAndNewlines)
+            subtitle.stringValue = scenario.isEmpty
+                ? "Send a message to begin"
+                : scenario
+        } else {
+            avatar.image = EmptyStateView.makePlaceholderAvatar(size: avatarSize)
+            avatar.toolTip = nil
+            title.stringValue = "Start a new chat"
+            subtitle.stringValue = "Send a message to begin"
+        }
+        rebuildChips(EmptyStateView.chipSeeds(for: character))
+    }
+
+    /// Tear down + repopulate the chip stack with fresh ChipButton
+    /// instances for the given titles. Called from init (with static
+    /// starters) and from configure (with the resolved seeds).
+    private func rebuildChips(_ titles: [String]) {
+        for view in chipsStack.arrangedSubviews {
+            chipsStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        for title in titles {
+            let btn = ChipButton(title: title)
             btn.target = self
             btn.action = #selector(chipTapped(_:))
             chipsStack.addArrangedSubview(btn)
         }
-
-        NSLayoutConstraint.activate([
-            glyph.centerXAnchor.constraint(equalTo: centerXAnchor),
-            glyph.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -80),
-
-            title.centerXAnchor.constraint(equalTo: centerXAnchor),
-            title.topAnchor.constraint(equalTo: glyph.bottomAnchor, constant: 12),
-
-            subtitle.centerXAnchor.constraint(equalTo: centerXAnchor),
-            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 6),
-
-            chipsStack.centerXAnchor.constraint(equalTo: centerXAnchor),
-            chipsStack.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 28),
-            chipsStack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 16),
-            chipsStack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16)
-        ])
     }
 
-    required init?(coder: NSCoder) { nil }
+    /// SF Symbol fallback for free-form chats — same `person.crop.circle`
+    /// glyph the assistant TurnView uses when no character is bound
+    /// (V2_UI_OVERHAUL §4.0.h replacement for the legacy `✦`).
+    private static func makePlaceholderAvatar(size: CGFloat) -> NSImage {
+        let cfg = NSImage.SymbolConfiguration(pointSize: size, weight: .light)
+        if let img = NSImage(
+            systemSymbolName: "person.crop.circle",
+            accessibilityDescription: "No character"
+        )?.withSymbolConfiguration(cfg) {
+            return img
+        }
+        return NSImage()
+    }
 
     @objc private func chipTapped(_ sender: ChipButton) {
         delegate?.emptyStateDidPickStarter(self, text: sender.title)
@@ -85,10 +228,10 @@ private final class ChipButton: NSButton {
         bezelStyle = .inline
         isBordered = false
         wantsLayer = true
-        font = Theme.font(13)
+        font = DesignTokens.Typography.body
         contentTintColor = .labelColor
         translatesAutoresizingMaskIntoConstraints = false
-        heightAnchor.constraint(equalToConstant: 28).isActive = true
+        heightAnchor.constraint(equalToConstant: 32).isActive = true
     }
 
     required init?(coder: NSCoder) { nil }
@@ -96,15 +239,18 @@ private final class ChipButton: NSButton {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
+        // controlBackgroundColor + separatorColor border resolved at
+        // draw time so light/dark switches the chip correctly. Mirrors
+        // the CapsulePill pattern used for the per-turn pills (4.d).
         layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         layer?.borderColor = NSColor.separatorColor.cgColor
         layer?.borderWidth = 0.5
-        layer?.cornerRadius = 14
+        layer?.cornerRadius = 16
     }
 
     override var intrinsicContentSize: NSSize {
         var s = super.intrinsicContentSize
-        s.width += 28
+        s.width += 32
         return s
     }
 }

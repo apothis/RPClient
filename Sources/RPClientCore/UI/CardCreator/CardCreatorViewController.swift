@@ -1,0 +1,916 @@
+import AppKit
+
+/// Phase 9 §5.3a — root view controller for the Card Creator window.
+/// Lays out the three structural rows: header (server picker + AI model
+/// label), tabbed body (Identity / Persona / Greetings / Examples / System /
+/// Lorebook / Advanced), footer (Cancel / Save). Tab content for §5.3b/c is
+/// stubbed with placeholder views; only the Identity tab is live in §5.3a.
+///
+/// Owns the `CharacterDraft` and propagates dirty events from the tab
+/// children. Save / Cancel are routed through the window controller for the
+/// dirty-on-close prompt.
+final class CardCreatorViewController: NSViewController {
+
+    let draft: CharacterDraft
+    var onSave: ((UUID) -> Void)?
+    var onCancel: (() -> Void)?
+    var onDirtyChanged: (() -> Void)?
+
+    /// Phase 9 §5.4.a — per-window AI controller registry. Constructed
+    /// once per draft; passed to tabs so they share the same
+    /// CardSuggestionsController instances and stale-propagation hits
+    /// across tabs.
+    private lazy var aiRegistry = CardCreatorAIRegistry(draft: draft)
+
+    /// Strong reference to the Identity tab so saveClicked() can fire
+    /// `commitPendingTagPromotions()` before flushing the draft. The
+    /// tab is also reachable via NSTabView's tabViewItems array but
+    /// keeping a typed reference avoids per-save downcasting.
+    private var identityTab: IdentityTabViewController!
+
+    /// Phase 9 §5.4.b — collected (CardField, MultilineFieldView) pairs
+    /// across every AIAssistableTab. Used by the multi-field fill
+    /// dispatch + bulk Accept-all / Reject-all paths. Built once after
+    /// tabs are added.
+    private var aiAssistableFields: [(CardField, MultilineFieldView)] = []
+
+    /// Phase 9 §5.4.b — single per-window orchestrator for Mode 2
+    /// fills. Constructed lazily from the per-window cardCreatorClient.
+    private var multiOrchestrator: CardMultiFieldOrchestrator?
+
+    /// Phase 9 §5.4.c — Mode 3 autopilot. Lazy; reset between runs.
+    private var autopilotOrchestrator: CardAutopilotOrchestrator?
+    /// Strong reference to the seed sheet while it's on screen.
+    private var seedSheet: AutopilotSeedSheetController?
+    /// Strong reference to the review sheet while it's on screen.
+    private var reviewSheet: ProposalReviewSheetController?
+    /// Strong references to one-off Mode 2 orchestrators spawned for
+    /// per-field re-rolls inside the review sheet. Each entry is
+    /// removed on completion.
+    private var rerollOrchestrators: [UUID: CardMultiFieldOrchestrator] = [:]
+    /// AUTHOR DIRECTION captured at the start of the current Mode 3
+    /// run. Re-rolls fired from the review sheet thread this back into
+    /// `CardMultiFieldGenerator.buildRequest` so the load-bearing
+    /// concept (e.g. "Gemma is a 19-year-old courtesan") anchors every
+    /// re-rolled field — without this, re-rolls drop the hint and the
+    /// model invents fresh names / occupations.
+    private var lastAutopilotHint: String?
+
+    /// Banner above the tab strip showing "N fields proposed" + Accept
+    /// all / Reject all. Hidden when no field is in proposed state.
+    private let proposalBanner = NSStackView()
+    private let proposalBannerLabel = NSTextField(labelWithString: "")
+    private let acceptAllButton = NSButton(title: "Accept all", target: nil, action: nil)
+    private let rejectAllButton = NSButton(title: "Reject all", target: nil, action: nil)
+    private let cancelFillButton = NSButton(title: "Cancel", target: nil, action: nil)
+    private let fillButton = NSButton(title: "Fill missing fields", target: nil, action: nil)
+    private let fillSpinner = NSProgressIndicator()
+    private let autoButton = NSButton(title: "Generate full card", target: nil, action: nil)
+    private let autoSpinner = NSProgressIndicator()
+
+    /// Status row between the header separator and the tab strip,
+    /// surfaced only during a Mode 3 run. Replaces the cramped cost
+    /// readout that used to live on the autoButton title.
+    private let autopilotStatusBar = NSStackView()
+    private let autopilotStatusLabel = NSTextField(labelWithString: "")
+    private let autopilotCancelButton = NSButton(title: "Cancel", target: nil, action: nil)
+
+    private let tabView = NSTabView()
+    private let serverPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let modelLabel = NSTextField(labelWithString: "")
+    private let saveButton = NSButton(title: "Save", target: nil, action: nil)
+    private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
+    private let dirtyDot = NSTextField(labelWithString: "•")
+
+    init(draft: CharacterDraft) {
+        self.draft = draft
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        // No explicit layer.backgroundColor — NSWindow paints its
+        // contentView with windowBackgroundColor automatically and tracks
+        // appearance changes. Setting the layer here would freeze a
+        // light-mode CGColor and not flip on the system mode switch.
+        let root = CardDropView()
+        root.onCardFileDropped = { [weak self] url in self?.handleDroppedCardFile(url) }
+        root.translatesAutoresizingMaskIntoConstraints = false
+        self.view = root
+
+        buildHeader(in: root)
+        buildTabView(in: root)
+        buildFooter(in: root)
+        refreshDirtyDot()
+    }
+
+    // MARK: - Header
+
+    private func buildHeader(in root: NSView) {
+        let serverLabel = NSTextField(labelWithString: "Generation server")
+        serverLabel.font = DesignTokens.Typography.subheadline
+        serverLabel.textColor = DesignTokens.Foreground.secondary
+        serverLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        serverPopup.translatesAutoresizingMaskIntoConstraints = false
+        serverPopup.bezelStyle = .rounded
+        serverPopup.controlSize = .regular
+        populateServerPopup()
+
+        modelLabel.font = DesignTokens.Typography.mono(.subheadline)
+        modelLabel.textColor = DesignTokens.Foreground.tertiary
+        modelLabel.translatesAutoresizingMaskIntoConstraints = false
+        modelLabel.lineBreakMode = .byTruncatingTail
+        modelLabel.stringValue = "—"
+
+        // Phase 9 §5.4.b — global "Fill missing fields" button at the
+        // trailing edge of the header, with a small spinner that
+        // shows while the orchestrator is fetching.
+        fillButton.bezelStyle = .rounded
+        fillButton.controlSize = .regular
+        fillButton.target = self
+        fillButton.action = #selector(fillMissingFieldsClicked)
+        fillButton.toolTip = "Generate proposed values for every empty multi-line field. Review with Accept / Reject before saving."
+        fillButton.translatesAutoresizingMaskIntoConstraints = false
+
+        fillSpinner.style = .spinning
+        fillSpinner.controlSize = .small
+        fillSpinner.isDisplayedWhenStopped = false
+        fillSpinner.translatesAutoresizingMaskIntoConstraints = false
+
+        // Phase 9 §5.4.c — "Generate full card" button to the LEFT of
+        // "Fill missing fields". Mode 3 entry point per §4.8.
+        autoButton.bezelStyle = .rounded
+        autoButton.controlSize = .regular
+        autoButton.target = self
+        autoButton.action = #selector(generateFullCardClicked)
+        autoButton.toolTip = "Walk every empty field through six coordinated AI passes — Identity, Persona+Voice, Body+Intimacy, Disposition, System, Notes. Review proposals before they land in the draft. Hard cap: 10 calls / 16k tokens."
+        autoButton.translatesAutoresizingMaskIntoConstraints = false
+
+        autoSpinner.style = .spinning
+        autoSpinner.controlSize = .small
+        autoSpinner.isDisplayedWhenStopped = false
+        autoSpinner.translatesAutoresizingMaskIntoConstraints = false
+
+        let header = NSStackView(views: [serverLabel, serverPopup, modelLabel])
+        header.orientation = .horizontal
+        header.alignment = .firstBaseline
+        header.spacing = DesignTokens.Spacing.sm
+        header.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(header)
+        root.addSubview(fillSpinner)
+        root.addSubview(fillButton)
+        root.addSubview(autoSpinner)
+        root.addSubview(autoButton)
+
+        // Hairline separator below the header.
+        let separator = NSBox()
+        separator.boxType = .separator
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(separator)
+
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: root.topAnchor, constant: DesignTokens.Spacing.md),
+            header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: DesignTokens.Spacing.lg),
+            header.trailingAnchor.constraint(lessThanOrEqualTo: autoButton.leadingAnchor, constant: -DesignTokens.Spacing.sm),
+
+            fillButton.firstBaselineAnchor.constraint(equalTo: serverLabel.firstBaselineAnchor),
+            fillButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -DesignTokens.Spacing.lg),
+
+            fillSpinner.centerYAnchor.constraint(equalTo: fillButton.centerYAnchor),
+            fillSpinner.trailingAnchor.constraint(equalTo: fillButton.leadingAnchor, constant: -DesignTokens.Spacing.sm),
+
+            autoButton.firstBaselineAnchor.constraint(equalTo: serverLabel.firstBaselineAnchor),
+            autoButton.trailingAnchor.constraint(equalTo: fillSpinner.leadingAnchor, constant: -DesignTokens.Spacing.sm),
+
+            autoSpinner.centerYAnchor.constraint(equalTo: autoButton.centerYAnchor),
+            autoSpinner.trailingAnchor.constraint(equalTo: autoButton.leadingAnchor, constant: -DesignTokens.Spacing.sm),
+
+            separator.topAnchor.constraint(equalTo: header.bottomAnchor, constant: DesignTokens.Spacing.md),
+            separator.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            separator.heightAnchor.constraint(equalToConstant: 1),
+        ])
+
+        // Tag the separator for layout below.
+        separator.identifier = NSUserInterfaceItemIdentifier("CardCreator.headerSeparator")
+    }
+
+    private func populateServerPopup() {
+        serverPopup.removeAllItems()
+        let servers = AppState.shared.settings.servers
+        for s in servers {
+            serverPopup.addItem(withTitle: s.name)
+            serverPopup.lastItem?.representedObject = s.id
+        }
+        serverPopup.target = self
+        serverPopup.action = #selector(serverChanged)
+
+        // Default selection: cardCreatorServerId → active chat's server →
+        // defaultServerId.
+        let defaultId = AppState.shared.settings.cardCreatorServerId
+            ?? AppState.shared.currentChat?.serverId
+            ?? AppState.shared.settings.defaultServerId
+        if let idx = servers.firstIndex(where: { $0.id == defaultId }) {
+            serverPopup.selectItem(at: idx)
+        }
+        refreshModelLabel()
+    }
+
+    @objc private func serverChanged() {
+        guard let id = serverPopup.selectedItem?.representedObject as? UUID else { return }
+        var s = AppState.shared.settings
+        s.cardCreatorServerId = id
+        AppState.shared.saveSettings(s)
+        refreshModelLabel()
+    }
+
+    private func refreshModelLabel() {
+        guard let id = serverPopup.selectedItem?.representedObject as? UUID,
+              let server = AppState.shared.settings.servers.first(where: { $0.id == id }) else {
+            modelLabel.stringValue = "—"
+            return
+        }
+        modelLabel.stringValue = server.baseURL.absoluteString
+    }
+
+    // MARK: - Tab view
+
+    private func buildTabView(in root: NSView) {
+        tabView.tabViewType = .topTabsBezelBorder
+        tabView.translatesAutoresizingMaskIntoConstraints = false
+        tabView.delegate = self
+
+        let onDirty: () -> Void = { [weak self] in self?.handleDirtyChanged() }
+
+        identityTab = IdentityTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry)
+        addTab(identityTab, label: "Identity")
+        addTab(DetailsTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Details")
+        addTab(PersonaTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Persona")
+        addTab(IntimacyTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Intimacy")
+        addTab(GreetingsTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Greetings")
+        addTab(ExamplesTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "Examples")
+        addTab(SystemTabViewController(draft: draft, onDirty: onDirty, aiRegistry: aiRegistry), label: "System")
+
+        addTab(LorebookTabViewController(draft: draft), label: "Lorebook")
+        addTab(AdvancedTabViewController(draft: draft, onDirty: onDirty), label: "Advanced")
+
+        // Phase 9 §5.4.b — proposal banner above the tab strip.
+        // Hidden by default; surfaces when ANY field is in proposed
+        // state (after a Mode-2 fill returns).
+        buildProposalBanner(in: root)
+
+        // Phase 9 §5.4.d — Mode 3 status row. Visible only while an
+        // autopilot run is in flight; carries a readable cost/budget
+        // breakdown plus a Cancel button. Replaces the cramped cost
+        // readout that used to live on the autoButton title.
+        buildAutopilotStatusBar(in: root)
+
+        root.addSubview(tabView)
+
+        guard let separator = root.subviews.first(where: { $0.identifier?.rawValue == "CardCreator.headerSeparator" }) else { return }
+
+        NSLayoutConstraint.activate([
+            autopilotStatusBar.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: DesignTokens.Spacing.sm),
+            autopilotStatusBar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: DesignTokens.Spacing.lg),
+            autopilotStatusBar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -DesignTokens.Spacing.lg),
+
+            // proposalBanner sits below status bar (or below separator
+            // when status bar is hidden — the ≥ relation lets it float
+            // up).
+            proposalBanner.topAnchor.constraint(greaterThanOrEqualTo: separator.bottomAnchor, constant: DesignTokens.Spacing.sm),
+            proposalBanner.topAnchor.constraint(equalTo: autopilotStatusBar.bottomAnchor, constant: DesignTokens.Spacing.sm),
+            proposalBanner.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: DesignTokens.Spacing.lg),
+            proposalBanner.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -DesignTokens.Spacing.lg),
+
+            tabView.topAnchor.constraint(equalTo: proposalBanner.bottomAnchor, constant: DesignTokens.Spacing.sm),
+            tabView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: DesignTokens.Spacing.md),
+            tabView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -DesignTokens.Spacing.md),
+        ])
+
+        // Collect AI-assistable fields + wire per-field accept/reject
+        // hooks to refresh the bulk banner.
+        collectAIAssistableFields()
+    }
+
+    private func buildProposalBanner(in root: NSView) {
+        proposalBannerLabel.font = DesignTokens.Typography.subheadline
+        proposalBannerLabel.textColor = DesignTokens.Foreground.warning
+
+        acceptAllButton.bezelStyle = .rounded
+        acceptAllButton.controlSize = .small
+        acceptAllButton.target = self
+        acceptAllButton.action = #selector(acceptAllProposalsClicked)
+
+        rejectAllButton.bezelStyle = .rounded
+        rejectAllButton.controlSize = .small
+        rejectAllButton.target = self
+        rejectAllButton.action = #selector(rejectAllProposalsClicked)
+
+        cancelFillButton.bezelStyle = .rounded
+        cancelFillButton.controlSize = .small
+        cancelFillButton.target = self
+        cancelFillButton.action = #selector(cancelFillClicked)
+
+        proposalBanner.orientation = .horizontal
+        proposalBanner.alignment = .centerY
+        proposalBanner.spacing = DesignTokens.Spacing.sm
+        proposalBanner.translatesAutoresizingMaskIntoConstraints = false
+        proposalBanner.addArrangedSubview(proposalBannerLabel)
+        proposalBanner.addArrangedSubview(NSView())  // spacer
+        proposalBanner.addArrangedSubview(acceptAllButton)
+        proposalBanner.addArrangedSubview(rejectAllButton)
+        proposalBanner.addArrangedSubview(cancelFillButton)
+        proposalBanner.isHidden = true
+        root.addSubview(proposalBanner)
+    }
+
+    private func buildAutopilotStatusBar(in root: NSView) {
+        autopilotStatusLabel.font = DesignTokens.Typography.subheadline
+        autopilotStatusLabel.textColor = DesignTokens.Foreground.secondary
+        autopilotStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+        autopilotStatusLabel.lineBreakMode = .byTruncatingTail
+
+        autopilotCancelButton.bezelStyle = .rounded
+        autopilotCancelButton.controlSize = .small
+        autopilotCancelButton.target = self
+        autopilotCancelButton.action = #selector(autopilotCancelClicked)
+        autopilotCancelButton.toolTip = "Stop the in-flight Mode 3 autopilot run. Any partial proposals collected so far still surface in the review sheet."
+
+        autopilotStatusBar.orientation = .horizontal
+        autopilotStatusBar.alignment = .centerY
+        autopilotStatusBar.spacing = DesignTokens.Spacing.sm
+        autopilotStatusBar.translatesAutoresizingMaskIntoConstraints = false
+        autopilotStatusBar.addArrangedSubview(autopilotStatusLabel)
+        autopilotStatusBar.addArrangedSubview(NSView())  // spacer
+        autopilotStatusBar.addArrangedSubview(autopilotCancelButton)
+        autopilotStatusBar.isHidden = true
+        root.addSubview(autopilotStatusBar)
+    }
+
+    @objc private func autopilotCancelClicked() {
+        autopilotOrchestrator?.cancel()
+        // .cancel sets state to .idle which routes through
+        // handleAutopilotState → resetAutopilotChrome, hiding the bar.
+    }
+
+    private func collectAIAssistableFields() {
+        var collected: [(CardField, MultilineFieldView)] = []
+        for item in tabView.tabViewItems {
+            guard let vc = item.viewController as? AIAssistableTab else { continue }
+            // Force the tab's view to load NOW so its `loadView()` fires
+            // and wires every field's onChange. NSTabView lazy-loads only
+            // the first tab; for the others, MultilineFieldView.onChange
+            // stays nil until the user clicks the tab. Mode 3 commit
+            // calls `acceptProposal()` which fires `onChange?(text)` — a
+            // silent no-op when nil, so proposed values for Persona /
+            // Intimacy / Examples / Greetings never reach the draft and
+            // the saved card is missing those fields. Caught live
+            // §5.4.c smoke (Gemma card had Persona + Intimacy blank
+            // after a Mode 3 commit + save round-trip).
+            (item.viewController as? NSViewController)?.loadViewIfNeeded()
+            collected.append(contentsOf: vc.aiAssistableFields)
+        }
+        aiAssistableFields = collected
+        // Per-field hooks: accept/reject just refresh the bulk banner.
+        // The field's own onChange already commits to draft + marks
+        // downstream stale.
+        for (_, view) in aiAssistableFields {
+            let existingAccept = view.onAcceptProposal
+            let existingReject = view.onRejectProposal
+            view.onAcceptProposal = { [weak self] in
+                existingAccept?()
+                self?.refreshProposalBanner()
+            }
+            view.onRejectProposal = { [weak self] in
+                existingReject?()
+                self?.refreshProposalBanner()
+            }
+        }
+        DebugLog.shared.write("cardcreator: collected \(aiAssistableFields.count) AI-assistable fields")
+    }
+
+    // MARK: - Multi-field fill (§5.4.b)
+
+    @objc private func fillMissingFieldsClicked() {
+        let empties = aiAssistableFields.filter { $0.1.stringValue.isEmpty && !$0.1.isShowingProposal }
+        guard !empties.isEmpty else {
+            DebugLog.shared.write("cardgen: mode2 fillMissing — no empty fields to fill")
+            return
+        }
+        let fields = empties.map(\.0)
+        let snapshot = CardDraftSnapshotBuilder.snapshot(of: draft)
+
+        if multiOrchestrator == nil {
+            let kobold = AppState.shared.registry.cardCreatorClient(chatOverride: AppState.shared.currentChat?.serverId)
+            multiOrchestrator = CardMultiFieldOrchestrator(generator: kobold)
+            multiOrchestrator?.onStateChange = { [weak self] state in
+                self?.handleMultiOrchestratorState(state)
+            }
+        }
+
+        fillButton.isEnabled = false
+        fillButton.title = "Filling…"
+        multiOrchestrator?.fill(fields: fields, draft: snapshot)
+    }
+
+    @objc private func cancelFillClicked() {
+        multiOrchestrator?.cancel()
+        // For any field already in proposed state, treat cancel as
+        // reject-all (cleanest; the user clicked Cancel after seeing
+        // results they didn't want).
+        rejectAllProposalsClicked()
+    }
+
+    @objc private func acceptAllProposalsClicked() {
+        for (_, view) in aiAssistableFields where view.isShowingProposal {
+            view.acceptProposal()
+        }
+        refreshProposalBanner()
+    }
+
+    @objc private func rejectAllProposalsClicked() {
+        for (_, view) in aiAssistableFields where view.isShowingProposal {
+            view.rejectProposal()
+        }
+        refreshProposalBanner()
+    }
+
+    private func handleMultiOrchestratorState(_ state: CardMultiFieldOrchestrator.State) {
+        switch state {
+        case .idle:
+            fillButton.isEnabled = true
+            fillButton.title = "Fill missing fields"
+            fillSpinner.stopAnimation(nil)
+        case .fetching(let n):
+            fillButton.isEnabled = false
+            fillButton.title = "Filling \(n) fields…"
+            fillSpinner.startAnimation(nil)
+        case .ready(let proposals):
+            dispatchProposals(proposals)
+            fillButton.isEnabled = true
+            fillButton.title = "Fill missing fields"
+            fillSpinner.stopAnimation(nil)
+        case .failed(let m):
+            fillButton.isEnabled = true
+            fillButton.title = "Fill missing fields"
+            fillSpinner.stopAnimation(nil)
+            DebugLog.shared.write("cardgen: mode2 fill failed: \(m)")
+            // TODO §5.4.d: surface error in a toast / alert.
+        }
+    }
+
+    private func dispatchProposals(_ proposals: [CardFieldProposal]) {
+        let lookup: [CardField: MultilineFieldView] = Dictionary(
+            uniqueKeysWithValues: aiAssistableFields
+        )
+        for p in proposals {
+            guard let view = lookup[p.field] else {
+                DebugLog.shared.write("cardgen: mode2 dispatch — no field view for \(p.field.rawValue)")
+                continue
+            }
+            view.showProposal(text: p.text, refusal: p.refusal)
+        }
+        refreshProposalBanner()
+    }
+
+    // MARK: - Mode 3 autopilot (§5.4.c)
+
+    @objc private func generateFullCardClicked() {
+        // Seed the sheet with whatever tags the draft already has so
+        // the author can edit rather than retype. On commit, the sheet
+        // returns the (possibly edited) tag list, which gets pushed
+        // back into the draft AND used as the autopilot snapshot's
+        // tags for upstream context.
+        let sheet = AutopilotSeedSheetController(initialTags: draft.character.tags)
+        sheet.onGenerate = { [weak self] hint, tags in
+            self?.seedSheet = nil
+            self?.startAutopilot(hint: hint, tags: tags)
+        }
+        sheet.onCancel = { [weak self] in self?.seedSheet = nil }
+        seedSheet = sheet
+        if let parent = view.window {
+            sheet.beginSheet(over: parent)
+        }
+    }
+
+    private func startAutopilot(hint: String, tags: [String]) {
+        // Push the seed sheet's tag list back into the draft so the
+        // editor reflects them and the persisted card has them on
+        // save. Per spec these tags do NOT get promoted into the
+        // global custom-tags vocabulary — that's only an Identity-tab
+        // action via the per-tag promote-to-vocab toggle.
+        if tags != draft.character.tags {
+            draft.character.tags = tags
+            draft.markDirty()
+            handleDirtyChanged()
+            aiRegistry.markTagsChanged()
+        }
+        // Snapshot AFTER the tag mutation so the autopilot prompt sees
+        // the seed's tags as upstream.
+        let snapshot = CardDraftSnapshotBuilder.snapshot(of: draft)
+        let kobold = AppState.shared.registry.cardCreatorClient(
+            chatOverride: AppState.shared.currentChat?.serverId
+        )
+        let orch = CardAutopilotOrchestrator(generator: kobold)
+        orch.onStateChange = { [weak self] state in
+            self?.handleAutopilotState(state)
+        }
+        autopilotOrchestrator = orch
+        autoButton.isEnabled = false
+        autoButton.title = "Generating…"
+        autoSpinner.startAnimation(nil)
+        fillButton.isEnabled = false  // don't allow Mode 2 to race Mode 3
+        let trimmedHint = hint.isEmpty ? nil : hint
+        lastAutopilotHint = trimmedHint   // reused on re-rolls
+        orch.generate(draft: snapshot, hint: trimmedHint)
+    }
+
+    private func handleAutopilotState(_ state: CardAutopilotOrchestrator.State) {
+        switch state {
+        case .idle:
+            resetAutopilotChrome()
+        case .running(let pass, let completed, let total, let calls, let tokens):
+            // §5.4.d — cost/budget breakdown lives on the dedicated
+            // status bar now (was crammed onto the autoButton title).
+            // Format: "Pass N/M (label) · 4.8k/16k tok · 4/10 calls".
+            let tokK = String(format: "%.1fk", Double(tokens) / 1000.0)
+            let ceilK = String(format: "%.0fk", Double(CardAutopilotBudget.default.maxTokens) / 1000.0)
+            autopilotStatusLabel.stringValue = "Mode 3 autopilot — Pass \(completed + 1)/\(total) (\(passLabel(pass))) · \(tokK)/\(ceilK) tok · \(calls)/\(CardAutopilotBudget.default.maxCalls) calls"
+            autopilotStatusBar.isHidden = false
+            autoButton.title = "Generating…"
+            autoButton.toolTip = "Mode 3 autopilot in flight. Sequential json_schema passes against the per-window card-gen server."
+        case .completed(let proposals):
+            DebugLog.shared.write("cardgen: mode3 ✓ run done — \(proposals.count) proposals")
+            for p in proposals {
+                let preview = p.text
+                    .replacingOccurrences(of: "\n", with: " ⏎ ")
+                    .prefix(80)
+                DebugLog.shared.write("cardgen: mode3 proposal[\(p.field.rawValue)] (\(p.text.count)c) = \(preview)")
+            }
+            resetAutopilotChrome()
+            presentReviewSheet(proposals: proposals)
+        case .aborted(let reason, let partial):
+            DebugLog.shared.write("cardgen: mode3 aborted — \(reason). partial=\(partial.count)")
+            resetAutopilotChrome()
+            // Even on abort, surface what we got — author can salvage
+            // the partial proposals via the same review sheet.
+            if !partial.isEmpty {
+                presentReviewSheet(proposals: partial, abortReason: reason)
+            } else {
+                presentAutopilotErrorAlert(reason: reason)
+            }
+        }
+    }
+
+    private func resetAutopilotChrome() {
+        autoButton.isEnabled = true
+        autoButton.title = "Generate full card"
+        autoButton.toolTip = nil
+        autoSpinner.stopAnimation(nil)
+        autopilotStatusBar.isHidden = true
+        autopilotStatusLabel.stringValue = ""
+        fillButton.isEnabled = true
+    }
+
+    private func passLabel(_ pass: CardAutopilotPass) -> String {
+        switch pass {
+        case .identity: return "Identity"
+        case .personaVoice: return "Persona+Voice"
+        case .bodyIntimacy: return "Body+Intimacy"
+        case .disposition: return "Disposition"
+        case .system: return "System"
+        case .notes: return "Notes"
+        }
+    }
+
+    private func presentAutopilotErrorAlert(reason: CardAutopilotAbortReason) {
+        guard let parent = view.window else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Mode 3 aborted"
+        switch reason {
+        case .callsExceeded:
+            alert.informativeText = "Hit the 10-call ceiling before any pass completed. Adjust the budget or pre-fill more fields, then try again."
+        case .tokensExceeded:
+            alert.informativeText = "Hit the 16k-token ceiling before any pass completed."
+        case .userCancelled:
+            alert.informativeText = "Cancelled before any results came back."
+        case .passFailure(let pass, let msg):
+            alert.informativeText = "Pass \(passLabel(pass)) failed: \(msg)"
+        }
+        alert.beginSheetModal(for: parent) { _ in }
+    }
+
+    private func presentReviewSheet(
+        proposals: [CardFieldProposal],
+        abortReason: CardAutopilotAbortReason? = nil
+    ) {
+        let model = ProposalReviewModel(initial: proposals)
+        let sheet = ProposalReviewSheetController(model: model)
+        sheet.onCommit = { [weak self] accepted in
+            self?.commitAutopilotProposals(accepted)
+            self?.reviewSheet = nil
+        }
+        sheet.onCancel = { [weak self] in
+            self?.reviewSheet = nil
+        }
+        sheet.onRerollField = { [weak self] field in
+            self?.spawnReroll(for: [field], sheet: sheet)
+        }
+        sheet.onRerollAllUnlocked = { [weak self] fields in
+            // Sequentially fire one orchestrator per field so each
+            // re-roll is independent (and the cost ceiling stays the
+            // user's responsibility — Mode 3 budget doesn't track
+            // post-completion re-rolls).
+            for f in fields { self?.spawnReroll(for: [f], sheet: sheet) }
+        }
+        reviewSheet = sheet
+        if let parent = view.window {
+            sheet.beginSheet(over: parent)
+        }
+    }
+
+    private func spawnReroll(
+        for fields: [CardField],
+        sheet: ProposalReviewSheetController
+    ) {
+        guard let field = fields.first else { return }
+        // Layer the review sheet's current proposal values on top of
+        // the draft snapshot. Without this, re-rolling description
+        // sees `name=<empty>` as upstream (because the proposed
+        // name=Gemma hasn't been committed to the draft yet) and
+        // the model invents a fresh name in the prose. Caught live
+        // §5.4.c smoke when description re-roll mentioned "Jade"
+        // while the locked name row still said "Gemma".
+        let snapshot = mergedRerollSnapshot(sheetModel: sheet.model)
+        let kobold = AppState.shared.registry.cardCreatorClient(
+            chatOverride: AppState.shared.currentChat?.serverId
+        )
+        let orch = CardMultiFieldOrchestrator(generator: kobold)
+        let id = UUID()
+        orch.onStateChange = { [weak self, weak sheet] state in
+            switch state {
+            case .ready(let proposals):
+                if let p = proposals.first {
+                    sheet?.didReceiveRerolledCandidate(field: field, text: p.text)
+                }
+                self?.rerollOrchestrators[id] = nil
+            case .failed(let m):
+                DebugLog.shared.write("cardgen: mode3 reroll ✗ \(field.rawValue) — \(m)")
+                self?.rerollOrchestrators[id] = nil
+            default:
+                break
+            }
+        }
+        rerollOrchestrators[id] = orch
+        let hintPreview = lastAutopilotHint?.prefix(40) ?? ""
+        let tagsList = snapshot.tags.joined(separator: ",")
+        DebugLog.shared.write("cardgen: mode3 reroll fire \(field.rawValue) — upstream name=\"\(snapshot.fields[.name] ?? "")\" tags=[\(tagsList)] hint=\"\(hintPreview)\"")
+        orch.fill(fields: [field], draft: snapshot, authorDirection: lastAutopilotHint)
+    }
+
+    /// Build a draft snapshot for re-roll prompts that layers the
+    /// review sheet's current proposal values over the underlying
+    /// draft. Without this, re-rolls send `name=<empty>` upstream
+    /// (the proposed name lives in the model, not the draft, until
+    /// the user commits) and the model invents a fresh name in the
+    /// re-rolled prose. Rejected rows are skipped — the user has
+    /// signaled they don't want that value influencing other fields.
+    private func mergedRerollSnapshot(sheetModel: ProposalReviewModel) -> CardDraftSnapshot {
+        let base = CardDraftSnapshotBuilder.snapshot(of: draft)
+        var fields = base.fields
+        for row in sheetModel.rows where row.status != .rejected {
+            let trimmed = row.current.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            fields[row.field] = trimmed
+        }
+        return CardDraftSnapshot(tags: base.tags, fields: fields)
+    }
+
+    private func commitAutopilotProposals(_ proposals: [CardFieldProposal]) {
+        DebugLog.shared.write("cardgen: mode3 commit \(proposals.count) → draft")
+        let multilineLookup: [CardField: MultilineFieldView] = Dictionary(
+            uniqueKeysWithValues: aiAssistableFields
+        )
+        var touchedIdentity = false
+        var touchedDetails = false
+        for p in proposals {
+            if let view = multilineLookup[p.field] {
+                view.showProposal(text: p.text, refusal: p.refusal)
+                view.acceptProposal()
+                continue
+            }
+            // Direct-write path: fields without a MultilineFieldView.
+            switch p.field {
+            case .name:
+                draft.character.name = p.text
+                touchedIdentity = true
+            case .nickname:
+                draft.character.nickname = p.text.isEmpty ? nil : p.text
+                touchedIdentity = true
+            case .alternateGreetings:
+                if draft.character.alternateGreetings.isEmpty {
+                    draft.character.alternateGreetings = [p.text]
+                } else {
+                    draft.character.alternateGreetings[0] = p.text
+                }
+            case .detailsSex, .detailsAge, .detailsPronouns,
+                 .detailsSpecies, .detailsOrientation:
+                var d = CardDetails.extractFrom(draft.character) ?? CardDetails()
+                switch p.field {
+                case .detailsSex: d.sex = p.text
+                case .detailsAge: d.age = p.text
+                case .detailsPronouns: d.pronouns = p.text
+                case .detailsSpecies: d.species = p.text
+                case .detailsOrientation: d.orientation = p.text
+                default: break
+                }
+                d.applyTo(&draft.character)
+                touchedIdentity = true
+                touchedDetails = true
+            default:
+                DebugLog.shared.write("cardgen: mode3 commit — unhandled field \(p.field.rawValue)")
+            }
+        }
+        if touchedIdentity { identityTab.rebindFromDraft() }
+        if touchedDetails {
+            // Walk the tab list and rebind any DetailsTab.
+            for item in tabView.tabViewItems {
+                if let detailsVC = item.viewController as? DetailsTabViewController {
+                    detailsVC.rebindFromDraft()
+                }
+            }
+        }
+        draft.markDirty()
+        handleDirtyChanged()
+    }
+
+    private func refreshProposalBanner() {
+        let proposing = aiAssistableFields.filter { $0.1.isShowingProposal }
+        let count = proposing.count
+        proposalBanner.isHidden = count == 0
+        // Active voice + action hint per §5.4.d smoke polish — passive
+        // "N fields proposed" didn't tell authors what the buttons mean
+        // or that per-field controls exist on each row below.
+        let label: String
+        if count == 1 {
+            label = "1 AI suggestion ready — review below, or use bulk actions →"
+        } else {
+            label = "\(count) AI suggestions ready — review below, or use bulk actions →"
+        }
+        proposalBannerLabel.stringValue = label
+    }
+
+    private func addTab(_ vc: NSViewController, label: String) {
+        let item = NSTabViewItem(viewController: vc)
+        item.label = label
+        tabView.addTabViewItem(item)
+    }
+
+    private func addPlaceholderTab(label: String, body: String) {
+        let vc = PlaceholderTabViewController(message: body)
+        addTab(vc, label: label)
+    }
+
+    // MARK: - Footer
+
+    private func buildFooter(in root: NSView) {
+        cancelButton.bezelStyle = .rounded
+        cancelButton.controlSize = .regular
+        cancelButton.target = self
+        cancelButton.action = #selector(cancelClicked)
+        cancelButton.keyEquivalent = "\u{1B}" // Esc
+        cancelButton.translatesAutoresizingMaskIntoConstraints = false
+
+        saveButton.bezelStyle = .rounded
+        saveButton.controlSize = .regular
+        saveButton.target = self
+        saveButton.action = #selector(saveClicked)
+        saveButton.keyEquivalent = "\r"
+        saveButton.keyEquivalentModifierMask = [.command]
+        saveButton.translatesAutoresizingMaskIntoConstraints = false
+
+        dirtyDot.font = DesignTokens.Typography.body
+        dirtyDot.textColor = DesignTokens.Foreground.accent
+        dirtyDot.translatesAutoresizingMaskIntoConstraints = false
+        dirtyDot.toolTip = "You have unsaved changes."
+
+        let separator = NSBox()
+        separator.boxType = .separator
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(separator)
+
+        let footer = NSStackView(views: [cancelButton, NSView(), dirtyDot, saveButton])
+        footer.orientation = .horizontal
+        footer.alignment = .centerY
+        footer.spacing = DesignTokens.Spacing.sm
+        footer.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(footer)
+
+        NSLayoutConstraint.activate([
+            footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -DesignTokens.Spacing.md),
+            footer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: DesignTokens.Spacing.lg),
+            footer.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -DesignTokens.Spacing.lg),
+
+            separator.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -DesignTokens.Spacing.md),
+            separator.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            separator.heightAnchor.constraint(equalToConstant: 1),
+
+            tabView.bottomAnchor.constraint(equalTo: separator.topAnchor, constant: -DesignTokens.Spacing.md),
+        ])
+    }
+
+    // MARK: - Actions
+
+    @objc private func saveClicked() {
+        // Pre-flush hook for tabs that hold UI-only state to be
+        // committed alongside the character. Today: Identity's
+        // pending-novel-tag opt-ins.
+        identityTab.commitPendingTagPromotions()
+
+        // Route through AppStateCardStorage (not Storage.shared directly) so
+        // AppState.saveCharacter updates the in-memory cache + posts
+        // charactersChanged. Library refresh depends on the cache update.
+        let id = draft.flush(storage: AppStateCardStorage())
+        DebugLog.shared.write("cardcreator: save \(id) name=\(draft.character.name)")
+        onSave?(id)
+    }
+
+    @objc private func cancelClicked() {
+        onCancel?()
+    }
+
+    func handleDirtyChanged() {
+        refreshDirtyDot()
+        onDirtyChanged?()
+    }
+
+    private func refreshDirtyDot() {
+        dirtyDot.isHidden = !draft.isDirty
+    }
+
+    // MARK: - Tab navigation shortcuts (Cmd-1 ... Cmd-7)
+
+    func selectTab(at index: Int) {
+        guard index >= 0, index < tabView.numberOfTabViewItems else { return }
+        DebugLog.shared.write("cardcreator: selectTab \(index) (cmd-shortcut)")
+        tabView.selectTabViewItem(at: index)
+    }
+
+    // MARK: - Drag-drop handling (§5.3d.2)
+
+    /// Called when a `.png` / `.json` card file is dropped on the creator
+    /// window. Routes through `AppDelegate.importAndEditCard(from:)` so
+    /// the same path covers File-menu picker, Library-window drop, and
+    /// creator-window drop. The §3.1 in-place "Replace / Keep / Cancel"
+    /// for dirty drafts is a §5.3 deferred polish — for now every drop
+    /// spawns a new creator window and the original draft is preserved.
+    private func handleDroppedCardFile(_ url: URL) {
+        DebugLog.shared.write("cardcreator: drag-drop \(url.lastPathComponent)")
+        (NSApp.delegate as? AppDelegate)?.importAndEditCard(from: url)
+    }
+}
+
+extension CardCreatorViewController: NSTabViewDelegate {
+    func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        DebugLog.shared.write("cardcreator: tabView didSelect \(tabViewItem?.label ?? "nil")")
+    }
+    func tabView(_ tabView: NSTabView, willSelect tabViewItem: NSTabViewItem?) {
+        DebugLog.shared.write("cardcreator: tabView willSelect \(tabViewItem?.label ?? "nil")")
+    }
+    func tabView(_ tabView: NSTabView, shouldSelect tabViewItem: NSTabViewItem?) -> Bool {
+        DebugLog.shared.write("cardcreator: tabView shouldSelect? \(tabViewItem?.label ?? "nil")")
+        return true
+    }
+}
+
+// MARK: - Placeholder tab content (§5.3b/c will replace)
+
+private final class PlaceholderTabViewController: NSViewController {
+    private let message: String
+
+    init(message: String) {
+        self.message = message
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        let v = NSView()
+        v.translatesAutoresizingMaskIntoConstraints = false
+        let label = NSTextField(labelWithString: message)
+        label.font = DesignTokens.Typography.callout
+        label.textColor = DesignTokens.Foreground.tertiary
+        label.translatesAutoresizingMaskIntoConstraints = false
+        v.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: v.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+        ])
+        self.view = v
+    }
+}

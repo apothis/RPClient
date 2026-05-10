@@ -6,6 +6,7 @@ protocol PromptTemplate {
     var stopSequences: [String] { get }
     func assemble(
         memoryBlock: String?,
+        personaBlock: String?,
         entitiesBlock: String?,
         sceneSummaries: [SceneSummary],
         summary: String?,
@@ -14,6 +15,7 @@ protocol PromptTemplate {
         relevantMemories: String?,
         tailMemoryDigest: String?,
         currentSceneAnchor: String?,
+        groupNudge: String?,
         turns: [Turn],
         continuation: Bool
     ) -> String
@@ -30,6 +32,7 @@ extension PromptTemplate {
     ) -> String {
         assemble(
             memoryBlock: memoryBlock,
+            personaBlock: nil,
             entitiesBlock: nil,
             sceneSummaries: [],
             summary: summary,
@@ -38,8 +41,43 @@ extension PromptTemplate {
             relevantMemories: nil,
             tailMemoryDigest: nil,
             currentSceneAnchor: nil,
+            groupNudge: nil,
             turns: turns,
             continuation: false
+        )
+    }
+
+    /// Convenience overload — same signature as the full one minus
+    /// `personaBlock` (added in 4f) and `groupNudge` (added in Phase 8
+    /// §4.2b). Forwards `nil` so existing tests that don't care about
+    /// persona / multi-cast keep working without touching every callsite.
+    func assemble(
+        memoryBlock: String?,
+        entitiesBlock: String?,
+        sceneSummaries: [SceneSummary],
+        summary: String?,
+        worldInfoHits: [String],
+        authorsNote: AuthorsNote?,
+        relevantMemories: String?,
+        tailMemoryDigest: String?,
+        currentSceneAnchor: String?,
+        turns: [Turn],
+        continuation: Bool
+    ) -> String {
+        assemble(
+            memoryBlock: memoryBlock,
+            personaBlock: nil,
+            entitiesBlock: entitiesBlock,
+            sceneSummaries: sceneSummaries,
+            summary: summary,
+            worldInfoHits: worldInfoHits,
+            authorsNote: authorsNote,
+            relevantMemories: relevantMemories,
+            tailMemoryDigest: tailMemoryDigest,
+            currentSceneAnchor: currentSceneAnchor,
+            groupNudge: nil,
+            turns: turns,
+            continuation: continuation
         )
     }
 
@@ -54,6 +92,7 @@ extension PromptTemplate {
     ) -> String {
         assemble(
             memoryBlock: memoryBlock,
+            personaBlock: nil,
             entitiesBlock: nil,
             sceneSummaries: [],
             summary: summary,
@@ -62,6 +101,7 @@ extension PromptTemplate {
             relevantMemories: relevantMemories,
             tailMemoryDigest: nil,
             currentSceneAnchor: nil,
+            groupNudge: nil,
             turns: turns,
             continuation: false
         )
@@ -90,5 +130,18 @@ enum Templates {
         default:
             return GemmaTemplate()
         }
+    }
+
+    /// Best-effort guess at the right template for a given model-name string
+    /// (e.g. the result of `/api/v1/model`). Lowercased substring match in
+    /// rough specificity order — falls back to nil when unrecognised so the
+    /// caller can keep its current default. Used by AppState when creating
+    /// new chats so the default template tracks whatever model KoboldCpp is
+    /// actually serving.
+    static func detect(forModelName name: String) -> String? {
+        let lower = name.lowercased()
+        if lower.contains("qwen") { return QwenTemplate().id }
+        if lower.contains("gemma") { return GemmaTemplate().id }
+        return nil
     }
 }

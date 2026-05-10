@@ -1,10 +1,15 @@
 import AppKit
+import UniformTypeIdentifiers
 
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
     private var splitVC: NSSplitViewController!
     private var settingsWC: SettingsWindowController?
+    private var modelCapsWC: ModelCapabilitiesWindowController?
     private var factEvalWC: FactExtractorEvalWindow?
+    private var libraryWC: LibraryWindowController?
+    private var cardCreatorWCs: [CardCreatorWindowController] = []
+    private var helpWC: HelpWindowController?
 
     public override init() {
         super.init()
@@ -60,6 +65,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         true
     }
 
+    public func applicationWillTerminate(_ notification: Notification) {
+        AppState.shared.speaker.stop()
+    }
+
     private func buildMenu() {
         let main = NSMenu()
 
@@ -75,6 +84,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             title: "Settings…",
             action: #selector(showSettings),
             keyEquivalent: ","))
+        // Phase 10 §10.b — separate window for per-EXACT-model
+        // overrides. Distinct from app-wide Settings because the
+        // concern is per-model, not per-app: one record per loaded
+        // model, edited / deleted in isolation per the runbook's
+        // per-EXACT-model invariant.
+        let modelCapsItem = NSMenuItem(
+            title: "Model Capabilities…",
+            action: #selector(showModelCapabilities),
+            keyEquivalent: ",")
+        modelCapsItem.keyEquivalentModifierMask = [.command, .shift]
+        appMenu.addItem(modelCapsItem)
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(NSMenuItem(
             title: "Hide RPClient",
@@ -93,6 +113,35 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             title: "New Chat",
             action: #selector(newChat),
             keyEquivalent: "n"))
+        fileMenu.addItem(NSMenuItem(
+            title: "New Chat with Character…",
+            action: #selector(newChatWithCharacter),
+            keyEquivalent: "N"))
+        fileMenu.addItem(NSMenuItem.separator())
+        // Phase 9 §5.3d — Card Creator menu entry points. New Character
+        // opens an empty creator; Import & Edit Card… runs the file
+        // picker through CharacterCardImporter and opens the result in
+        // editing-without-save mode (Cancel discards the import). Edit-
+        // existing-card lives on the Library window's right-click menu
+        // and "Edit Card…" button.
+        fileMenu.addItem(NSMenuItem(
+            title: "New Character…",
+            action: #selector(showCardCreator),
+            keyEquivalent: ""))
+        fileMenu.addItem(NSMenuItem(
+            title: "Import & Edit Card…",
+            action: #selector(showImportAndEditCardPicker),
+            keyEquivalent: ""))
+        fileMenu.addItem(NSMenuItem(
+            title: "Import Character…",
+            action: #selector(importCharacter),
+            keyEquivalent: "o"))
+        let libraryItem = NSMenuItem(
+            title: "Show Library",
+            action: #selector(showLibrary),
+            keyEquivalent: "L")
+        libraryItem.keyEquivalentModifierMask = [.command, .shift]
+        fileMenu.addItem(libraryItem)
         fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(NSMenuItem(
             title: "Reload Server Info",
@@ -112,6 +161,29 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             title: "Toggle Inspector",
             action: #selector(toggleInspector),
             keyEquivalent: "i"))
+        viewMenu.addItem(NSMenuItem.separator())
+        // Swipe paging on the trailing assistant turn. Action is `nil` so the
+        // selector travels up the responder chain to ChatViewController.
+        let prevVariant = NSMenuItem(
+            title: "Previous Variant",
+            action: Selector(("previousVariant:")),
+            keyEquivalent: String(format: "%C", 0xF702))   // NSLeftArrowFunctionKey
+        prevVariant.keyEquivalentModifierMask = .command
+        viewMenu.addItem(prevVariant)
+        let nextVariant = NSMenuItem(
+            title: "Next Variant",
+            action: Selector(("nextVariant:")),
+            keyEquivalent: String(format: "%C", 0xF703))   // NSRightArrowFunctionKey
+        nextVariant.keyEquivalentModifierMask = .command
+        viewMenu.addItem(nextVariant)
+        // Phase 7 §3.3b — Cmd-B forks the trailing assistant turn.
+        // Selector resolves up the responder chain to ChatViewController.
+        let forkBranch = NSMenuItem(
+            title: "Fork Branch",
+            action: Selector(("forkBranch:")),
+            keyEquivalent: "b")
+        forkBranch.keyEquivalentModifierMask = .command
+        viewMenu.addItem(forkBranch)
         viewMenuItem.submenu = viewMenu
 
         let editMenuItem = NSMenuItem()
@@ -149,6 +221,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: ""))
         debugMenuItem.submenu = debugMenu
 
+        let helpMenuItem = NSMenuItem()
+        main.addItem(helpMenuItem)
+        let helpMenu = NSMenu(title: "Help")
+        helpMenu.addItem(NSMenuItem(
+            title: "RPClient Help",
+            action: #selector(showHelp),
+            keyEquivalent: "?"))
+        helpMenuItem.submenu = helpMenu
+        // AppKit auto-routes ⌘? and the "Search" Help menu integration when
+        // the menu has the helpMenu role.
+        NSApp.helpMenu = helpMenu
+
         NSApp.mainMenu = main
     }
 
@@ -168,8 +252,149 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWC?.window?.makeKeyAndOrderFront(nil)
     }
 
+    @objc private func showModelCapabilities() {
+        if modelCapsWC == nil {
+            modelCapsWC = ModelCapabilitiesWindowController()
+        }
+        modelCapsWC?.showWindow(nil)
+        modelCapsWC?.window?.makeKeyAndOrderFront(nil)
+    }
+
     @objc private func newChat() {
         AppState.shared.newChat()
+    }
+
+    @objc private func newChatWithCharacter() {
+        let characters = AppState.shared.characters
+        guard !characters.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "No characters yet"
+            alert.informativeText = "Import a character card first (File → Import Character…)."
+            alert.addButton(withTitle: "Open Library")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn { showLibrary() }
+            return
+        }
+        let menu = NSMenu()
+        for c in characters {
+            let item = NSMenuItem(
+                title: c.name,
+                action: #selector(startChatFromMenu(_:)),
+                keyEquivalent: "")
+            item.target = self
+            item.representedObject = c.id.uuidString
+            menu.addItem(item)
+        }
+        // Surface anchored under the title bar of the main window so the user
+        // sees it pop where the cursor isn't required.
+        let location = NSPoint(x: 20, y: 20)
+        let anchor = window.contentView ?? NSView()
+        menu.popUp(positioning: nil, at: location, in: anchor)
+    }
+
+    @objc private func startChatFromMenu(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let id = UUID(uuidString: raw),
+              let character = AppState.shared.character(id: id) else { return }
+        AppState.shared.newChat(withCharacter: character)
+    }
+
+    @objc private func importCharacter() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.png, .json]
+        panel.message = "Choose a SillyTavern v2 character card (.png or .json)."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            _ = try AppState.shared.importCharacter(from: url)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Couldn't import \(url.lastPathComponent)"
+            alert.informativeText = String(describing: error)
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+    }
+
+    @objc private func showCardCreator() {
+        openNewCardCreator()
+    }
+
+    @objc private func showImportAndEditCardPicker() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.png, .json]
+        panel.message = "Choose a SillyTavern card (.png or .json) to import and edit. Save in the creator to commit."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        importAndEditCard(from: url)
+    }
+
+    /// Shared import-and-edit path — used by the File menu picker, the
+    /// Library window drag-drop, and the creator-window drag-drop. Imports
+    /// via CharacterCardImporter and opens the result in the creator with
+    /// `.importing` origin so Save commits, Cancel discards entirely.
+    func importAndEditCard(from url: URL) {
+        do {
+            let result = try CharacterCardImporter.importFile(at: url)
+            DebugLog.shared.write("import-and-edit: \(url.lastPathComponent) → \(result.character.name)")
+            openImportAndEditCardCreator(from: result)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Couldn't import \(url.lastPathComponent)"
+            alert.informativeText = String(describing: error)
+            alert.runModal()
+        }
+    }
+
+    /// Public entry point — Library window's "+ New Card" button calls this.
+    func openNewCardCreator() {
+        openCardCreator(.init())
+    }
+
+    /// Public entry point — Library window's "Edit Card…" button + the
+    /// right-click menu both route through here so the creator-window
+    /// lifecycle stays managed in one place.
+    func openEditCardCreator(for character: Character) {
+        openCardCreator(.init(editing: character))
+    }
+
+    /// Public entry point — File → Import & Edit Card… (§5.3d.2).
+    func openImportAndEditCardCreator(from result: CharacterCardImporter.Result) {
+        openCardCreator(.init(importing: result))
+    }
+
+    private func openCardCreator(_ wc: CardCreatorWindowController) {
+        cardCreatorWCs.append(wc)
+        wc.showWindow(nil)
+        wc.window?.makeKeyAndOrderFront(nil)
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: wc.window,
+            queue: .main
+        ) { [weak self, weak wc] _ in
+            self?.cardCreatorWCs.removeAll { $0 === wc }
+        }
+    }
+
+    @objc private func showLibrary() {
+        if libraryWC == nil {
+            libraryWC = LibraryWindowController()
+        }
+        libraryWC?.showWindow(nil)
+        libraryWC?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// V2_UI_OVERHAUL §4.g.4 — entry point used by the composer's
+    /// persona pill "Manage personas…" row. Same lifecycle as
+    /// `showLibrary` but deep-links to the Personas tab so users
+    /// don't have to hunt for it.
+    func showLibraryAtPersonas() {
+        showLibrary()
+        libraryWC?.selectPersonasTab()
     }
 
     @objc private func reloadServer() {
@@ -183,5 +408,32 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleInspector() {
         guard let item = splitVC.splitViewItems.last else { return }
         item.animator().isCollapsed.toggle()
+    }
+
+    @objc private func showHelp() {
+        if helpWC == nil {
+            helpWC = HelpWindowController()
+        }
+        helpWC?.showWindow(nil)
+        helpWC?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Entry point for inspector pane "?" buttons (later slices). Opens the
+    /// help window scrolled to a specific page and optional anchor. Renamed
+    /// from the menu's `showHelp` to keep `#selector(showHelp)` unambiguous.
+    public func openHelp(pageId: String, anchor: String? = nil) {
+        if helpWC == nil {
+            helpWC = HelpWindowController()
+        }
+        helpWC?.show(pageId: pageId, anchor: anchor)
+    }
+
+    /// Wire the §7.1l Kokoro engine selector. The factory must build a
+    /// `KokoroSpeechSynthesizer` (which lives in RPClientVoice) from the
+    /// supplied (model, voice, language) triple. Call once at launch.
+    public func installKokoroSpeechSelector(
+        factory: @escaping KokoroSpeechSynthesizerFactory
+    ) {
+        AppState.shared.installKokoroSpeechSelector(factory: factory)
     }
 }

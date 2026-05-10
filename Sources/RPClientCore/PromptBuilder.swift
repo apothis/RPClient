@@ -74,7 +74,7 @@ struct PromptBuilder {
             let capCount = min(80, trimmed.count)
             let cap = trimmed.index(trimmed.startIndex, offsetBy: capCount)
             let segment = trimmed[..<cap]
-            let breakers: Set<Character> = [",", ";", ".", "!", "?", ":"]
+            let breakers: Set<Swift.Character> = [",", ";", ".", "!", "?", ":"]
             var body: String
             if let cut = segment.firstIndex(where: { breakers.contains($0) }) {
                 body = String(trimmed[..<cut])
@@ -102,17 +102,163 @@ struct PromptBuilder {
     /// weight can't out-pull the recent verbatim turns. See MEMORY_AUDIT
     /// §4.3-D and the 2026-05-03 empirical failure where the v3-shipped
     /// reframing alone wasn't enough.
-    static func renderableScenes(chat: Chat, staleAge: Int = SceneSummaryFormatter.defaultStalenessThreshold) -> [SceneSummary] {
-        let head = chat.turns.count
-        return chat.sceneSummaries.map { scene in
+    ///
+    /// Phase 7 §3.2 — branch-aware position resolution. Scenes with
+    /// `firstTurnId`/`lastTurnId` are resolved against the current
+    /// `activePath`; scenes whose lastTurnId is off-branch are dropped
+    /// entirely (they describe a path the user isn't reading right now).
+    /// The returned scenes have `firstTurn`/`lastTurn` Int fields populated
+    /// with the branch-resolved positions so `SceneSummaryFormatter` can
+    /// render "turns N–M" headers without needing chat access. **Output is
+    /// render-cache, not persistence-bound** — never feed this back into
+    /// `chat.sceneSummaries` or encode it.
+    /// Phase 8 §4.2b — character-count cap on a single cohabitant brief
+    /// line. ~60 tokens at the project's standard 4-chars-per-token
+    /// estimate. Long-description characters get truncated; short ones
+    /// pass through unchanged.
+    static let cohabitantBriefCharCap = 240
+
+    /// Phase 8 §4.2b — extract a single-sentence cohabitant brief from a
+    /// character description. Takes the first sentence (split on `. `,
+    /// `! `, or `? `, including the terminator) and caps at
+    /// `cohabitantBriefCharCap`. Falls back to the leading prefix when no
+    /// sentence terminator is present. Whitespace-trimmed.
+    static func cohabitantBrief(_ description: String) -> String {
+        let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        // Find first sentence terminator followed by whitespace or end.
+        var firstSentence = trimmed
+        for terminator in [". ", "! ", "? "] {
+            if let r = trimmed.range(of: terminator) {
+                firstSentence = String(trimmed[..<r.upperBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                break
+            }
+        }
+        if firstSentence.count > cohabitantBriefCharCap {
+            let cut = firstSentence.prefix(cohabitantBriefCharCap)
+            return String(cut) + "…"
+        }
+        return firstSentence
+    }
+
+    /// Phase 8 §3.2 — the "group nudge" system message inserted at end-of-
+    /// prompt to keep the model from impersonating other cast members.
+    /// Stolen verbatim from SillyTavern's `public/scripts/openai.js:114`,
+    /// substituting the active speaker's display name. Tiny, cheap, and
+    /// the load-bearing trick that makes role-prefix history-formatting
+    /// work in practice.
+    ///
+    /// Phase 10 §10.c — `style` and `xToX` come from a per-EXACT-model
+    /// `ChatPathOverrides.groupNudgeStyle` lookup at the call site (see
+    /// `PromptBuilder.build`). The `.continuing` variant rewrites the
+    /// directive to `[Continuing as X.]` only when the most-recent
+    /// assistant turn was spoken by the same cast member as the active
+    /// speaker (X→X case) — empirically the failure mode where the
+    /// standard nudge isn't load-bearing on Qwen3.6, per
+    /// V2_PHASE10_CHAT_TUNING_RESEARCH.md §10.0.f. `.stopAugment` and
+    /// `.strongStop` change the assembled stop sequences (handled in
+    /// `build`), not the nudge text — those styles still pick text by
+    /// the same rule as `.standard` / `.strong`.
+    static func groupNudge(activeSpeakerName: String, style: GroupNudgeStyle = .standard, xToX: Bool = false) -> String {
+        switch style {
+        case .standard, .stopAugment:
+            return "[Write the next reply only as \(activeSpeakerName).]"
+        case .strong, .strongStop:
+            return "[\(activeSpeakerName) speaks now. Other cast members are silent for this turn.]"
+        case .continuing:
+            return xToX
+                ? "[Continuing as \(activeSpeakerName).]"
+                : "[Write the next reply only as \(activeSpeakerName).]"
+        }
+    }
+
+    /// Phase 8 §4.2b — transform history turns for per-speaker prompt
+    /// assembly. For every assistant turn whose `speakerId` resolves to
+    /// a cast member *other than* the active speaker, prefix the text
+    /// with `\(name): ` and strip any `<think>…</think>` blocks (other
+    /// speakers' internal reasoning shouldn't leak into the active
+    /// speaker's context). The active speaker's own prior turns are
+    /// preserved as-is (no prefix; reasoning kept — it's their internal
+    /// monologue, useful to their continuation). User turns and
+    /// assistant turns with no/unknown speakerId pass through unchanged.
+    static func formatHistoryForSpeaker(turns: [Turn], activeSpeakerId: UUID, cast: [Character]) -> [Turn] {
+        let nameById: [UUID: String] = Dictionary(uniqueKeysWithValues: cast.map { ($0.id, $0.name) })
+        return turns.map { t in
+            guard t.role == .assistant,
+                  let sid = t.speakerId,
+                  sid != activeSpeakerId,
+                  let name = nameById[sid] else {
+                return t
+            }
+            var out = t
+            let stripped = stripThinkBlocks(t.text)
+            out.text = "\(name): \(stripped)"
+            return out
+        }
+    }
+
+    /// Phase 8 §4.2b — strip `<think>…</think>` blocks (case-insensitive,
+    /// non-greedy, multi-line). Used to scrub other speakers' reasoning
+    /// from history before feeding into the active speaker's prompt.
+    /// Operates on a finished string (not a stream); mid-stream stripping
+    /// uses `ThinkBlockFilter` instead.
+    static func stripThinkBlocks(_ text: String) -> String {
+        // Pattern: `<think>` (case-insensitive), then any chars (lazy),
+        // then `</think>`. Using NSRegularExpression so we get
+        // non-greedy + multiline behaviour without depending on Swift's
+        // newer Regex DSL availability.
+        let pattern = "(?is)<think>.*?</think>"
+        guard let re = try? NSRegularExpression(pattern: pattern, options: []) else {
+            return text
+        }
+        let range = NSRange(text.startIndex..., in: text)
+        let stripped = re.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
+        // Trim any leftover blank-line padding the think tag was anchoring.
+        return stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func renderableScenes(chat: Chat, staleAge: Int = SceneSummaryFormatter.defaultStalenessThreshold, speakerId: UUID? = nil) -> [SceneSummary] {
+        // Phase 7 §3.2 — `head` is the active path's length. Fall back to
+        // turns.count when activePath is empty but turns isn't (in-memory
+        // chats built via the Chat() initializer + direct turns mutation
+        // bypass the decode-time spine migration; production paths get
+        // proper activePath maintenance in §3.3).
+        let head = chat.activePath.isEmpty && !chat.turns.isEmpty
+            ? chat.turns.count
+            : chat.activePath.count
+        return chat.sceneSummaries.compactMap { scene -> SceneSummary? in
+            let firstPos = scene.firstTurnPosition(in: chat)
+            let lastPos = scene.lastTurnPosition(in: chat)
+            // Off-branch scenes don't render. UUID resolution missed and there
+            // was no legacy Int fallback — this scene was indexed against a
+            // branch that's no longer on the path.
+            if scene.firstTurnId != nil && firstPos == nil && lastPos == nil {
+                return nil
+            }
             let isStale: Bool = {
-                guard let last = scene.lastTurn else { return true }
+                guard let last = lastPos else { return true }
                 return (head - last - 1) > staleAge
             }()
-            guard isStale else { return scene }
-            var compressed = scene
-            compressed.text = SceneSummaryFormatter.compact(scene.text)
-            return compressed
+            var rendered = scene
+            // Write resolved positions into the legacy Int fields so the
+            // formatter (which doesn't take a chat) can render headers.
+            rendered.firstTurn = firstPos
+            rendered.lastTurn = lastPos
+            // Phase 8 §4.2b — lazy per-speaker scene cache. When a
+            // speaker is provided AND that speaker has a populated entry
+            // in `summariesBySpeaker`, that text replaces the narrator-
+            // view `text`. Falls back to `text` when the speaker has no
+            // entry (room hasn't summarised for them yet) and on the
+            // solo path (`speakerId == nil`) where there's no concept of
+            // "what X remembers."
+            if let sid = speakerId,
+               let perSpeaker = scene.summariesBySpeaker?[sid] {
+                rendered.text = perSpeaker
+            }
+            if isStale {
+                rendered.text = SceneSummaryFormatter.compact(rendered.text)
+            }
+            return rendered
         }
     }
 
@@ -121,30 +267,365 @@ struct PromptBuilder {
     /// If the summary is empty, ignore `summarizedThrough` and return all turns —
     /// this self-heals chats where a side-call advanced the index but produced
     /// no summary content (otherwise those turns would silently vanish from the prompt).
+    ///
+    /// A trailing **empty** assistant turn is dropped: that turn is the UI's
+    /// stream target (added by `sendUserMessage` / `regenerate`), not a
+    /// historical reply. Including it renders an empty
+    /// `<start_of_turn>model\n<end_of_turn>\n` block right before the
+    /// generation marker, which the model pattern-matches and continues by
+    /// emitting another empty turn — particularly visible on fresh chats
+    /// where there's no prior non-empty assistant content to outweigh the
+    /// signal. See `Templates` continuation flag for the resume case (where
+    /// the trailing assistant is non-empty and intentionally left open).
     static func verbatimTurns(_ chat: Chat) -> [Turn] {
-        if chat.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return chat.turns
+        let raw: [Turn] = {
+            if chat.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return chat.turns
+            }
+            let start = max(0, min(chat.summarizedThrough, chat.turns.count))
+            return Array(chat.turns[start...])
+        }()
+        if let last = raw.last, last.role == .assistant, last.text.isEmpty {
+            return Array(raw.dropLast())
         }
-        let start = max(0, min(chat.summarizedThrough, chat.turns.count))
-        return Array(chat.turns[start...])
+        return raw
     }
 
-    static func build(chat: Chat, relevantMemories: String? = nil, continuation: Bool = false, qwenThinking: Bool = false) -> (prompt: String, stops: [String]) {
+    /// `character` / `persona` are looked up by the caller from `AppState` and
+    /// passed in rather than fetched here so `PromptBuilder` stays a pure
+    /// function of its inputs (testable without AppState). Both default to
+    /// nil for the free-form chat path. Step 4a plumbs them through; later
+    /// sub-steps consume them.
+    static func build(chat: Chat, character: Character? = nil, persona: Persona? = nil, relevantMemories: String? = nil, continuation: Bool = false, qwenThinking: Bool = false, speakerId: UUID? = nil, cast: [Character] = [], overrides: ChatPathOverrides = ChatPathOverrides(), systemPromptAddendum: String = "") -> (prompt: String, stops: [String]) {
+        // Phase 8 §4.2b — multi-cast assembly path. Triggered when the
+        // chat has more than one cast member AND the caller has resolved
+        // a speakerId for this generation. `character` is still the active
+        // speaker's full card (caller resolves from speakerId); `cast`
+        // adds the other cast members for cohabitant briefs + history
+        // name-prefixing. Solo / free-form chats pass through unchanged.
+        let isMultiCast = chat.cast.count > 1 && speakerId != nil
+        let cohabitants: [Character] = isMultiCast ? cast.filter { $0.id != speakerId } : []
+        let activeName: String? = {
+            guard isMultiCast, let sid = speakerId else { return nil }
+            return cast.first(where: { $0.id == sid })?.name ?? character?.name
+        }()
+        // Phase 10 §10.c — apply per-EXACT-model `ChatPathOverrides`.
+        //   - `groupNudgeStyle` selects which nudge text renders.
+        //   - The `.continuing` variant needs to know whether the most-
+        //     recent assistant turn was spoken by the active speaker
+        //     (X→X) — caller doesn't compute this; we walk the chat
+        //     here so it's centralised.
+        //   - `stopSequenceAugmentation` adds caller-supplied stops.
+        //   - `.stopAugment` / `.strongStop` styles auto-add per-cohabitant
+        //     `\nName:` and `Name:` stops on top.
+        let nudgeStyle = overrides.groupNudgeStyle ?? .standard
+        let xToX: Bool = {
+            guard isMultiCast, let sid = speakerId else { return false }
+            return chat.turns.reversed().first(where: { $0.role == .assistant })?.speakerId == sid
+        }()
+        let nudge: String? = activeName.map { groupNudge(activeSpeakerName: $0, style: nudgeStyle, xToX: xToX) }
+        let renderedTurns: [Turn] = {
+            let base: [Turn]
+            if isMultiCast, let sid = speakerId {
+                base = formatHistoryForSpeaker(turns: verbatimTurns(chat), activeSpeakerId: sid, cast: cast)
+            } else {
+                base = verbatimTurns(chat)
+            }
+            // Substitute {{char}} / {{user}} in EVERY turn's text
+            // before they go to the model. Card-format placeholders
+            // are the source of truth on disk (SillyTavern convention)
+            // — substitution happens at every render. Without this,
+            // existing chats whose seeded greeting was persisted with
+            // raw `{{char}}` (i.e. from before this fix shipped) keep
+            // hallucinating the character's name forever because the
+            // chat history primes the pattern.
+            let charName = character?.name ?? ""
+            let resolvedUserName = persona?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return base.map { t in
+                var copy = t
+                copy.text = PlaceholderSubstitution.apply(
+                    t.text, characterName: charName, userName: resolvedUserName
+                )
+                return copy
+            }
+        }()
+
+        // Test-path userName resolution for {{user}} substitution: use
+        // the persona's name when one is bound, otherwise empty (which
+        // PlaceholderSubstitution.apply maps to "User"). Production
+        // (TokenBudget.assemble) passes settings.userName explicitly.
+        let resolvedUserName = persona?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let memoryBlock = composeMemoryBlock(chat: chat, character: character, userName: resolvedUserName, cohabitants: cohabitants, systemPromptAddendum: systemPromptAddendum)
+        let personaBlock = renderPersonaBlock(persona)
         let template = Templates.byId(chat.templateId, qwenThinking: qwenThinking)
         let prompt = template.assemble(
-            memoryBlock: chat.memory.isEmpty ? nil : chat.memory,
+            memoryBlock: memoryBlock,
+            personaBlock: personaBlock,
             entitiesBlock: entitiesBlock(chat: chat),
-            sceneSummaries: renderableScenes(chat: chat),
+            sceneSummaries: renderableScenes(chat: chat, speakerId: speakerId),
             summary: chat.summary.isEmpty ? nil : chat.summary,
-            worldInfoHits: [],
-            authorsNote: chat.authorsNote.text.isEmpty ? nil : chat.authorsNote,
+            worldInfoHits: worldInfoHits(chat: chat),
+            authorsNote: effectiveAuthorsNote(chat: chat, character: character, userName: resolvedUserName),
             relevantMemories: relevantMemories,
             tailMemoryDigest: tailMemoryDigest(chat: chat, continuation: continuation),
             currentSceneAnchor: currentSceneAnchor(chat: chat, continuation: continuation),
-            turns: verbatimTurns(chat),
+            groupNudge: nudge,
+            turns: renderedTurns,
             continuation: continuation
         )
-        return (prompt, template.stopSequences)
+        var stops = template.stopSequences
+        stops += overrides.stopSequenceAugmentation ?? []
+        if isMultiCast && (nudgeStyle == .stopAugment || nudgeStyle == .strongStop) {
+            // Cohabitant role-prefix stops, in both newline-prefixed and
+            // bare forms. Newline-prefixed catches the canonical
+            // `<turn>\nName:` shape; bare catches the model leading
+            // straight with `Name:` after the assistant prefill.
+            for c in cohabitants {
+                stops.append("\n\(c.name):")
+                stops.append("\(c.name):")
+            }
+        }
+        return (prompt, stops)
+    }
+
+    /// Soft cap (in characters) on the persona block before we start logging
+    /// a "your persona is unusually long" warning. ~200 tokens at the
+    /// project's standard 4-chars-per-token estimate. Not a hard truncate;
+    /// the user can still ship long persona blocks if they really mean to.
+    /// See V2_PLAN §4.6.
+    static let personaSoftCapChars = 800
+
+    /// Format the user-side persona for prompt injection. Returns `nil` when
+    /// no persona is set (or the persona has neither name nor description),
+    /// so callers can pass through to the templates' `personaBlock: String?`
+    /// slot. Format matches V2_PLAN §4.4: `<You are NAME>\nDESCRIPTION`. When
+    /// the persona only has a description (no name), emits just the
+    /// description as-is. Logs a soft-cap warning when the rendered block
+    /// exceeds `personaSoftCapChars`.
+    static func renderPersonaBlock(_ persona: Persona?) -> String? {
+        guard let p = persona else { return nil }
+        let name = p.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let desc = p.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.isEmpty && desc.isEmpty { return nil }
+        let body: String
+        if !name.isEmpty && !desc.isEmpty {
+            body = "<You are \(name)>\n\(desc)"
+        } else if !name.isEmpty {
+            body = "<You are \(name)>"
+        } else {
+            body = desc
+        }
+        if body.count > personaSoftCapChars {
+            DebugLog.shared.write("persona-cap-warning: rendered=\(body.count)c (~\(body.count / 4)tok) exceeds soft cap \(personaSoftCapChars)c (~\(personaSoftCapChars / 4)tok). Persona will still inject — long personas can blow the prompt budget on small-context models.")
+        }
+        return body
+    }
+
+    /// Header on the read-only "from card" block (description + personality +
+    /// scenario). Plain-prose framing — same pattern as `worldInfoHeader` and
+    /// the entities block — so the model treats it as a private reference
+    /// card rather than a heading to restate verbatim.
+    ///
+    /// The trailing nuance about Scenario exists because v2 cards bundle
+    /// `scenario` (a static default opening) with `alternate_greetings`
+    /// (sibling openings). When the user swipes to an alt that disagrees
+    /// with the scenario, the model otherwise leans on the system-block
+    /// scenario over the recent assistant turn — putting Marin on the
+    /// quarterdeck when the active greeting placed her in her cabin. This
+    /// hint defuses that conflict without dropping the field. See V2_PLAN §4.4.
+    static let cardPrefixHeader = "(Character card — reference details for continuity. Use silently; do not restate, quote, or copy these lines into your reply. The Scenario below describes the default opening; defer to the most recent turns for the current scene.)"
+
+    /// Compose the memory-block string the templates see at the top of the
+    /// prompt (slot 1/3 of the cache-friendly layout). Pure function of its
+    /// inputs so both `PromptBuilder.build` (test path) and
+    /// `TokenBudget.assemble` (production) can share it.
+    ///
+    /// Layering, top-to-bottom, when each piece is non-empty:
+    /// 1. `character.systemPrompt` — directive at the top.
+    /// 2. `userName` line — "The user's name is X."
+    /// 3. `[from card]` block — description / personality / scenario,
+    ///    each on their own line under a single header.
+    /// 4. `chat.memory` — user-editable notes. **Suppressed** when
+    ///    `chat.systemPromptMode == .override` AND `character.systemPrompt`
+    ///    is non-empty (the override is *of chat memory*, not of the card
+    ///    biographical prefix). In `.merge` mode, both ride together.
+    ///
+    /// Returns nil when nothing would be emitted, so callers can pass that
+    /// through to the templates' `memoryBlock: String?` slot unchanged.
+    static func composeMemoryBlock(chat: Chat, character: Character?, userName: String, cohabitants: [Character] = [], systemPromptAddendum: String = "") -> String? {
+        let trimmedName = userName.trimmingCharacters(in: .whitespacesAndNewlines)
+        var sections: [String] = []
+
+        // Substitution context. Empty character name leaves {{char}}
+        // intact (model sees the literal token rather than a vacuum);
+        // empty user name falls back to "User" inside
+        // PlaceholderSubstitution.apply.
+        let charName = character?.name ?? ""
+
+        if let c = character, let sp = c.systemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !sp.isEmpty {
+            // {{char}} / {{user}} substitution — SillyTavern
+            // chara_card_v2 standard. Without this, models with no
+            // anchor for `{{char}}` hallucinate a common name (the
+            // 2026-05-09 "Emily → 'Mia'" bug surfaced this gap).
+            sections.append(PlaceholderSubstitution.apply(sp, characterName: charName, userName: userName))
+        }
+        // User-side global style guidance (Settings.systemPromptAddendum).
+        // Lands AFTER character.systemPrompt (the role / who they
+        // are leads) and BEFORE the user-name line + card prefix
+        // (style guidance is meta-instruction about how to play
+        // the role; the rest is context about who's in the room).
+        // Substitutes {{char}} / {{user}} in case the user references
+        // either in their guidance text. Empty (or whitespace-only)
+        // is a no-op.
+        let trimmedAddendum = systemPromptAddendum.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAddendum.isEmpty {
+            sections.append(PlaceholderSubstitution.apply(trimmedAddendum, characterName: charName, userName: userName))
+        }
+        if !trimmedName.isEmpty {
+            sections.append("The user's name is \(trimmedName).")
+        }
+        if let c = character {
+            let cardPrefix = renderCardPrefix(c, userName: userName)
+            if !cardPrefix.isEmpty {
+                sections.append(cardPrefix)
+            }
+        }
+        // Phase 8 §4.2b — cohabitant briefs (hybrid card scoping). Each
+        // other cast member contributes a one-line `- Name: first sentence`
+        // entry capped at ~60 tokens (~240 chars) so the active speaker
+        // knows who else is in the room without paying full-card token
+        // cost for every cohabitant on every turn. See §4.1 of the design
+        // doc for the SWAP/APPEND/hybrid trade-off.
+        if !cohabitants.isEmpty {
+            let lines = cohabitants.map { c in
+                let brief = cohabitantBrief(c.description)
+                return "- \(c.name): \(brief)"
+            }
+            sections.append("[Other characters present:]\n" + lines.joined(separator: "\n"))
+        }
+
+        // Decide whether to include the user-editable chat memory. The toggle
+        // only matters when the card actually carried a system_prompt — with
+        // no system_prompt there's nothing to "override" and chat.memory rides
+        // through regardless of mode.
+        let cardHasSystemPrompt: Bool = {
+            guard let sp = character?.systemPrompt else { return false }
+            return !sp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }()
+        let suppressUserMemory = cardHasSystemPrompt && chat.systemPromptMode == .override
+        if !suppressUserMemory {
+            let mem = chat.memory.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !mem.isEmpty {
+                sections.append(chat.memory)
+            }
+        }
+
+        if sections.isEmpty { return nil }
+        return sections.joined(separator: "\n\n")
+    }
+
+    /// Pick the effective author's note for the prompt. User-set notes always
+    /// win — only when `chat.authorsNote.text` is empty do we fall back to
+    /// the card's `postHistoryInstructions`. The synthesized note inherits
+    /// the chat's existing depth so a user can still tune position without
+    /// having to type a note. Returns `nil` when there's nothing to inject,
+    /// matching what the templates expect.
+    ///
+    /// The `userName` parameter (added with the `{{char}}` / `{{user}}`
+    /// substitution fix) is required to substitute placeholders in the
+    /// PHI fallback. The user-set authorsNote text is NOT substituted —
+    /// the user typed it directly and is expected to use literal names.
+    /// Default-value parameter so legacy callers (tests, side-call paths)
+    /// keep compiling; production callers (PromptBuilder.build,
+    /// TokenBudget.assemble) pass the resolved settings.userName.
+    static func effectiveAuthorsNote(chat: Chat, character: Character?, userName: String = "") -> AuthorsNote? {
+        let userText = chat.authorsNote.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !userText.isEmpty {
+            return chat.authorsNote
+        }
+        guard let phi = character?.postHistoryInstructions?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !phi.isEmpty
+        else {
+            return nil
+        }
+        let substituted = PlaceholderSubstitution.apply(
+            phi, characterName: character?.name ?? "", userName: userName
+        )
+        return AuthorsNote(text: substituted, depth: chat.authorsNote.depth)
+    }
+
+    /// Render the read-only `[from card]` biographical prefix
+    /// (description / personality / scenario). Returns "" when all three are
+    /// blank so the caller can drop the section entirely. Empty fields are
+    /// omitted individually so a card with only a description doesn't render
+    /// stray blank lines.
+    ///
+    /// `userName` was added for `{{char}}` / `{{user}}` substitution —
+    /// SillyTavern cards persist these as literal tokens; the chat
+    /// runtime substitutes before sending to the model. Default value
+    /// keeps legacy callers compiling.
+    static func renderCardPrefix(_ c: Character, userName: String = "") -> String {
+        let pieces: [(String, String)] = [
+            ("Description", c.description),
+            ("Personality", c.personality),
+            ("Scenario", c.scenario),
+        ]
+        let body = pieces
+            .map { (label, raw) -> (String, String) in
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                let subbed = PlaceholderSubstitution.apply(trimmed, characterName: c.name, userName: userName)
+                return (label, subbed)
+            }
+            .filter { !$0.1.isEmpty }
+            .map { "\($0.0): \($0.1)" }
+            .joined(separator: "\n")
+        if body.isEmpty { return "" }
+        return cardPrefixHeader + "\n" + body
+    }
+
+    /// Framing line that prefixes the world-info block. Same pattern as the
+    /// entities block: an imperative aside framed in plain prose so the model
+    /// treats the body as a private reference rather than something to
+    /// restate verbatim.
+    static let worldInfoHeader = "(World info — background facts about this setting and its inhabitants. Use these silently for continuity; do not restate, quote, or copy them into your reply.)"
+
+    /// Selective world-info injection. Runs the injector against the chat's
+    /// verbatim turn window and returns the framing header followed by each
+    /// matched entry's `content` (labelled `[name]`) truncated to roughly
+    /// `tokenCap * charsPerToken` characters at a word boundary. Order
+    /// matches the injector (priority desc, then name).
+    /// See V2_PLAN.md §2.2.
+    static func worldInfoHits(chat: Chat, charsPerToken: Int = 4) -> [String] {
+        let matched = WorldInfoInjector.matchingEntries(
+            entries: chat.worldInfo,
+            turns: chat.turns
+        )
+        guard !matched.isEmpty else { return [] }
+        var out: [String] = [worldInfoHeader]
+        for entry in matched {
+            let body = truncateToCharCap(entry.content, capChars: max(0, entry.tokenCap) * charsPerToken)
+            if body.isEmpty { continue }
+            let label = entry.name.isEmpty ? "Untitled" : entry.name
+            out.append("[\(label)]\n\(body)")
+        }
+        // If every match's content was empty after truncation, drop the
+        // header too — emitting a lone framing line with no body underneath
+        // is worse than emitting nothing.
+        return out.count > 1 ? out : []
+    }
+
+    /// Word-aligned hard truncate. If the text is already within the cap,
+    /// returns it unchanged; otherwise drops at the last whitespace inside
+    /// the cap and appends an ellipsis. A `capChars` of 0 returns "".
+    static func truncateToCharCap(_ text: String, capChars: Int) -> String {
+        if capChars <= 0 { return "" }
+        if text.count <= capChars { return text }
+        let cap = text.index(text.startIndex, offsetBy: capChars)
+        let head = text[..<cap]
+        if let lastSpace = head.lastIndex(where: { $0.isWhitespace }) {
+            return String(text[..<lastSpace]) + "…"
+        }
+        return String(head) + "…"
     }
 
     /// Tiny "the recent turns are authoritative" nudge injected at the very

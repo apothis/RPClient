@@ -21,6 +21,7 @@ struct QwenTemplate: PromptTemplate {
 
     func assemble(
         memoryBlock: String?,
+        personaBlock: String?,
         entitiesBlock: String?,
         sceneSummaries: [SceneSummary],
         summary: String?,
@@ -29,11 +30,16 @@ struct QwenTemplate: PromptTemplate {
         relevantMemories: String?,
         tailMemoryDigest: String?,
         currentSceneAnchor: String?,
+        groupNudge: String?,
         turns: [Turn],
         continuation: Bool
     ) -> String {
         var systemParts: [String] = []
         if let m = memoryBlock, !m.isEmpty { systemParts.append(m) }
+        // Qwen has a dedicated system lane — persona belongs there, not in
+        // the user turn (see V2_PLAN §4.4). Placed right after memory so
+        // user-side identity sits next to character system_prompt context.
+        if let p = personaBlock, !p.isEmpty { systemParts.append(p) }
         if !worldInfoHits.isEmpty { systemParts.append(worldInfoHits.joined(separator: "\n\n")) }
         if !sceneSummaries.isEmpty {
             systemParts.append(PromptBuilder.SceneSummaryFormatter.renderBlock(sceneSummaries))
@@ -87,6 +93,11 @@ struct QwenTemplate: PromptTemplate {
                 // Anchor goes last on the final user turn — see MEMORY_AUDIT §4.1-C.
                 if idx == lastUserIndex, let anchor = currentSceneAnchor, !anchor.isEmpty {
                     body = body + "\n\n" + anchor
+                }
+                // Phase 8 §3.2 / §4.2b — group nudge after anchor; see
+                // GemmaTemplate for placement rationale.
+                if idx == lastUserIndex, let nudge = groupNudge, !nudge.isEmpty {
+                    body = body + "\n\n" + nudge
                 }
                 out += body
                 out += "<|im_end|>\n"

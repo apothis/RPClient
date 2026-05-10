@@ -12,6 +12,10 @@ final class ExtractionPane: NSViewController, NSTextFieldDelegate {
         "ignore X" / "don't track Y" — those tend to backfire. Just list what \
         you do want.
         """)
+    /// Shares the suggestions help page — extraction is the "configure" twin
+    /// to suggestions' "review" surface, and they read better as one document
+    /// than two near-duplicates.
+    private let helpButton = HelpButton(pageId: "memory-suggestions")
     /// Live cadence readout: last user turn extracted, current user-turn
     /// count, configured cadence, and the gap until the next auto run. Reads
     /// from `chat.lastExtractedTurn` (persisted on disk) so it survives app
@@ -40,6 +44,7 @@ final class ExtractionPane: NSViewController, NSTextFieldDelegate {
         helpLabel.textColor = .secondaryLabelColor
         helpLabel.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(helpLabel)
+        v.addSubview(helpButton)
 
         cadenceLabel.font = Theme.mono(11)
         cadenceLabel.textColor = .secondaryLabelColor
@@ -119,7 +124,10 @@ final class ExtractionPane: NSViewController, NSTextFieldDelegate {
         NSLayoutConstraint.activate([
             helpLabel.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
             helpLabel.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),
-            helpLabel.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
+            helpLabel.trailingAnchor.constraint(equalTo: helpButton.leadingAnchor, constant: -6),
+
+            helpButton.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
+            helpButton.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
 
             cadenceLabel.topAnchor.constraint(equalTo: helpLabel.bottomAnchor, constant: 10),
             cadenceLabel.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),

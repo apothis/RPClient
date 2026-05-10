@@ -10,7 +10,29 @@ final class MemoryPane: NSViewController, NSTextFieldDelegate {
     private let addButton = NSButton(title: "+ Add fact", target: nil, action: nil)
     private let tokenLabel = NSTextField(labelWithString: "0 / 800 tok")
     private let helpLabel = NSTextField(labelWithString: "Pinned facts. Always injected near the top of the prompt.")
+    private let helpButton = HelpButton(pageId: "memory-pinned-facts")
     private let reinforceCheck = NSButton(checkboxWithTitle: "Reinforce in latest user turn (counters drift on long Gemma chats)", target: nil, action: nil)
+
+    /// Read-only display of the card's description/personality/scenario when
+    /// the chat is bound to a Character. Lives just above the editable facts
+    /// list so it's clear those lines are *also* memory but not user-owned.
+    /// Hidden when no character is attached. See V2_PLAN §4.4 step 4g.
+    private let cardSection = NSStackView()
+    private let cardBadge = NSTextField(labelWithString: "From card (read-only)")
+    private let cardTextScroll = NSScrollView()
+    private let cardTextView = NSTextView()
+
+    /// Per-chat picker for `Chat.systemPromptMode`. Hidden when no character
+    /// is attached because the toggle is meaningless without a card-supplied
+    /// `system_prompt`.
+    private let modeSection = NSStackView()
+    private let modeLabel = NSTextField(labelWithString: "system_prompt:")
+    private let modePicker = NSSegmentedControl(
+        labels: ["Override", "Merge"],
+        trackingMode: .selectOne,
+        target: nil,
+        action: nil
+    )
 
     private var tokenCountTimer: DispatchWorkItem?
     private var lastChatId: UUID?
@@ -27,6 +49,58 @@ final class MemoryPane: NSViewController, NSTextFieldDelegate {
         helpLabel.maximumNumberOfLines = 0
         helpLabel.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(helpLabel)
+        v.addSubview(helpButton)
+
+        // Card section (4g) — read-only display of the card's
+        // description/personality/scenario. NSStackView so toggling
+        // `isHidden` collapses it cleanly when no character is attached.
+        cardBadge.font = Theme.font(10)
+        cardBadge.textColor = .secondaryLabelColor
+        cardBadge.translatesAutoresizingMaskIntoConstraints = false
+
+        cardTextView.isEditable = false
+        cardTextView.isSelectable = true
+        cardTextView.drawsBackground = true
+        cardTextView.backgroundColor = NSColor.windowBackgroundColor
+        cardTextView.textContainerInset = NSSize(width: 6, height: 6)
+        cardTextView.font = Theme.font(11)
+        cardTextView.textColor = .secondaryLabelColor
+        cardTextView.isVerticallyResizable = true
+        cardTextView.isHorizontallyResizable = false
+        cardTextView.autoresizingMask = [.width]
+        cardTextView.textContainer?.widthTracksTextView = true
+
+        cardTextScroll.documentView = cardTextView
+        cardTextScroll.hasVerticalScroller = true
+        cardTextScroll.borderType = .lineBorder
+        cardTextScroll.translatesAutoresizingMaskIntoConstraints = false
+        cardTextScroll.heightAnchor.constraint(equalToConstant: 100).isActive = true
+
+        cardSection.orientation = .vertical
+        cardSection.alignment = .leading
+        cardSection.spacing = 2
+        cardSection.translatesAutoresizingMaskIntoConstraints = false
+        cardSection.addArrangedSubview(cardBadge)
+        cardSection.addArrangedSubview(cardTextScroll)
+        cardTextScroll.widthAnchor.constraint(equalTo: cardSection.widthAnchor).isActive = true
+        v.addSubview(cardSection)
+
+        // Mode section (4g) — override/merge picker for systemPromptMode.
+        modeLabel.font = Theme.font(11)
+        modeLabel.textColor = .secondaryLabelColor
+        modePicker.target = self
+        modePicker.action = #selector(modeChanged)
+        // Match the existing pane's segmented controls (small/control-sized).
+        modePicker.controlSize = .small
+        modePicker.font = Theme.font(11)
+
+        modeSection.orientation = .horizontal
+        modeSection.alignment = .centerY
+        modeSection.spacing = 6
+        modeSection.translatesAutoresizingMaskIntoConstraints = false
+        modeSection.addArrangedSubview(modeLabel)
+        modeSection.addArrangedSubview(modePicker)
+        v.addSubview(modeSection)
 
         factsStack.orientation = .vertical
         factsStack.spacing = 4
@@ -63,9 +137,20 @@ final class MemoryPane: NSViewController, NSTextFieldDelegate {
         NSLayoutConstraint.activate([
             helpLabel.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
             helpLabel.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),
-            helpLabel.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
+            helpLabel.trailingAnchor.constraint(equalTo: helpButton.leadingAnchor, constant: -6),
 
-            scrollView.topAnchor.constraint(equalTo: helpLabel.bottomAnchor, constant: 8),
+            helpButton.topAnchor.constraint(equalTo: v.topAnchor, constant: 10),
+            helpButton.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
+
+            cardSection.topAnchor.constraint(equalTo: helpLabel.bottomAnchor, constant: 8),
+            cardSection.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),
+            cardSection.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
+
+            modeSection.topAnchor.constraint(equalTo: cardSection.bottomAnchor, constant: 6),
+            modeSection.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),
+            modeSection.trailingAnchor.constraint(lessThanOrEqualTo: v.trailingAnchor, constant: -10),
+
+            scrollView.topAnchor.constraint(equalTo: modeSection.bottomAnchor, constant: 8),
             scrollView.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),
             scrollView.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
             scrollView.bottomAnchor.constraint(equalTo: addButton.topAnchor, constant: -6),
@@ -112,6 +197,8 @@ final class MemoryPane: NSViewController, NSTextFieldDelegate {
             rebuildFactsUI()
             tokenLabel.stringValue = ""
             reinforceCheck.state = .off
+            cardSection.isHidden = true
+            modeSection.isHidden = true
             return
         }
         // External update detection — only rebuild if memory actually changed.
@@ -130,6 +217,50 @@ final class MemoryPane: NSViewController, NSTextFieldDelegate {
         }
         reinforceCheck.state = chat.tailReinforceMemory ? .on : .off
         updateTokenLabel(localCount: chat.memory)
+        refreshCardSection(chat: chat)
+    }
+
+    /// Pull the current character (if any) and populate the read-only "from
+    /// card" text view + the systemPromptMode picker. Hides both sections
+    /// when no character is attached. Reads live from `AppState.character`
+    /// so card edits propagate without writing the data into the chat.
+    private func refreshCardSection(chat: Chat) {
+        guard let card = AppState.shared.character(id: chat.characterId) else {
+            cardSection.isHidden = true
+            modeSection.isHidden = true
+            return
+        }
+        // Render exactly the same body the prompt sees, minus the framing
+        // header (the user already knows what they're looking at — the badge
+        // says "From card"). Empty fields are dropped.
+        let pieces: [(String, String)] = [
+            ("Description", card.description),
+            ("Personality", card.personality),
+            ("Scenario", card.scenario),
+        ]
+        let body = pieces
+            .map { ($0.0, $0.1.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .filter { !$0.1.isEmpty }
+            .map { "\($0.0): \($0.1)" }
+            .joined(separator: "\n\n")
+
+        if body.isEmpty {
+            cardSection.isHidden = true
+        } else {
+            cardSection.isHidden = false
+            cardTextView.string = body
+            cardBadge.stringValue = "From card (read-only) · \(card.name)"
+        }
+
+        modeSection.isHidden = false
+        modePicker.selectedSegment = chat.systemPromptMode == .merge ? 1 : 0
+    }
+
+    @objc private func modeChanged() {
+        let mode: CardPromptMode = modePicker.selectedSegment == 1 ? .merge : .override
+        AppState.shared.updateCurrent { c in
+            c.systemPromptMode = mode
+        }
     }
 
     /// Split memory text into individual fact rows. Blank lines are dropped;

@@ -4,8 +4,17 @@ import Foundation
 enum AppNotification {
     static let chatListChanged = Notification.Name("RPClient.chatListChanged")
     static let currentChatChanged = Notification.Name("RPClient.currentChatChanged")
+    /// Posted whenever the imported character library changes (add / update /
+    /// delete). Phase 3 §4 — step 3's library window will subscribe.
+    static let charactersChanged = Notification.Name("RPClient.charactersChanged")
+    /// Same as `charactersChanged` for the persona library.
+    static let personasChanged = Notification.Name("RPClient.personasChanged")
     static let chatUpdated = Notification.Name("RPClient.chatUpdated")
     static let streamTokenAppended = Notification.Name("RPClient.streamTokenAppended")
+    /// Fires once when an assistant generation kicks off (initial send or
+    /// regen / swipe). Pairs with `streamFinished`. Used by `Speaker` to
+    /// cancel any in-flight TTS the moment a new reply starts streaming.
+    static let streamStarted = Notification.Name("RPClient.streamStarted")
     static let streamFinished = Notification.Name("RPClient.streamFinished")
     static let statusChanged = Notification.Name("RPClient.statusChanged")
     /// Posted on the *transition* edges of `AppState.serverReachable` —
@@ -13,10 +22,29 @@ enum AppNotification {
     /// alerts (banner / NSAlert) without spamming on every status tick.
     static let serverReachableChanged = Notification.Name("RPClient.serverReachableChanged")
     static let fontChanged = Notification.Name("RPClient.fontChanged")
+    /// Fires after `saveSettings` writes a new Settings to disk. UI elements
+    /// that mirror Settings state (e.g. the chat header's server picker)
+    /// listen for this so they refresh when profiles are added/removed.
+    static let settingsChanged = Notification.Name("RPClient.settingsChanged")
+    /// Fires when the runtime voice toggle (`Settings.voiceActive`) flips —
+    /// driven by the chat-header speaker button (Phase 6 §7.1f/i). Distinct
+    /// from `settingsChanged` so the button can update without a full Settings
+    /// save round-trip when desired.
+    static let voiceActiveChanged = Notification.Name("RPClient.voiceActiveChanged")
+    /// Fires whenever a Kokoro asset download transitions state (queued →
+    /// running → completed / cancelled / failed). userInfo carries the task
+    /// id ('model' for the base, voice id for voices). Phase 6 §7.1j2.
+    static let kokoroDownloadStateChanged = Notification.Name("RPClient.kokoroDownloadStateChanged")
     /// Fires on the transition edges of `AppState.isThinking` — model has
     /// just entered a `<think>` block, or just left one. The UI binds the
     /// "Thinking…" placeholder on the active assistant turn to this.
     static let thinkingStateChanged = Notification.Name("RPClient.thinkingStateChanged")
+    /// Phase 7 §3.4 — fires when the current chat's branching tree changes
+    /// shape: a new fork lands, a branch is switched, or a turn is deleted.
+    /// Distinct from `chatUpdated` (which fires on every mutation including
+    /// pure text edits) so panes that only care about tree structure — the
+    /// Branches pane, future minimap — can subscribe narrowly.
+    static let chatTreeChanged = Notification.Name("RPClient.chatTreeChanged")
 }
 
 final class AppState {
@@ -25,6 +53,12 @@ final class AppState {
     private(set) var settings: Settings
     private(set) var chats: [Chat]
     private(set) var currentChatId: UUID?
+    /// Imported character cards (V2 §4 — Phase 3 step 1). Loaded once at
+    /// launch and mutated through `saveCharacter` / `deleteCharacter`. Step 1
+    /// only manages the collection; the prompt builder doesn't read it yet.
+    private(set) var characters: [Character]
+    /// User-side personas. Same lifecycle as `characters`.
+    private(set) var personas: [Persona]
     private(set) var isStreaming: Bool = false
     private(set) var isSummarizing: Bool = false
     private(set) var lastSummarizerError: String?
@@ -43,6 +77,12 @@ final class AppState {
     private(set) var lastServerError: String?
     private var healthCheckTimer: Timer?
     private(set) var modelName: String = "—"
+    /// Template id matching the currently-loaded model, derived from
+    /// `modelName` via `Templates.detect(forModelName:)`. New chats pick this
+    /// up automatically so a Qwen-loaded server doesn't keep handing out
+    /// gemma-templated chats. Nil when the model name doesn't match a
+    /// known family — caller falls back to `settings.defaultTemplateId`.
+    private(set) var detectedTemplateId: String?
     /// Best-effort name of the loaded embedding model on the server (or nil if
     /// none / probe hasn't completed). Surfaced in the status bar so the user
     /// can see at a glance that retrieval has a backing model.
@@ -86,23 +126,120 @@ final class AppState {
         return maxContext
     }
 
-    let kobold: KoboldClient
+    /// Phase 10 §10.c — per-chat effective context that consults the
+    /// active server's per-EXACT-model `maxCtxCap` override (e.g.
+    /// Llama 4 Scout's chunked-attention cap at 8192 even when the
+    /// model card claims 10M). Falls through to `effectiveContext`
+    /// when no override is set for the loaded model.
+    func effectiveContext(for chat: Chat) -> Int {
+        let base = effectiveContext
+        let overrides = resolveOverrides(for: chat)
+        guard let cap = overrides.maxCtxCap, cap > 0 else { return base }
+        return min(base, cap)
+    }
+
+    /// Phase 10 §10.c — resolve per-EXACT-model `ChatPathOverrides`
+    /// for `chat` by looking up the active server's reported model
+    /// name in `ModelCapabilitiesStore`. Returns empty defaults if
+    /// no record exists, the server profile isn't found, or its
+    /// capabilities cache hasn't been populated yet (in which case
+    /// the chat path uses global defaults until the next probe).
+    func resolveOverrides(for chat: Chat) -> ChatPathOverrides {
+        let client = registry.client(for: .general, chatOverride: chat.serverId)
+        let profile = settings.servers.first(where: { $0.baseURL == client.baseURL })
+        guard let modelName = profile?.capabilities?.modelName, !modelName.isEmpty else {
+            return ChatPathOverrides()
+        }
+        return ModelCapabilitiesStore.lookupOrDefault(modelName: modelName).overrides
+    }
+
+    let registry: KoboldClientRegistry
+    /// Single-voice TTS pipeline (V2_PLAN §7.0). Mirrors `settings.voiceEnabled`
+    /// and reads finished assistant turns aloud through the system default
+    /// voice. Per-character attribution lands in §7.1+ on top of this surface.
+    let speaker: Speaker
+    /// Kokoro engine selector (§7.1l). Retained so its notification
+    /// observers stay alive; nil until the executable wires the factory.
+    private var kokoroSpeechSelector: KokoroSpeechSelector?
+
+    /// Façade pointed at the current chat's effective generation client. Exists
+    /// so the many existing call sites that take `kobold:` keep working without
+    /// rewriting them all at once. The current chat's `serverId` (if set) wins
+    /// over `settings.defaultServerId`. 4d migrates side-call callers
+    /// (Summarizer, FactExtractor, etc.) off the façade onto role-specific
+    /// registry lookups.
+    var kobold: KoboldClient {
+        registry.client(for: .general, chatOverride: currentChat?.serverId)
+    }
 
     private init() {
         let s = Storage.shared.loadSettings()
         self.settings = s
         self.chats = Storage.shared.listChats()
         self.currentChatId = chats.first?.id
-        let url = URL(string: s.serverURL) ?? URL(string: "http://localhost:5001")!
-        self.kobold = KoboldClient(baseURL: url)
+        self.characters = Storage.shared.listCharacters()
+        self.personas = Storage.shared.listPersonas()
+        self.registry = KoboldClientRegistry(settings: s)
+        self.speaker = Speaker(voiceEnabled: s.voiceEnabled, voiceActive: s.voiceActive)
+        self.speaker.startObserving()
+        DebugLog.shared.write(
+            "boot: chats=\(self.chats.count) characters=\(self.characters.count) personas=\(self.personas.count) voiceEnabled=\(s.voiceEnabled) voiceActive=\(s.voiceActive)"
+        )
+        // The Kokoro selector (§7.1l) is wired separately via
+        // `installKokoroSpeechSelector(factory:)` so Core doesn't need to
+        // import RPClientVoice — the executable supplies the factory.
         if chats.isEmpty {
             let c = Chat(templateId: s.defaultTemplateId, samplerPresetId: s.defaultSamplerPresetId)
             Storage.shared.saveChat(c)
             self.chats = [c]
             self.currentChatId = c.id
         }
+        // 2026-05-09 — backfill empty character-entity stubs from
+        // structured card data on app start. ensureCharacterEntity
+        // gained CardDetails / CardIntimacy seeding in the same
+        // commit; this loop catches existing chats whose entity was
+        // created BEFORE that fix shipped (the on-disk Emily case).
+        // Idempotent: ensureCharacterEntity early-returns when the
+        // matched entity already has facts, so well-populated chats
+        // pay only the cheap lookup cost.
+        backfillEmptyCharacterEntities()
         refreshServerInfo()
         startHealthChecks()
+    }
+
+    /// One-time backfill of empty character-entity stubs from
+    /// structured card data. Runs at app start on every chat that
+    /// has a bound character. Skips chats whose entity already has
+    /// facts (user-curated state); only mutates the empty-stub case.
+    /// Saves any chat that was actually mutated.
+    private func backfillEmptyCharacterEntities() {
+        var mutated = 0
+        for i in chats.indices {
+            guard let cid = chats[i].characterId,
+                  let character = characters.first(where: { $0.id == cid })
+            else { continue }
+            let before = chats[i].entities.count
+            let beforeFacts = chats[i].entities.first(where: { $0.name.lowercased() == character.name.lowercased() })?.facts.count ?? 0
+            chats[i].ensureCharacterEntity(character)
+            let afterFacts = chats[i].entities.first(where: { $0.name.lowercased() == character.name.lowercased() })?.facts.count ?? 0
+            if chats[i].entities.count != before || afterFacts != beforeFacts {
+                Storage.shared.saveChat(chats[i])
+                mutated += 1
+            }
+        }
+        if mutated > 0 {
+            DebugLog.shared.write("entity-backfill: seeded card facts on \(mutated) existing chat(s)")
+        }
+    }
+
+    /// Install the Kokoro engine selector (§7.1l). Idempotent: safe to call
+    /// at most once; subsequent calls are no-ops. The factory is supplied by
+    /// the executable so Core doesn't import RPClientVoice.
+    func installKokoroSpeechSelector(factory: @escaping KokoroSpeechSynthesizerFactory) {
+        guard kokoroSpeechSelector == nil else { return }
+        let selector = KokoroSpeechSelector(factory: factory, speaker: speaker)
+        kokoroSpeechSelector = selector
+        selector.start()
     }
 
     var currentChat: Chat? {
@@ -150,10 +287,13 @@ final class AppState {
     }
 
     func newChat() {
-        let c = Chat(
-            templateId: settings.defaultTemplateId,
+        var c = Chat(
+            templateId: detectedTemplateId ?? settings.defaultTemplateId,
             samplerPresetId: settings.defaultSamplerPresetId
         )
+        // Phase 3 §4 — new chats inherit the global default persona, if any.
+        // The character link only gets set by `newChat(withCharacter:)`.
+        c.personaId = settings.defaultPersonaId
         Storage.shared.saveChat(c)
         chats.insert(c, at: 0)
         currentChatId = c.id
@@ -163,6 +303,111 @@ final class AppState {
         lastCacheRatio = nil
         NotificationCenter.default.post(name: AppNotification.chatListChanged, object: nil)
         NotificationCenter.default.post(name: AppNotification.currentChatChanged, object: nil)
+    }
+
+    /// Create a new chat already bound to `character`. Used by the Library
+    /// window's "Start Chat" action and by the sidebar "+ New chat with
+    /// character…" flow. Title is seeded from the character name so the chat
+    /// is recognisable in the sidebar before the user has typed a single
+    /// turn. The card's `firstMessage` is inserted as turn 0 (assistant
+    /// role) so the character speaks first; `alternateGreetings` ride along
+    /// as swipeable variants on that same turn. Empty `firstMessage` skips
+    /// seeding entirely (alternateGreetings without a primary greeting
+    /// aren't meaningful in ST's model).
+    func newChat(withCharacter character: Character) {
+        var c = Chat(
+            templateId: detectedTemplateId ?? settings.defaultTemplateId,
+            samplerPresetId: settings.defaultSamplerPresetId
+        )
+        c.title = character.name
+        c.characterId = character.id
+        c.personaId = settings.defaultPersonaId
+        // Phase 8 §4.5 — auto-create a stub entity for the bound
+        // character so voice routing has somewhere to land without the
+        // user waiting for the fact extractor + accepting a suggestion.
+        c.ensureCharacterEntity(character)
+        if let greeting = AppState.makeGreetingTurn(character: character, userName: settings.userName) {
+            c.appendTurn(greeting)
+        }
+        c.worldInfo = AppState.mergedWorldInfo(existing: c.worldInfo, charBook: character.charBook)
+        Storage.shared.saveChat(c)
+        chats.insert(c, at: 0)
+        currentChatId = c.id
+        lastSentPrompt = nil
+        lastCacheRatio = nil
+        NotificationCenter.default.post(name: AppNotification.chatListChanged, object: nil)
+        NotificationCenter.default.post(name: AppNotification.currentChatChanged, object: nil)
+    }
+
+    /// Prefix that marks a `WorldInfoEntry` as having been merged in from a
+    /// character card's `character_book`. Drives 4e idempotency — re-running
+    /// the merge against the same chat is a no-op because each card entry's
+    /// expected name is "[from card] <orig>" and that's exact-match checked
+    /// before append. The user can edit the body and the prefix preserves
+    /// provenance for the WorldInfoPane.
+    static let cardBookEntryPrefix = "[from card] "
+
+    /// Pure helper: returns `existing` plus any entries from `charBook` that
+    /// aren't already present (by the prefixed name). Tested directly so the
+    /// idempotency contract is explicit.
+    static func mergedWorldInfo(existing: [WorldInfoEntry], charBook: [WorldInfoEntry]) -> [WorldInfoEntry] {
+        guard !charBook.isEmpty else { return existing }
+        let presentNames = Set(existing.map(\.name))
+        var out = existing
+        for entry in charBook {
+            let originalName = entry.name.isEmpty ? (entry.keys.first ?? "Untitled") : entry.name
+            let prefixedName = cardBookEntryPrefix + originalName
+            if presentNames.contains(prefixedName) { continue }
+            // Copy the entry but replace its identity / name. New UUID so the
+            // chat's entry is independent of the card's (user can edit
+            // freely; card edits won't bleed across).
+            var copy = entry
+            copy = WorldInfoEntry(
+                id: UUID(),
+                name: prefixedName,
+                keys: copy.keys,
+                secondaryKeys: copy.secondaryKeys,
+                content: copy.content,
+                tokenCap: copy.tokenCap,
+                enabled: copy.enabled,
+                injectionMode: copy.injectionMode,
+                matchScope: copy.matchScope,
+                priority: copy.priority
+            )
+            out.append(copy)
+        }
+        return out
+    }
+
+    /// Build the seeded greeting turn for a new chat with `character`.
+    /// Returns `nil` when the card has no `firstMessage` — we don't fabricate
+    /// an empty assistant turn (see `PromptBuilder.verbatimTurns` for why
+    /// trailing-empty assistant turns confuse the model). Internal so tests
+    /// can drive it directly.
+    static func makeGreetingTurn(character: Character, userName: String = "") -> Turn? {
+        let primary = character.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !primary.isEmpty else { return nil }
+        // {{char}} / {{user}} substitution at chat-seed time —
+        // greeting text is PERSISTED on the chat, so we substitute
+        // once here rather than every send. SillyTavern chara_card_v2
+        // standard. See PlaceholderSubstitution.
+        let subbedPrimary = PlaceholderSubstitution.apply(
+            character.firstMessage, characterName: character.name, userName: userName
+        )
+        // The Turn initialiser seeds variants[0] from `text` for assistant
+        // turns with non-empty seed content; we then append each alternate as
+        // a sibling variant. activeVariant stays at 0 so the canonical
+        // first_mes is what the user (and the prompt) sees by default.
+        var turn = Turn(role: .assistant, text: subbedPrimary)
+        for alt in character.alternateGreetings {
+            let trimmed = alt.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let subbedAlt = PlaceholderSubstitution.apply(
+                alt, characterName: character.name, userName: userName
+            )
+            turn.variants.append(TurnVariant(text: subbedAlt, ts: turn.ts))
+        }
+        return turn
     }
 
     func deleteChat(id: UUID) {
@@ -181,14 +426,118 @@ final class AppState {
         NotificationCenter.default.post(name: AppNotification.chatListChanged, object: nil)
     }
 
+    // MARK: - Characters
+
+    /// Insert or replace a character by id, persist it, and notify
+    /// subscribers. Sort order matches `Storage.listCharacters` (newest
+    /// first by `created`).
+    func saveCharacter(_ character: Character) {
+        Storage.shared.saveCharacter(character)
+        if let idx = characters.firstIndex(where: { $0.id == character.id }) {
+            characters[idx] = character
+        } else {
+            characters.append(character)
+        }
+        characters.sort { $0.created > $1.created }
+        NotificationCenter.default.post(name: AppNotification.charactersChanged, object: nil)
+    }
+
+    func deleteCharacter(id: UUID) {
+        Storage.shared.deleteCharacter(id: id)
+        characters.removeAll(where: { $0.id == id })
+        // Detach this card from any chats that referenced it. The chat itself
+        // survives — it just falls back to free-form behaviour.
+        for chat in chats where chat.characterId == id {
+            updateChat(id: chat.id) { c in c.characterId = nil }
+        }
+        NotificationCenter.default.post(name: AppNotification.charactersChanged, object: nil)
+    }
+
+    func character(id: UUID?) -> Character? {
+        guard let id = id else { return nil }
+        return characters.first(where: { $0.id == id })
+    }
+
+    /// Run the full card-import pipeline for `url`: parse, normalize the
+    /// avatar (if any) through `Storage.normalizeAvatarData`, persist both
+    /// the JSON and the PNG, register the result in the in-memory list. Any
+    /// `CharacterCardImporter.ImportError` propagates up to the caller so
+    /// the UI can surface a useful message.
+    @discardableResult
+    func importCharacter(from url: URL) throws -> Character {
+        // Log the attempt up front so a thrown error still leaves a trace —
+        // the alert path doesn't reach DebugLog and that hid early failures.
+        let fileSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? -1
+        DebugLog.shared.write("import: attempt source=\(url.lastPathComponent) ext=\(url.pathExtension.lowercased()) size=\(fileSize)B")
+        let result: CharacterCardImporter.Result
+        do {
+            result = try CharacterCardImporter.importFile(at: url)
+        } catch {
+            DebugLog.shared.write("import: FAILED source=\(url.lastPathComponent) error=\(String(describing: error))")
+            throw error
+        }
+        let character = result.character
+        Storage.shared.saveCharacter(character)
+        if let pngData = result.avatarPNG,
+           let normalized = Storage.normalizeAvatarData(pngData) {
+            Storage.shared.writeCharacterAvatar(normalized, for: character.id)
+        }
+        if let idx = characters.firstIndex(where: { $0.id == character.id }) {
+            characters[idx] = character
+        } else {
+            characters.append(character)
+        }
+        characters.sort { $0.created > $1.created }
+        DebugLog.shared.write("import: ok name=\"\(character.name)\" id=\(character.id) avatar=\(result.avatarPNG != nil ? "yes" : "no") charBookEntries=\(character.charBook.count)")
+        NotificationCenter.default.post(name: AppNotification.charactersChanged, object: nil)
+        return character
+    }
+
+    // MARK: - Personas
+
+    func savePersona(_ persona: Persona) {
+        Storage.shared.savePersona(persona)
+        if let idx = personas.firstIndex(where: { $0.id == persona.id }) {
+            personas[idx] = persona
+        } else {
+            personas.append(persona)
+        }
+        personas.sort { $0.created > $1.created }
+        NotificationCenter.default.post(name: AppNotification.personasChanged, object: nil)
+    }
+
+    func deletePersona(id: UUID) {
+        Storage.shared.deletePersona(id: id)
+        personas.removeAll(where: { $0.id == id })
+        for chat in chats where chat.personaId == id {
+            updateChat(id: chat.id) { c in c.personaId = nil }
+        }
+        NotificationCenter.default.post(name: AppNotification.personasChanged, object: nil)
+    }
+
+    func persona(id: UUID?) -> Persona? {
+        guard let id = id else { return nil }
+        return personas.first(where: { $0.id == id })
+    }
+
     func saveSettings(_ s: Settings) {
         self.settings = s
         Storage.shared.saveSettings(s)
-        if let url = URL(string: s.serverURL) {
-            kobold.setBaseURL(url)
-        }
+        registry.updateSettings(s)
         refreshServerInfo()
         scheduleUsageRecompute()
+        NotificationCenter.default.post(name: AppNotification.settingsChanged, object: nil)
+    }
+
+    /// Resolve a role-routed client AND log the resolution so misrouting is
+    /// visible from the debug log. Mirrors the `server-resolve:` line on the
+    /// generation path; covers the four side-call dispatch points (retrieve,
+    /// index, summarize, extract).
+    private func sideCallClient(_ role: ServerRole) -> KoboldClient {
+        let c = registry.client(for: role, chatOverride: nil)
+        let name = settings.servers.first(where: { $0.baseURL == c.baseURL })?.name ?? "?"
+        DebugLog.shared.write("side-call: role=\(role.rawValue) resolved=\(name) baseURL=\(c.baseURL.absoluteString)")
+        return c
     }
 
     func refreshServerInfo() {
@@ -198,6 +547,7 @@ final class AppState {
                 switch result {
                 case .success(let name):
                     self.modelName = name
+                    self.detectedTemplateId = Templates.detect(forModelName: name)
                     self.markServerReachable(true)
                 case .failure(let err):
                     self.markServerReachable(false, error: "\(err)")
@@ -264,14 +614,24 @@ final class AppState {
     }
 
     private func healthCheckTick() {
-        guard !isStreaming, !isSummarizing, !isExtracting, !isRetrieving, !isIndexing else { return }
+        guard !isStreaming, !isSummarizing, !isExtracting, !isRetrieving, !isIndexing else {
+            DebugLog.shared.write(
+                "health: tick skipped (busy: stream=\(isStreaming) sum=\(isSummarizing) extr=\(isExtracting) retr=\(isRetrieving) idx=\(isIndexing))"
+            )
+            return
+        }
+        let startedAt = Date()
+        DebugLog.shared.write("health: tick → GET /api/v1/model (\(kobold.baseURL.absoluteString))")
         kobold.fetchModel { [weak self] result in
             DispatchQueue.main.async {
                 guard let self = self else { return }
+                let ms = Int(Date().timeIntervalSince(startedAt) * 1000)
                 switch result {
                 case .success(let name):
+                    DebugLog.shared.write("health: tick ok in \(ms)ms model=\(name)")
                     if self.modelName != name {
                         self.modelName = name
+                        self.detectedTemplateId = Templates.detect(forModelName: name)
                         NotificationCenter.default.post(name: AppNotification.statusChanged, object: nil)
                     }
                     self.markServerReachable(true)
@@ -281,6 +641,7 @@ final class AppState {
                         self.refreshEmbeddingInfo()
                     }
                 case .failure(let err):
+                    DebugLog.shared.write("health: tick FAILED in \(ms)ms — \(err)")
                     self.markServerReachable(false, error: "\(err)")
                 }
             }
@@ -291,7 +652,25 @@ final class AppState {
     /// embedding model loaded; we capture the dimension and a best-effort name.
     /// Logged unconditionally so the user can confirm retrieval prerequisites
     /// are in place even if retrieval itself is disabled.
+    ///
+    /// Pre-flight gate (added 2026-05-06): defers the probe when the chat
+    /// pipeline is otherwise busy. The embeddings POST hits the same
+    /// koboldcpp instance as the chat-model generate, and on tight-VRAM
+    /// configurations a concurrent embed+generate has been correlated
+    /// with server crashes. Boot-time + post-recovery callers are quiet
+    /// (no other side-call in flight); the only risk is when the user
+    /// drives a stream right as we come back from down. Defer one tick.
     func refreshEmbeddingInfo() {
+        if isStreaming || isSummarizing || isExtracting || isRetrieving || isIndexing {
+            DebugLog.shared.write(
+                "embeddings: probe deferred (busy: stream=\(isStreaming) sum=\(isSummarizing) extr=\(isExtracting) retr=\(isRetrieving) idx=\(isIndexing))"
+            )
+            // Re-attempt on the next health tick — that's already gated
+            // on the same flags and will fire refreshEmbeddingInfo() if
+            // embeddingDim is still nil. No timer here; we rely on the
+            // 30s health-check loop to catch us back up.
+            return
+        }
         kobold.fetchEmbeddingInfo { [weak self] info in
             DispatchQueue.main.async {
                 guard let self = self else { return }
@@ -339,31 +718,274 @@ final class AppState {
 
     func sendUserMessage(_ text: String) {
         guard !isStreaming, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        // Phase 1 — append the user turn synchronously so it shows up in
+        // the chat immediately. The assistant slot is appended in phase 2
+        // after speaker resolution (which may be async for `.director`).
         updateCurrent { c in
-            c.turns.append(Turn(role: .user, text: text))
-            c.turns.append(Turn(role: .assistant, text: ""))
+            c.appendTurn(Turn(role: .user, text: text))
             if c.title == "New Chat" {
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 c.title = String(trimmed.prefix(40))
             }
         }
         DebugLog.shared.write("trigger: send (userTextChars=\(text.count))")
-        startStreaming(freshUserTurn: true)
+        // Phase 2 — resolve the speaker (sync for round-robin / pooled /
+        // manual; async LLM side-call for .director with a timeout
+        // fallback to round-robin), then append the assistant slot and
+        // start streaming.
+        resolveNextSpeaker { [weak self] picked in
+            guard let self = self else { return }
+            self.appendAssistantSlotAndStream(speakerId: picked, freshUserTurn: true)
+        }
     }
 
+    /// Phase 8 §4.4 — async speaker resolution. Sync-fast path for
+    /// non-director modes (and solo chats); fires `DirectorPicker.next`
+    /// for `.director`, falling back to the sync picker on any failure.
+    /// Completion always runs on the main queue. The returned id may be
+    /// nil for solo / free-form chats — callers stamp speakerId only
+    /// when cast.count > 1.
+    private func resolveNextSpeaker(completion: @escaping (UUID?) -> Void) {
+        guard let chat = currentChat else { completion(nil); return }
+        if chat.cast.count <= 1 {
+            completion(nil)
+            return
+        }
+        let syncFallback: () -> UUID? = { [weak self] in
+            guard let chat = self?.currentChat else { return nil }
+            return SpeakerPicker.next(in: chat) ?? chat.cast.first
+        }
+        guard chat.speakerSelection == .director else {
+            completion(syncFallback())
+            return
+        }
+        let cast = chat.cast.compactMap { character(id: $0) }
+        let kobold = sideCallClient(.summarizer)
+        let ctx = effectiveContext
+        DirectorPicker.next(
+            chat: chat,
+            cast: cast,
+            kobold: kobold,
+            effectiveCtx: ctx
+        ) { [weak self] picked in
+            DispatchQueue.main.async {
+                if let p = picked {
+                    completion(p)
+                } else {
+                    completion(self.flatMap { _ in syncFallback() })
+                }
+            }
+        }
+    }
+
+    /// Phase 8 §4.4 — phase-2 of the send/regen pipeline. Appends the
+    /// empty assistant turn with the resolved `speakerId` (multi-cast)
+    /// or nil (solo / free-form), seeds its first variant with an
+    /// upstream-context fingerprint, and kicks off streaming. Lifted
+    /// out of `sendUserMessage` so the regenerate fallback path can
+    /// share it.
+    private func appendAssistantSlotAndStream(speakerId: UUID?, freshUserTurn: Bool) {
+        updateCurrent { c in
+            var asst = Turn(role: .assistant, text: "")
+            if c.cast.count > 1 {
+                // Phase 8 §4.2c invariant — every assistant turn in a
+                // multi-cast chat must carry a non-nil speakerId.
+                asst.speakerId = speakerId ?? SpeakerPicker.next(in: c) ?? c.cast.first
+                _ = c.consumePendingSpeaker()
+            }
+            c.appendTurn(asst)
+            let asstIdx = c.turns.count - 1
+            let fp = Chat.makeContextFingerprint(c.turns[..<asstIdx])
+            c.turns[asstIdx].addEmptyVariant(
+                samplerPresetId: c.samplerPresetId,
+                contextFingerprint: fp
+            )
+        }
+        startStreaming(freshUserTurn: freshUserTurn)
+    }
+
+    /// Default cap on `Turn.variants.count`. Per-chat / per-app exposure of
+    /// this number is a follow-up — see V2_PLAN.md §3.6.
+    static let variantCap = 5
+
+    /// Generate a new alternative reply for the trailing assistant turn,
+    /// preserving prior swipes. If the chat ends on a user turn (e.g. the
+    /// last reply was deleted), falls back to appending a fresh empty
+    /// assistant turn. No-op when at the variant cap.
     func regenerate() {
         guard !isStreaming, var c = currentChat else { return }
         DebugLog.shared.write("trigger: regen (turnsBefore=\(c.turns.count))")
-        // Drop the trailing empty/finished assistant turn (or both if prior is user)
-        if let last = c.turns.last, last.role == .assistant {
-            c.turns.removeLast()
+        // Operate on the active-path leaf, not c.turns.last — once §3.3b
+        // forks land, c.turns can include off-path siblings whose order is
+        // independent of the renderable path.
+        if let leafId = c.activePath.last,
+           let leaf = c.turn(id: leafId),
+           leaf.role == .assistant {
+            if leaf.variants.count >= AppState.variantCap {
+                DebugLog.shared.write(
+                    "regen: refused — variants at cap (\(AppState.variantCap))"
+                )
+                return
+            }
+            let fp = Chat.makeContextFingerprint(c.activeTurns.dropLast())
+            if let idx = c.turns.firstIndex(where: { $0.id == leafId }) {
+                c.turns[idx].addEmptyVariant(
+                    samplerPresetId: c.samplerPresetId,
+                    contextFingerprint: fp
+                )
+            }
+        } else {
+            // Active path ends on a user turn (or empty) — defer to the
+            // async resolver so .director mode gets its LLM side-call,
+            // then append the fresh assistant slot via the shared
+            // helper. Other modes resolve synchronously and proceed
+            // without a perceptible delay. Mirrors sendUserMessage's
+            // phase-1/phase-2 split.
+            updateCurrent { ch in
+                ch.turns = c.turns
+                ch.activePath = c.activePath
+            }
+            resolveNextSpeaker { [weak self] picked in
+                self?.appendAssistantSlotAndStream(speakerId: picked, freshUserTurn: false)
+            }
+            return
         }
-        // Append a fresh empty assistant turn to stream into
-        c.turns.append(Turn(role: .assistant, text: ""))
+        updateCurrent { ch in
+            ch.turns = c.turns
+            ch.activePath = c.activePath
+        }
+        startStreaming()
+    }
+
+    /// Phase 7 §3.3b — explicit fork. Creates a new assistant sibling under
+    /// `turnId.parentId` (i.e., an alternative to the focused turn), makes
+    /// it the active leaf, and streams into it. The pre-fork branch stays
+    /// reachable via the gutter-glyph popover / Branches pane.
+    ///
+    /// Refuses on the root turn (no parent to fork from) and on user turns
+    /// (forking would produce a stranded user turn with no body to stream
+    /// into — the design-doc §4 "User turn → not regenerable" rule).
+    func forkFrom(turnId: UUID) {
+        guard !isStreaming, var c = currentChat,
+              let target = c.turn(id: turnId),
+              target.role == .assistant,
+              let parentId = target.parentId else {
+            DebugLog.shared.write("trigger: forkFrom refused (turnId=\(turnId))")
+            return
+        }
+        DebugLog.shared.write("trigger: forkFrom (turnId=\(turnId), parentId=\(parentId))")
+        var newAsst = Turn(role: .assistant, text: "")
+        // Phase 8 §5.1 — fork inherits the original turn's speakerId so
+        // "regenerate this speaker's line" preserves who's talking. The
+        // user can switch speaker on the new branch by editing the
+        // pendingSpeakerId via the input-bar picker (§4.3) before
+        // sending the next turn — fork itself doesn't reshuffle.
+        newAsst.speakerId = target.speakerId
+        c.fork(parentId: parentId, newTurn: newAsst)
+        let fp = Chat.makeContextFingerprint(c.activeTurns.dropLast())
+        if let idx = c.turns.firstIndex(where: { $0.id == newAsst.id }) {
+            c.turns[idx].addEmptyVariant(
+                samplerPresetId: c.samplerPresetId,
+                contextFingerprint: fp
+            )
+        }
+        updateCurrent { ch in
+            ch.turns = c.turns
+            ch.activePath = c.activePath
+        }
+        NotificationCenter.default.post(name: AppNotification.chatTreeChanged, object: nil)
+        startStreaming()
+    }
+
+    /// Switch the active branch to land on `turnId`'s leaf (drilling via
+    /// activeChildId). Used by the gutter-glyph popover and the Branches
+    /// pane (§3.4). Routed through here rather than `updateCurrent` directly
+    /// so the post-switch chunker / retrieval invalidation has a single
+    /// hook to attach to in future steps.
+    func switchBranch(to turnId: UUID) {
+        guard !isStreaming else {
+            DebugLog.shared.write("trigger: switchBranch refused (mid-stream)")
+            return
+        }
+        DebugLog.shared.write("trigger: switchBranch (turnId=\(turnId))")
+        updateCurrent { c in
+            c.switchBranch(to: turnId)
+        }
+        NotificationCenter.default.post(name: AppNotification.currentChatChanged, object: nil)
+        NotificationCenter.default.post(name: AppNotification.chatTreeChanged, object: nil)
+    }
+
+    /// Destructive regen — overwrite the active variant in place rather than
+    /// adding a new one. Used by the "Replace current variant" path
+    /// (Cmd-Shift-R / context menu) so the user can opt back into the pre-V2
+    /// behaviour when they don't want the old text kept around.
+    func replaceCurrentVariant() {
+        guard !isStreaming, var c = currentChat else { return }
+        guard let leafId = c.activePath.last,
+              let leaf = c.turn(id: leafId),
+              leaf.role == .assistant,
+              !leaf.variants.isEmpty,
+              let lastIdx = c.turns.firstIndex(where: { $0.id == leafId }) else {
+            // Nothing to replace — fall through to the normal regen path so
+            // the user gets a reply regardless.
+            regenerate()
+            return
+        }
+        DebugLog.shared.write("trigger: replace-variant")
+        let active = c.turns[lastIdx].activeVariant
+        let fp = Chat.makeContextFingerprint(c.activeTurns.dropLast())
+        c.turns[lastIdx].variants[active].text = ""
+        c.turns[lastIdx].variants[active].edited = false
+        c.turns[lastIdx].variants[active].contextFingerprint = fp
+        c.turns[lastIdx].text = ""
         updateCurrent { ch in
             ch.turns = c.turns
         }
         startStreaming()
+    }
+
+    /// Switch the active variant of `turnId` to the previous one. No-op when
+    /// already at the first variant or when the turn carries no variants.
+    func selectPreviousVariant(turnId: UUID) {
+        guard let id = currentChatId else { return }
+        updateChat(id: id) { c in
+            guard let idx = c.turns.firstIndex(where: { $0.id == turnId }) else { return }
+            let cur = c.turns[idx].activeVariant
+            guard cur > 0 else { return }
+            c.turns[idx].setActiveIndex(cur - 1)
+        }
+    }
+
+    /// Drop the currently-active variant on `turnId`, falling back to the
+    /// previous one (or the first one if the active was the head). No-op
+    /// when streaming or when the turn has 1 or fewer variants — we never
+    /// orphan a turn into a `variants = []` shape post-V2.
+    func deleteActiveVariant(turnId: UUID) {
+        guard !isStreaming, let id = currentChatId else { return }
+        updateChat(id: id) { c in
+            guard let idx = c.turns.firstIndex(where: { $0.id == turnId }) else { return }
+            guard c.turns[idx].variants.count > 1 else { return }
+            let active = c.turns[idx].activeVariant
+            c.turns[idx].variants.remove(at: active)
+            // Keep the same numeric index when possible (so deleting variant
+            // 3/5 lands on the new 3/4), else clamp to the new last index.
+            let newActive = max(0, min(active, c.turns[idx].variants.count - 1))
+            c.turns[idx].setActiveIndex(newActive)
+        }
+    }
+
+    /// Switch the active variant of `turnId` to the next one. No-op when
+    /// already at the last variant — the UI calls `regenerate()` separately
+    /// to extend past the end.
+    func selectNextVariant(turnId: UUID) {
+        guard let id = currentChatId else { return }
+        updateChat(id: id) { c in
+            guard let idx = c.turns.firstIndex(where: { $0.id == turnId }) else { return }
+            let count = c.turns[idx].variants.count
+            let cur = c.turns[idx].activeVariant
+            guard cur < count - 1 else { return }
+            c.turns[idx].setActiveIndex(cur + 1)
+        }
     }
 
     /// Resume the most recent assistant turn instead of starting a new one.
@@ -385,6 +1007,7 @@ final class AppState {
     private func startStreaming(continuation: Bool = false, freshUserTurn: Bool = false) {
         guard let chat = currentChat else { return }
         isStreaming = true
+        NotificationCenter.default.post(name: AppNotification.streamStarted, object: nil)
         streamIsFreshUserTurn = freshUserTurn
         streamStart = Date()
         firstTokenAt = nil
@@ -392,15 +1015,16 @@ final class AppState {
         // Continuation streams resume mid-reply, after any think block has
         // already been emitted and stripped — engaging the filter would eat
         // legitimate content, so it stays nil for those.
-        if !continuation,
-           chat.templateId == "qwen",
-           settings.qwenThinkingEnabled {
-            streamThinkFilter = ThinkBlockFilter()
-        } else {
-            streamThinkFilter = nil
-        }
+        let thinkingActive = !continuation
+            && chat.templateId == "qwen"
+            && settings.qwenThinkingEnabled
+        streamThinkFilter = thinkingActive ? ThinkBlockFilter() : nil
         let preset = SamplerPreset.presets.first(where: { $0.id == chat.samplerPresetId }) ?? .balanced
-        let ctx = effectiveContext
+        // Phase 10 §10.c — chat-scoped ctx so the per-EXACT-model
+        // `maxCtxCap` override applies (Llama 4 Scout chunked-attention
+        // case is the canonical example; current Qwen3.6 record sets no
+        // cap, so this is a no-op for that model).
+        let ctx = effectiveContext(for: chat)
 
         // Run retrieval first (no-op if disabled or no chunks indexed yet),
         // then assemble the prompt with the retrieval block included.
@@ -420,7 +1044,7 @@ final class AppState {
         }
         RetrievalEngine.shared.retrieve(
             chat: chat,
-            kobold: kobold,
+            embedder: sideCallClient(.embeddings),
             settings: settings.retrieval
         ) { [weak self] hits in
             guard let self = self else { return }
@@ -440,20 +1064,86 @@ final class AppState {
                 recencyExclude=\(self.settings.retrieval.recencyExclusion) \
                 tookMs=\(Int(dt * 1000))
                 """)
-            self.assembleAndStream(chat: chat, ctx: ctx, preset: preset, relevantMemories: block, continuation: continuation)
+            self.assembleAndStream(
+                chat: chat, ctx: ctx, preset: preset,
+                relevantMemories: block, continuation: continuation,
+                thinkingActive: thinkingActive
+            )
         }
     }
 
-    private func assembleAndStream(chat: Chat, ctx: Int, preset: SamplerPreset, relevantMemories: String?, continuation: Bool = false) {
-        let replyMax = settings.replyTokensOverride > 0 ? settings.replyTokensOverride : preset.maxLength
+    /// Reply-token cap doubled for thinking-mode streams so the model
+    /// has room for both the `<think>` trace AND a substantial body.
+    /// V2_UI_OVERHAUL §D.12 — surfaced when a Qwen3 regen consumed
+    /// 5791 chars of trace within the 2048-token cap and emitted near-
+    /// zero body. Non-thinking streams stay at the preset default.
+    static let thinkingReplyTokenCap = 4096
+
+    private func assembleAndStream(
+        chat: Chat, ctx: Int, preset: SamplerPreset,
+        relevantMemories: String?, continuation: Bool = false,
+        thinkingActive: Bool = false
+    ) {
+        let replyMaxOverride: Int? = {
+            if settings.replyTokensOverride > 0 { return settings.replyTokensOverride }
+            if thinkingActive { return AppState.thinkingReplyTokenCap }
+            return nil
+        }()
+        let replyMax = replyMaxOverride ?? preset.maxLength
+        // One line per stream so reply-budget questions ("did the
+        // thinking bump fire on this chat?") have ground truth without
+        // needing a temporary diagnostic. Prefix matches the chat-pane
+        // grep convention from §D.11 / 4.b.2.
+        DebugLog.shared.write(
+            "[chat-pane] reply-budget: replyMax=\(replyMax) " +
+            "thinkingActive=\(thinkingActive) " +
+            "override=\(settings.replyTokensOverride > 0 ? String(settings.replyTokensOverride) : "nil") " +
+            "preset.maxLength=\(preset.maxLength) " +
+            "chat.template=\(chat.templateId) " +
+            "qwenThinkingEnabled=\(settings.qwenThinkingEnabled)"
+        )
+        // Phase 8 §4.2c — speaker resolution. For multi-cast chats, the
+        // trailing assistant slot was stamped with a speakerId by
+        // sendUserMessage / regenerate / forkFrom (whichever opened it).
+        // Resolve the speaker's full Character; fall back to chat-level
+        // characterId for solo / free-form chats so the existing single-
+        // speaker prompt path stays unchanged.
+        let trailingSpeakerId: UUID? = chat.activeTurns
+            .last(where: { $0.role == .assistant })?
+            .speakerId
+        let isMultiCast = chat.cast.count > 1 && trailingSpeakerId != nil
+        let resolvedCharacter: Character? = isMultiCast
+            ? trailingSpeakerId.flatMap { character(id: $0) }
+            : character(id: chat.characterId)
+        let resolvedCast: [Character] = isMultiCast
+            ? chat.cast.compactMap { character(id: $0) }
+            : []
+        let resolvedPersona = persona(id: chat.personaId)
+        // 4b/4f diagnostic — confirm card + persona composition is reaching
+        // the prompt. Caught a stale-binary regression once already; cheap to
+        // emit and surfaces the two indirections that are easy to break.
+        let composed = PromptBuilder.composeMemoryBlock(chat: chat, character: resolvedCharacter, userName: settings.userName) ?? ""
+        let personaBlock = PromptBuilder.renderPersonaBlock(resolvedPersona) ?? ""
+        DebugLog.shared.write("card-compose: chat.characterId=\(chat.characterId?.uuidString ?? "nil") resolved=\(resolvedCharacter?.name ?? "nil") composedChars=\(composed.count) systemPromptMode=\(chat.systemPromptMode.rawValue) persona=\(resolvedPersona?.name ?? "nil") personaChars=\(personaBlock.count)")
+        // 4b/4c diagnostic — confirms the registry resolved to the expected
+        // server, including the chat's per-chat pin if any.
+        let resolvedClient = registry.client(for: .general, chatOverride: chat.serverId)
+        let resolvedProfile = settings.servers.first(where: { $0.baseURL == resolvedClient.baseURL })
+        DebugLog.shared.write("server-resolve: chat.serverId=\(chat.serverId?.uuidString ?? "nil") resolved=\(resolvedProfile?.name ?? "?") baseURL=\(resolvedClient.baseURL.absoluteString)")
         TokenBudget.assemble(
             chat: chat,
             effectiveCtx: ctx,
             replyReserve: replyMax,
+            character: resolvedCharacter,
+            persona: resolvedPersona,
             relevantMemories: relevantMemories,
             continuation: continuation,
             userName: settings.userName,
             qwenThinking: settings.qwenThinkingEnabled,
+            speakerId: trailingSpeakerId,
+            cast: resolvedCast,
+            overrides: resolveOverrides(for: chat),
+            systemPromptAddendum: settings.systemPromptAddendum,
             kobold: kobold
         ) { [weak self] assembly in
             guard let self = self else { return }
@@ -483,7 +1173,7 @@ final class AppState {
                 stopSequences: assembly.stops,
                 preset: preset,
                 maxContextLength: ctx,
-                maxLengthOverride: self.settings.replyTokensOverride > 0 ? self.settings.replyTokensOverride : nil
+                maxLengthOverride: replyMaxOverride
             )
 
             self.kobold.generateStream(
@@ -509,17 +1199,41 @@ final class AppState {
                         // the same append path so observers see it.
                         if var filter = self.streamThinkFilter {
                             let tail = filter.flush()
+                            // Phase 11 §D.11 (option 2) — preserve the
+                            // captured `<think>…</think>` trace on the
+                            // active variant so TurnView's disclosure
+                            // pill has data to surface. Whitespace-only
+                            // (Qwen3 empty pre-fill) and unset cases
+                            // both leave the field nil; the chat surface
+                            // hides the pill when nil so empty pre-fills
+                            // stay quiet. `text` itself never sees the
+                            // trace — downstream consumers (chunker,
+                            // summariser, retrieval, TTS) keep working
+                            // off the same clean prose they always have.
+                            let trace = filter.capturedTrace.trimmingCharacters(
+                                in: .whitespacesAndNewlines
+                            )
                             self.streamThinkFilter = nil
                             self.isThinking = false
-                            if !tail.isEmpty,
-                               let id = self.currentChatId,
+                            if let id = self.currentChatId,
                                let idx = self.chats.firstIndex(where: { $0.id == id }),
                                let lastIdx = self.chats[idx].turns.indices.last,
                                self.chats[idx].turns[lastIdx].role == .assistant {
-                                self.chats[idx].turns[lastIdx].text += tail
-                                NotificationCenter.default.post(
-                                    name: AppNotification.streamTokenAppended, object: tail
-                                )
+                                if !tail.isEmpty {
+                                    self.chats[idx].turns[lastIdx].appendToActiveVariant(tail)
+                                    NotificationCenter.default.post(
+                                        name: AppNotification.streamTokenAppended, object: tail
+                                    )
+                                }
+                                if !trace.isEmpty {
+                                    let active = self.chats[idx].turns[lastIdx].activeVariant
+                                    if self.chats[idx].turns[lastIdx].variants.indices.contains(active) {
+                                        self.chats[idx].turns[lastIdx].variants[active].thinkingTrace = trace
+                                        DebugLog.shared.write(
+                                            "[chat-pane] thinkingTrace persisted (\(trace.count) chars) on variant \(active)"
+                                        )
+                                    }
+                                }
                             }
                         }
                         // Stream-level network error fast-paths the offline alert
@@ -596,7 +1310,8 @@ final class AppState {
         DebugLog.shared.write("retrieval: indexing chat=\(chat.id) turns=\(chat.turns.count)")
         RetrievalEngine.shared.index(
             chat: chat,
-            kobold: kobold,
+            embedder: sideCallClient(.embeddings),
+            blurber: sideCallClient(.summarizer),
             contextual: settings.retrieval.contextual,
             effectiveCtx: effectiveContext
         ) { [weak self] result in
@@ -665,12 +1380,14 @@ final class AppState {
     private func recomputeUsage() {
         guard !isStreaming, let chat = currentChat else { return }
         let preset = SamplerPreset.presets.first(where: { $0.id == chat.samplerPresetId }) ?? .balanced
-        let ctx = effectiveContext
+        let ctx = effectiveContext(for: chat)
         TokenBudget.assemble(
             chat: chat,
             effectiveCtx: ctx,
             replyReserve: preset.maxLength,
             qwenThinking: settings.qwenThinkingEnabled,
+            overrides: resolveOverrides(for: chat),
+            systemPromptAddendum: settings.systemPromptAddendum,
             kobold: kobold
         ) { [weak self] assembly in
             guard let self = self else { return }
@@ -707,13 +1424,21 @@ final class AppState {
             // [previous-scene.lastTurn + 1 .. summarizedThrough - 1] inclusive.
             // summarizedThrough is exclusive (first not-yet-summarised turn),
             // so subtract 1 for the inclusive lastTurn.
-            let prevLast = c.sceneSummaries.last?.lastTurn ?? -1
-            let firstTurn = max(0, prevLast + 1)
-            let lastTurn = max(firstTurn, c.summarizedThrough - 1)
+            //
+            // Phase 7 §3.2 — resolve range to UUIDs against the active path.
+            // The previous scene's lastTurnId may be off-branch (we forked
+            // after a scene break), in which case we treat its position as
+            // -1 and start fresh from the path origin.
+            let prevLastId = c.sceneSummaries.last?.lastTurnId
+            let prevLastIdx = prevLastId.flatMap { c.activePosition(of: $0) } ?? -1
+            let firstIdx = max(0, prevLastIdx + 1)
+            let lastIdx = max(firstIdx, c.summarizedThrough - 1)
+            let firstTurnId = c.activePath.indices.contains(firstIdx) ? c.activePath[firstIdx] : nil
+            let lastTurnId = c.activePath.indices.contains(lastIdx) ? c.activePath[lastIdx] : nil
             c.sceneSummaries.append(SceneSummary(
                 text: trimmed,
-                firstTurn: firstTurn,
-                lastTurn: lastTurn
+                firstTurnId: firstTurnId,
+                lastTurnId: lastTurnId
             ))
             c.summary = ""
         }
@@ -733,7 +1458,7 @@ final class AppState {
         let chatId = chat.id
         Summarizer.run(
             chat: chat,
-            kobold: kobold,
+            kobold: sideCallClient(.summarizer),
             effectiveCtx: effectiveContext
         ) { [weak self] result in
             DispatchQueue.main.async {
@@ -783,7 +1508,12 @@ final class AppState {
         } else {
             displayed = tok
         }
-        chats[idx].turns[lastIdx].text += displayed
+        // Route through the variant helper so the seed variant is created
+        // on the first token of a fresh assistant turn (sendUserMessage and
+        // regenerate both leave the trailing turn with `variants = []`),
+        // and so subsequent tokens accumulate on the *active* variant rather
+        // than the now-stale `text` mirror.
+        chats[idx].turns[lastIdx].appendToActiveVariant(displayed)
         // Don't save on every token; save on finish via finish handler.
         NotificationCenter.default.post(
             name: AppNotification.streamTokenAppended, object: displayed
@@ -881,7 +1611,7 @@ final class AppState {
 
         FactExtractor.run(
             chat: chat,
-            kobold: kobold,
+            kobold: sideCallClient(.extractor),
             effectiveCtx: effectiveContext,
             lastN: scanWindow
         ) { [weak self] result in

@@ -33,6 +33,9 @@ struct Entity: Codable, Equatable, Identifiable {
     /// today but read by Step D salience.
     var pinnedByUser: Bool
     var createdTurn: Int
+    /// Per-character voice. `nil` falls back to the chat-default voice.
+    /// Phase 6 §7.2 — additive Codable: pre-§7.2 entities decode with nil.
+    var voice: VoicePreference?
 
     init(
         id: UUID = UUID(),
@@ -41,7 +44,8 @@ struct Entity: Codable, Equatable, Identifiable {
         type: EntityType,
         facts: [Fact] = [],
         pinnedByUser: Bool = false,
-        createdTurn: Int = 0
+        createdTurn: Int = 0,
+        voice: VoicePreference? = nil
     ) {
         self.id = id
         self.name = name
@@ -50,6 +54,7 @@ struct Entity: Codable, Equatable, Identifiable {
         self.facts = facts
         self.pinnedByUser = pinnedByUser
         self.createdTurn = createdTurn
+        self.voice = voice
     }
 
     init(from decoder: Decoder) throws {
@@ -61,6 +66,7 @@ struct Entity: Codable, Equatable, Identifiable {
         facts = try c.decodeIfPresent([Fact].self, forKey: .facts) ?? []
         pinnedByUser = try c.decodeIfPresent(Bool.self, forKey: .pinnedByUser) ?? false
         createdTurn = try c.decodeIfPresent(Int.self, forKey: .createdTurn) ?? 0
+        voice = try c.decodeIfPresent(VoicePreference.self, forKey: .voice)
     }
 
     /// Case-insensitive name + alias match against arbitrary text. Used by the

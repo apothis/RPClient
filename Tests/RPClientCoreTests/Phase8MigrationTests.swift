@@ -1,0 +1,582 @@
+import Foundation
+@testable import RPClientCore
+
+/// Phase 8 §4.1 — group-chat storage + migration.
+///
+/// Covers the additions to `Chat` (`cast`, `speakerSelection`) and `Turn`
+/// (`speakerId`), the v3→v4 cast-seeding migration that promotes a legacy
+/// `characterId` into the first cast member, and the decode-time validation
+/// that catches missing/dangling speakerIds on multi-cast chats.
+///
+/// Pure tests — no AppKit, no AppState. Mirrors `ChatBranchingTests` shape.
+func phase8MigrationTests() -> TestSuite {
+    let s = TestSuite("Phase8Migration")
+
+    let encoder: JSONEncoder = {
+        let e = JSONEncoder()
+        e.dateEncodingStrategy = .iso8601
+        return e
+    }()
+    let decoder: JSONDecoder = {
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .iso8601
+        return d
+    }()
+
+    let nowStr = ISO8601DateFormatter().string(from: Date())
+
+    // MARK: - Cast-seeding migration (v3 → v4)
+
+    s.test("v3 chat with characterId set seeds cast = [characterId] and bumps to v4") {
+        let chatId = UUID()
+        let charId = UUID()
+        let json = """
+        {
+            "id": "\(chatId.uuidString)",
+            "title": "Solo legacy",
+            "created": "\(nowStr)",
+            "modified": "\(nowStr)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced",
+            "turns": [],
+            "schemaVersion": 3,
+            "characterId": "\(charId.uuidString)"
+        }
+        """
+        let chat = try decoder.decode(Chat.self, from: Data(json.utf8))
+        try expectEqual(chat.cast, [charId])
+        try expectEqual(chat.schemaVersion, 4)
+        try expectEqual(chat.characterId, charId)
+    }
+
+    s.test("v3 chat with characterId nil leaves cast empty and bumps to v4") {
+        let chatId = UUID()
+        let json = """
+        {
+            "id": "\(chatId.uuidString)",
+            "title": "Freeform legacy",
+            "created": "\(nowStr)",
+            "modified": "\(nowStr)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced",
+            "turns": [],
+            "schemaVersion": 3
+        }
+        """
+        let chat = try decoder.decode(Chat.self, from: Data(json.utf8))
+        try expectEqual(chat.cast, [])
+        try expectEqual(chat.schemaVersion, 4)
+        try expectNil(chat.characterId)
+    }
+
+    s.test("decoded chat defaults speakerSelection to .roundRobin") {
+        let json = """
+        {
+            "id": "\(UUID().uuidString)",
+            "title": "x",
+            "created": "\(nowStr)",
+            "modified": "\(nowStr)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced",
+            "turns": [],
+            "schemaVersion": 3
+        }
+        """
+        let chat = try decoder.decode(Chat.self, from: Data(json.utf8))
+        try expectEqual(chat.speakerSelection, .roundRobin)
+    }
+
+    s.test("v4 chat with explicit cast round-trips identically") {
+        let chatId = UUID()
+        let castA = UUID()
+        let castB = UUID()
+        let json = """
+        {
+            "id": "\(chatId.uuidString)",
+            "title": "Group",
+            "created": "\(nowStr)",
+            "modified": "\(nowStr)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced",
+            "turns": [],
+            "schemaVersion": 4,
+            "cast": ["\(castA.uuidString)", "\(castB.uuidString)"],
+            "speakerSelection": "pooled"
+        }
+        """
+        let chat = try decoder.decode(Chat.self, from: Data(json.utf8))
+        try expectEqual(chat.cast, [castA, castB])
+        try expectEqual(chat.schemaVersion, 4)
+        try expectEqual(chat.speakerSelection, .pooled)
+
+        // Round-trip: encode, decode, expect same fields.
+        let data = try encoder.encode(chat)
+        let again = try decoder.decode(Chat.self, from: data)
+        try expectEqual(again.cast, chat.cast)
+        try expectEqual(again.speakerSelection, chat.speakerSelection)
+        try expectEqual(again.schemaVersion, 4)
+    }
+
+    // MARK: - characterId.didSet maintains the cast invariant
+
+    s.test("assigning characterId to a free-form chat seeds cast = [characterId]") {
+        var chat = Chat(title: "fresh")
+        try expectEqual(chat.cast, [])
+        let cid = UUID()
+        chat.characterId = cid
+        try expectEqual(chat.cast, [cid])
+    }
+
+    s.test("re-assigning the same characterId is idempotent — no duplicate in cast") {
+        var chat = Chat(title: "x")
+        let cid = UUID()
+        chat.characterId = cid
+        chat.characterId = cid
+        try expectEqual(chat.cast, [cid])
+    }
+
+    s.test("assigning a different characterId to a solo chat appends to cast") {
+        // A solo chat (cast == [A]) whose characterId gets re-pointed to B
+        // becomes a 2-cast chat. Solo→multi promotion happens implicitly;
+        // the user can prune via the Cast pane (§4.3) if unwanted.
+        var chat = Chat(title: "x")
+        let a = UUID(), b = UUID()
+        chat.characterId = a
+        chat.characterId = b
+        try expectEqual(chat.cast, [a, b])
+    }
+
+    s.test("assigning nil characterId leaves cast unchanged") {
+        var chat = Chat(title: "x")
+        let cid = UUID()
+        chat.characterId = cid
+        chat.characterId = nil
+        try expectEqual(chat.cast, [cid])
+    }
+
+    s.test("v4 multi-cast chat with legacy nil speakerIds on assistant turns auto-stamps them on decode") {
+        // Reproduces the §4.3 promotion-gap bug: a chat that was solo
+        // (cast=[X]) gained a 2nd cast member, so old assistant turns
+        // (saved with speakerId=nil under the cast.count <= 1 tolerance)
+        // would otherwise trip validateGroupChat. Decode must auto-stamp
+        // the legacy turns with characterId (or cast.first) so the chat
+        // loads instead of being silently skipped.
+        let chatId = UUID()
+        let primary = UUID()
+        let secondary = UUID()
+        let userTurnId = UUID()
+        let asstLegacyId = UUID()
+        let asstNewId = UUID()
+        let json = """
+        {
+            "id": "\(chatId.uuidString)",
+            "title": "Promoted to group",
+            "created": "\(nowStr)",
+            "modified": "\(nowStr)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced",
+            "schemaVersion": 4,
+            "cast": ["\(primary.uuidString)", "\(secondary.uuidString)"],
+            "characterId": "\(primary.uuidString)",
+            "turns": [
+                {"id": "\(userTurnId.uuidString)", "role": "user", "text": "hi", "ts": "\(nowStr)", "edited": false},
+                {"id": "\(asstLegacyId.uuidString)", "role": "assistant", "text": "from solo days", "ts": "\(nowStr)", "edited": false},
+                {"id": "\(asstNewId.uuidString)", "role": "assistant", "text": "post-promotion", "ts": "\(nowStr)", "edited": false, "speakerId": "\(secondary.uuidString)"}
+            ]
+        }
+        """
+        let chat = try decoder.decode(Chat.self, from: Data(json.utf8))
+        // Legacy nil speakerId got stamped with characterId (the
+        // pre-promotion solo speaker — semantically correct: those turns
+        // were spoken by the only character in the room at the time).
+        try expectEqual(chat.turns[1].speakerId, primary)
+        // Already-stamped speakerIds are preserved.
+        try expectEqual(chat.turns[2].speakerId, secondary)
+    }
+
+    s.test("decode auto-stamp falls back to cast.first when characterId is nil") {
+        let chatId = UUID()
+        let a = UUID(), b = UUID()
+        let asstId = UUID()
+        let json = """
+        {
+            "id": "\(chatId.uuidString)",
+            "title": "No characterId",
+            "created": "\(nowStr)",
+            "modified": "\(nowStr)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced",
+            "schemaVersion": 4,
+            "cast": ["\(a.uuidString)", "\(b.uuidString)"],
+            "turns": [
+                {"id": "\(asstId.uuidString)", "role": "assistant", "text": "x", "ts": "\(nowStr)", "edited": false}
+            ]
+        }
+        """
+        let chat = try decoder.decode(Chat.self, from: Data(json.utf8))
+        try expectEqual(chat.turns[0].speakerId, a)
+    }
+
+    s.test("v4 chat with cast=[] and characterId set self-heals on decode") {
+        // The state a fresh new-chat path could write before the didSet
+        // observer was added: explicit schemaVersion 4, empty cast, but
+        // characterId is set. Decode normalises to cast = [characterId]
+        // so legacy bug-state files heal on next load.
+        let chatId = UUID()
+        let charId = UUID()
+        let json = """
+        {
+            "id": "\(chatId.uuidString)",
+            "title": "Bug-state",
+            "created": "\(nowStr)",
+            "modified": "\(nowStr)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced",
+            "turns": [],
+            "schemaVersion": 4,
+            "cast": [],
+            "characterId": "\(charId.uuidString)"
+        }
+        """
+        let chat = try decoder.decode(Chat.self, from: Data(json.utf8))
+        try expectEqual(chat.cast, [charId])
+        try expectEqual(chat.characterId, charId)
+    }
+
+    // MARK: - Turn.speakerId — decode + round-trip
+
+    s.test("Turn.speakerId decodes when present and is nil when absent") {
+        let speaker = UUID()
+        let withSpeaker = """
+        {
+            "id": "\(UUID().uuidString)",
+            "role": "assistant",
+            "text": "hi",
+            "ts": "\(nowStr)",
+            "edited": false,
+            "speakerId": "\(speaker.uuidString)"
+        }
+        """
+        let withoutSpeaker = """
+        {
+            "id": "\(UUID().uuidString)",
+            "role": "assistant",
+            "text": "hi",
+            "ts": "\(nowStr)",
+            "edited": false
+        }
+        """
+        let t1 = try decoder.decode(Turn.self, from: Data(withSpeaker.utf8))
+        let t2 = try decoder.decode(Turn.self, from: Data(withoutSpeaker.utf8))
+        try expectEqual(t1.speakerId, speaker)
+        try expectNil(t2.speakerId)
+
+        // Round-trip preserves both shapes.
+        let r1 = try decoder.decode(Turn.self, from: encoder.encode(t1))
+        let r2 = try decoder.decode(Turn.self, from: encoder.encode(t2))
+        try expectEqual(r1.speakerId, speaker)
+        try expectNil(r2.speakerId)
+    }
+
+    // MARK: - Multi-cast validation invariants
+
+    // Note: a previous test here asserted decode threw on a multi-cast
+    // chat with nil speakerId on an assistant turn. That semantic was
+    // dropped in favour of the §4.3 promotion-gap heal — cast.count > 1
+    // chats with legacy nil speakerIds auto-stamp at decode time (see the
+    // "auto-stamps them on decode" test below), so the throw is no
+    // longer reachable. The dangling-speakerId case (set to a UUID
+    // not in cast) still throws — that's the next test.
+
+    s.test("v4 chat throws when assistant turn speakerId is not in cast") {
+        let chatId = UUID()
+        let castA = UUID(), castB = UUID(), strangerId = UUID()
+        let userTurnId = UUID(), asstTurnId = UUID()
+        let json = """
+        {
+            "id": "\(chatId.uuidString)",
+            "title": "Group",
+            "created": "\(nowStr)",
+            "modified": "\(nowStr)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced",
+            "schemaVersion": 4,
+            "cast": ["\(castA.uuidString)", "\(castB.uuidString)"],
+            "turns": [
+                {"id": "\(userTurnId.uuidString)", "role": "user", "text": "hi", "ts": "\(nowStr)", "edited": false},
+                {"id": "\(asstTurnId.uuidString)", "role": "assistant", "text": "hello", "ts": "\(nowStr)", "edited": false, "speakerId": "\(strangerId.uuidString)"}
+            ]
+        }
+        """
+        try expectThrows("expected decode to throw on dangling speakerId") {
+            _ = try decoder.decode(Chat.self, from: Data(json.utf8))
+        }
+    }
+
+    s.test("v4 chat throws when user turn carries a non-nil speakerId") {
+        let chatId = UUID()
+        let castA = UUID()
+        let userTurnId = UUID()
+        let json = """
+        {
+            "id": "\(chatId.uuidString)",
+            "title": "Solo",
+            "created": "\(nowStr)",
+            "modified": "\(nowStr)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced",
+            "schemaVersion": 4,
+            "cast": ["\(castA.uuidString)"],
+            "turns": [
+                {"id": "\(userTurnId.uuidString)", "role": "user", "text": "hi", "ts": "\(nowStr)", "edited": false, "speakerId": "\(castA.uuidString)"}
+            ]
+        }
+        """
+        try expectThrows("expected decode to throw on user turn with speakerId") {
+            _ = try decoder.decode(Chat.self, from: Data(json.utf8))
+        }
+    }
+
+    s.test("v4 chat throws on duplicate cast member") {
+        let chatId = UUID()
+        let castA = UUID()
+        let json = """
+        {
+            "id": "\(chatId.uuidString)",
+            "title": "Dupe",
+            "created": "\(nowStr)",
+            "modified": "\(nowStr)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced",
+            "schemaVersion": 4,
+            "cast": ["\(castA.uuidString)", "\(castA.uuidString)"],
+            "turns": []
+        }
+        """
+        try expectThrows("expected decode to throw on duplicate cast UUID") {
+            _ = try decoder.decode(Chat.self, from: Data(json.utf8))
+        }
+    }
+
+    s.test("v4 solo chat (cast.count == 1) tolerates nil speakerId on assistant turns") {
+        // Back-compat: legacy single-character chats migrated forward have
+        // cast = [characterId] and existing assistant turns with no speakerId.
+        // Validation must NOT fire on cast.count <= 1.
+        let chatId = UUID()
+        let castA = UUID()
+        let userTurnId = UUID(), asstTurnId = UUID()
+        let json = """
+        {
+            "id": "\(chatId.uuidString)",
+            "title": "Migrated solo",
+            "created": "\(nowStr)",
+            "modified": "\(nowStr)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced",
+            "schemaVersion": 4,
+            "cast": ["\(castA.uuidString)"],
+            "turns": [
+                {"id": "\(userTurnId.uuidString)", "role": "user", "text": "hi", "ts": "\(nowStr)", "edited": false},
+                {"id": "\(asstTurnId.uuidString)", "role": "assistant", "text": "hello", "ts": "\(nowStr)", "edited": false}
+            ]
+        }
+        """
+        let chat = try decoder.decode(Chat.self, from: Data(json.utf8))
+        try expectEqual(chat.cast.count, 1)
+        try expectEqual(chat.turns.count, 2)
+        try expectNil(chat.turns[1].speakerId)
+    }
+
+    s.test("v4 multi-cast chat with valid speakerIds decodes successfully") {
+        let chatId = UUID()
+        let castA = UUID(), castB = UUID()
+        let userTurnId = UUID(), asstAId = UUID(), asstBId = UUID()
+        let json = """
+        {
+            "id": "\(chatId.uuidString)",
+            "title": "Group OK",
+            "created": "\(nowStr)",
+            "modified": "\(nowStr)",
+            "templateId": "gemma",
+            "samplerPresetId": "balanced",
+            "schemaVersion": 4,
+            "cast": ["\(castA.uuidString)", "\(castB.uuidString)"],
+            "turns": [
+                {"id": "\(userTurnId.uuidString)", "role": "user", "text": "hi", "ts": "\(nowStr)", "edited": false},
+                {"id": "\(asstAId.uuidString)", "role": "assistant", "text": "hi from A", "ts": "\(nowStr)", "edited": false, "speakerId": "\(castA.uuidString)"},
+                {"id": "\(asstBId.uuidString)", "role": "assistant", "text": "hi from B", "ts": "\(nowStr)", "edited": false, "speakerId": "\(castB.uuidString)"}
+            ]
+        }
+        """
+        let chat = try decoder.decode(Chat.self, from: Data(json.utf8))
+        try expectEqual(chat.cast, [castA, castB])
+        try expectEqual(chat.turns[1].speakerId, castA)
+        try expectEqual(chat.turns[2].speakerId, castB)
+    }
+
+    // MARK: - validateGroupChat invoked directly
+
+    s.test("validateGroupChat surfaces a diagnostic for missing speakerId") {
+        let castA = UUID(), castB = UUID()
+        let asst = Turn(role: .assistant, text: "x")
+        do {
+            try Chat.validateGroupChat(cast: [castA, castB], turns: [asst])
+            throw TestFailure(message: "expected throw", file: #file, line: #line)
+        } catch let DecodingError.dataCorrupted(ctx) {
+            try expectTrue(
+                ctx.debugDescription.contains("speakerId") ||
+                ctx.debugDescription.contains("speaker"),
+                "diagnostic should mention speaker: \(ctx.debugDescription)"
+            )
+        } catch {
+            throw TestFailure(message: "unexpected error: \(error)", file: #file, line: #line)
+        }
+    }
+
+    s.test("validateGroupChat surfaces a diagnostic for dangling speakerId") {
+        let castA = UUID()
+        let strangerId = UUID()
+        var asst = Turn(role: .assistant, text: "x")
+        asst.speakerId = strangerId
+        do {
+            try Chat.validateGroupChat(cast: [castA, UUID()], turns: [asst])
+            throw TestFailure(message: "expected throw", file: #file, line: #line)
+        } catch let DecodingError.dataCorrupted(ctx) {
+            try expectTrue(
+                ctx.debugDescription.contains(strangerId.uuidString) ||
+                ctx.debugDescription.contains("cast"),
+                "diagnostic should reference offending id or cast: \(ctx.debugDescription)"
+            )
+        } catch {
+            throw TestFailure(message: "unexpected error: \(error)", file: #file, line: #line)
+        }
+    }
+
+    s.test("validateGroupChat passes on solo cast with nil speakerId") {
+        let castA = UUID()
+        let asst = Turn(role: .assistant, text: "x")
+        try Chat.validateGroupChat(cast: [castA], turns: [asst])
+    }
+
+    s.test("validateGroupChat passes on empty cast (free-form)") {
+        let asst = Turn(role: .assistant, text: "x")
+        try Chat.validateGroupChat(cast: [], turns: [asst])
+    }
+
+    // MARK: - Phase 8 deferred — Chat.reorderCast + Chat.convertToSolo
+
+    s.test("reorderCast moves a member from one position to another") {
+        let a = UUID(), b = UUID(), cc = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, b, cc]
+        chat.reorderCast(from: 0, to: 2)
+        try expectEqual(chat.cast, [b, cc, a])
+    }
+
+    s.test("reorderCast moving up shifts intervening members down") {
+        let a = UUID(), b = UUID(), cc = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, b, cc]
+        chat.reorderCast(from: 2, to: 0)
+        try expectEqual(chat.cast, [cc, a, b])
+    }
+
+    s.test("reorderCast is a no-op when from == to") {
+        let a = UUID(), b = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, b]
+        chat.reorderCast(from: 1, to: 1)
+        try expectEqual(chat.cast, [a, b])
+    }
+
+    s.test("reorderCast is a no-op on out-of-bounds indices (defensive)") {
+        let a = UUID(), b = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, b]
+        chat.reorderCast(from: 5, to: 0)
+        chat.reorderCast(from: 0, to: 5)
+        chat.reorderCast(from: -1, to: 0)
+        try expectEqual(chat.cast, [a, b])
+    }
+
+    s.test("convertToSolo reduces cast to one member and updates characterId") {
+        let a = UUID(), b = UUID(), cc = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, b, cc]
+        chat.characterId = a
+        chat.convertToSolo(keeping: b)
+        try expectEqual(chat.cast, [b])
+        try expectEqual(chat.characterId, b)
+    }
+
+    s.test("convertToSolo clears pendingSpeakerId if it pointed at a removed member") {
+        let a = UUID(), b = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, b]
+        chat.pendingSpeakerId = a
+        chat.convertToSolo(keeping: b)
+        try expectNil(chat.pendingSpeakerId)
+    }
+
+    s.test("convertToSolo preserves pendingSpeakerId if it equals the kept member") {
+        let a = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, UUID()]
+        chat.pendingSpeakerId = a
+        chat.convertToSolo(keeping: a)
+        try expectEqual(chat.pendingSpeakerId, a)
+    }
+
+    s.test("convertToSolo leaves existing turns' speakerIds unchanged (off-cast attribution preserved)") {
+        // Old turns may have speakerId pointing to a removed cast member.
+        // validateGroupChat is solo-tolerant (cast.count <= 1 → speakerId
+        // unrestricted) so this round-trips fine. Keeping the attribution
+        // means the speaker layer can still resolve the original character
+        // for voice routing on those archived turns.
+        let a = UUID(), b = UUID()
+        let userId = UUID(), asstAId = UUID(), asstBId = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, b]
+        chat.characterId = a
+        var u = Turn(role: .user, text: "hi"); u.parentId = nil
+        var asstA = Turn(id: asstAId, role: .assistant, text: "from A"); asstA.speakerId = a; asstA.parentId = userId
+        var asstB = Turn(id: asstBId, role: .assistant, text: "from B"); asstB.speakerId = b; asstB.parentId = asstAId
+        // Wire ids so spine validation passes.
+        var u2 = Turn(id: userId, role: .user, text: "hi"); u2.parentId = nil
+        chat.turns = [u2, asstA, asstB]
+        chat.activePath = [u2.id, asstA.id, asstB.id]
+        chat.convertToSolo(keeping: a)
+        try expectEqual(chat.turns[1].speakerId, a)
+        try expectEqual(chat.turns[2].speakerId, b, "off-cast speakerId should be preserved on archived turns")
+    }
+
+    s.test("convertToSolo on cast that doesn't contain the kept id is a no-op") {
+        let a = UUID(), b = UUID()
+        var chat = Chat(title: "x")
+        chat.cast = [a, b]
+        chat.characterId = a
+        chat.convertToSolo(keeping: UUID())  // stranger
+        try expectEqual(chat.cast, [a, b])
+        try expectEqual(chat.characterId, a)
+    }
+
+    s.test("validateGroupChat surfaces a diagnostic for user turn with speakerId") {
+        let castA = UUID()
+        var u = Turn(role: .user, text: "hi")
+        u.speakerId = castA
+        do {
+            try Chat.validateGroupChat(cast: [castA], turns: [u])
+            throw TestFailure(message: "expected throw", file: #file, line: #line)
+        } catch let DecodingError.dataCorrupted(ctx) {
+            try expectTrue(
+                ctx.debugDescription.contains("user") ||
+                ctx.debugDescription.contains("role"),
+                "diagnostic should mention user role: \(ctx.debugDescription)"
+            )
+        } catch {
+            throw TestFailure(message: "unexpected error: \(error)", file: #file, line: #line)
+        }
+    }
+
+    return s
+}

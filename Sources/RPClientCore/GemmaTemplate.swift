@@ -7,6 +7,7 @@ struct GemmaTemplate: PromptTemplate {
 
     func assemble(
         memoryBlock: String?,
+        personaBlock: String?,
         entitiesBlock: String?,
         sceneSummaries: [SceneSummary],
         summary: String?,
@@ -15,11 +16,16 @@ struct GemmaTemplate: PromptTemplate {
         relevantMemories: String?,
         tailMemoryDigest: String?,
         currentSceneAnchor: String?,
+        groupNudge: String?,
         turns: [Turn],
         continuation: Bool
     ) -> String {
         var preamble: [String] = []
         if let m = memoryBlock, !m.isEmpty { preamble.append(m) }
+        // Persona rides at the top of the first user turn for Gemma — the
+        // model has no separate "system" lane in this template, so user-side
+        // identity sits adjacent to memory in the preamble. See V2_PLAN §4.4.
+        if let p = personaBlock, !p.isEmpty { preamble.append(p) }
         if !worldInfoHits.isEmpty { preamble.append(worldInfoHits.joined(separator: "\n\n")) }
         if !sceneSummaries.isEmpty {
             preamble.append(PromptBuilder.SceneSummaryFormatter.renderBlock(sceneSummaries))
@@ -78,6 +84,14 @@ struct GemmaTemplate: PromptTemplate {
                 // summaries higher in the prompt. See MEMORY_AUDIT §4.1-C.
                 if idx == lastUserIndex, let anchor = currentSceneAnchor, !anchor.isEmpty {
                     body = body + "\n\n" + anchor
+                }
+                // Phase 8 §3.2 / §4.2b — group nudge sits *after* the
+                // anchor so it's the very last thing the model sees
+                // before the generation marker. Tiny system message that
+                // pins the active speaker; matches SillyTavern's
+                // end-of-prompt placement.
+                if idx == lastUserIndex, let nudge = groupNudge, !nudge.isEmpty {
+                    body = body + "\n\n" + nudge
                 }
                 out += body
                 out += "<end_of_turn>\n"

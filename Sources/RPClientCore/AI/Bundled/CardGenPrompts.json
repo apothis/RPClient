@@ -1,0 +1,254 @@
+{
+  "version": 1,
+  "systemPrompt": "You are a character-card designer for an NSFW-capable roleplay app. Be vivid, concrete, and in-character. Use {{user}} for the player and {{char}} for the character. Explicit content is allowed when the scene calls for it. Output ONLY the requested field's content — no preamble, no headings, no commentary, no quotation. Do NOT echo the upstream details, the example character, or any tags back; produce new content for the requested field. CRITICAL: when you write content that names the character, use the TARGET CHARACTER's `name` (or {{char}}); never substitute the EXAMPLE CHARACTER's name into the output.",
+  "candidateDefaults": {
+    "literal": {
+      "temperature": 0.4,
+      "maxTokens": 512,
+      "instruction": "Write the {humanName} for this character. Be direct and concrete; lean on the upstream details and tags as guidance, but do not repeat them. Aim for {wordCount} words."
+    },
+    "creative": {
+      "temperature": 1.05,
+      "maxTokens": 512,
+      "instruction": "Write the {humanName} for this character with a distinctive sensory or atmospheric hook. Pick a register the example character would NOT have used; surprise the reader. Lean on the tags for genre signals but do not repeat them verbatim. Aim for {wordCount} words."
+    },
+    "terse": {
+      "temperature": 0.55,
+      "maxTokens": 200,
+      "instruction": "Write the {humanName} for this character in TWO short sentences only. No qualifiers, no atmospheric setup, no listing. Give the spine — the author will expand. Strict cap: {wordCount} words."
+    }
+  },
+  "fields": {
+    "name": {
+      "humanName": "character's given name ONLY — no occupation, title, age, descriptor, or 'the X' suffix. Just the name (e.g. 'Vexara', 'Mira Vance', 'Kaspar'). One or two words. If the AUTHOR DIRECTION names the character explicitly, USE THAT NAME exactly — don't substitute a different one.",
+      "wordCount": 2
+    },
+    "nickname": {
+      "humanName": "casual short alias (1-3 words) that fits the character's voice and setting — could be a shortening of the full name, a callsign, a sensory tag, an inherited sobriquet, anything that feels native. MUST DIFFER from the full name.",
+      "wordCount": 2
+    },
+    "description": {
+      "humanName": "description (background, role, current circumstances)",
+      "wordCount": 60
+    },
+    "personality": {
+      "humanName": "personality (traits, manner, what catches people off guard)",
+      "wordCount": 30
+    },
+    "scenario": {
+      "humanName": "opening scenario (the situation when {{user}} meets {{char}})",
+      "wordCount": 50
+    },
+    "first_message": {
+      "humanName": "first message",
+      "wordCount": 30,
+      "candidates": {
+        "literal": {
+          "temperature": 0.5,
+          "maxTokens": 400,
+          "instruction": "Write the first message — the opening line that {{char}} (the TARGET character, NOT the example character) speaks when {{user}} arrives. Third-person past-tense narration in *italics* for actions, plain text for spoken dialogue in quotes. Use the TARGET character's name from the upstream block — NEVER use the example character's name. ~{wordCount} words."
+        },
+        "creative": {
+          "temperature": 1.0,
+          "maxTokens": 400,
+          "instruction": "Write the first message that {{char}} (the TARGET character) speaks when {{user}} arrives. Open on a sensory hook — gesture, image, sound — not on the character's name or role. Third-person past-tense italics for actions, quoted speech for dialogue. Use the TARGET character's name from the upstream block; do NOT use the example character's name. ~{wordCount} words."
+        },
+        "terse": {
+          "temperature": 0.5,
+          "maxTokens": 200,
+          "instruction": "Write a punchy first message for {{char}} (the TARGET character): one short *action line* + one short spoken sentence. Use the TARGET character's name from the upstream block — never the example character's. ≤{wordCount} words."
+        }
+      }
+    },
+    "message_example": {
+      "humanName": "example dialogue (two short exchanges in <START>...{{user}}...{{char}}... format)",
+      "wordCount": 60,
+      "candidates": {
+        "literal": {
+          "temperature": 0.5,
+          "maxTokens": 500,
+          "instruction": "Write example dialogue for {{char}} (the TARGET character). Two short exchanges, each starting with <START>. Format every line as either '{{user}}: ...' or '{{char}}: ...' (literal handlebars — they are placeholders the engine substitutes at runtime). Use the TARGET character's voice; do NOT use the example character's name in the dialogue. ~{wordCount} words."
+        },
+        "creative": {
+          "temperature": 0.95,
+          "maxTokens": 500,
+          "instruction": "Write example dialogue for {{char}} (the TARGET character). Two short exchanges, each starting with <START>. Pick exchanges that surprise — one about a topic the upstream tags don't telegraph. Format every line as either '{{user}}: ...' or '{{char}}: ...'. Do NOT use the example character's name in the dialogue. ~{wordCount} words."
+        },
+        "terse": {
+          "temperature": 0.5,
+          "maxTokens": 250,
+          "instruction": "Write example dialogue for {{char}}: one <START> exchange, two lines (one '{{user}}:' and one '{{char}}:'). Do NOT use the example character's name. ≤{wordCount} words."
+        }
+      }
+    },
+    "alternate_greetings": {
+      "humanName": "an alternate greeting",
+      "wordCount": 30,
+      "candidates": {
+        "literal": {
+          "temperature": 0.6,
+          "maxTokens": 400,
+          "instruction": "Write an alternate greeting for {{char}} (the TARGET character) — a different opening from the existing first_message but in the same voice. Third-person past-tense italics for actions, quoted speech for dialogue. Use the TARGET character's name from the upstream block — NEVER use the example character's name. ~{wordCount} words."
+        },
+        "creative": {
+          "temperature": 1.0,
+          "maxTokens": 400,
+          "instruction": "Write a distinctive alternate greeting for {{char}} (the TARGET character) — different setting, mood, or tone from the existing first_message. Use the TARGET character's name from the upstream block; do NOT use the example character's name. ~{wordCount} words."
+        },
+        "terse": {
+          "temperature": 0.5,
+          "maxTokens": 200,
+          "instruction": "Write a short alternate greeting for {{char}} (the TARGET character): one *action line* + one spoken sentence. Use the TARGET character's name; never the example character's. ≤{wordCount} words."
+        }
+      }
+    },
+    "group_only_greetings": {
+      "humanName": "a group-chat-only greeting (acknowledges other speakers)",
+      "wordCount": 30,
+      "candidates": {
+        "literal": {
+          "temperature": 0.6,
+          "maxTokens": 400,
+          "instruction": "Write a group-chat greeting for {{char}} (the TARGET character) — assumes {{user}} is one of multiple speakers and acknowledges the social context. Use the TARGET character's name from the upstream block — NEVER use the example character's name. ~{wordCount} words."
+        },
+        "creative": {
+          "temperature": 1.0,
+          "maxTokens": 400,
+          "instruction": "Write a distinctive group-chat greeting for {{char}} (the TARGET character) — picks up on a moment between others, or addresses a specific other speaker. Use the TARGET character's name; do NOT use the example character's name. ~{wordCount} words."
+        },
+        "terse": {
+          "temperature": 0.5,
+          "maxTokens": 200,
+          "instruction": "Write a short group-chat greeting for {{char}}: one action + one spoken line that hints at multiple speakers. Use the TARGET character's name; never the example character's. ≤{wordCount} words."
+        }
+      }
+    },
+    "system_prompt": {
+      "humanName": "system prompt (instructions to the model about how to portray {{char}})",
+      "wordCount": 30
+    },
+    "post_history_instructions": {
+      "humanName": "post-history instructions (generic stage-direction text only — pure formatting/tone guidance with NO mention of the character's name, traits, profession, or biography. ✅ Good: 'Stay in character. Respond in third person past tense. Keep responses under three paragraphs.' ❌ Bad: 'Maintain Sarah's dry humor and observant eye.' ❌ Bad: 'Channel the warm, professional agency companion tone.' If unsure, output only generic directives that would apply to ANY character)",
+      "wordCount": 12
+    },
+    "depth_prompt": {
+      "humanName": "depth prompt (a short note that lives N turns deep in the prompt)",
+      "wordCount": 15
+    },
+    "creator_notes": {
+      "humanName": "creator notes (a short note for the player who will use the card — content warnings, NSFW posture, intended audience, edge-case handling. NOT model recommendations and NOT a re-summary of the character)",
+      "wordCount": 25
+    },
+    "details_sex": {
+      "humanName": "sex (one of: Male, Female, Non-binary, or a short custom descriptor like 'futa' or 'agender')",
+      "wordCount": 2
+    },
+    "details_age": {
+      "humanName": "age — a bare number ('22'), short descriptor ('mid-30s', 'ancient', 'immortal'), or 'unknown'. Do NOT append 'years old', 'yrs', or any qualifier.",
+      "wordCount": 1
+    },
+    "details_pronouns": {
+      "humanName": "pronouns (e.g. she/her, they/them)",
+      "wordCount": 2
+    },
+    "details_species": {
+      "humanName": "species (e.g. Human, Elf, Lamia, Synthetic)",
+      "wordCount": 2
+    },
+    "details_orientation": {
+      "humanName": "orientation (e.g. straight, queer, pansexual)",
+      "wordCount": 2
+    },
+    "details_appearance": {
+      "humanName": "appearance (height, build, skin/hair, signature dress)",
+      "wordCount": 30
+    },
+    "details_mood": {
+      "humanName": "mood / disposition (default emotional register, what shifts it)",
+      "wordCount": 25
+    },
+    "intimacy_build": {
+      "humanName": "build (body shape, frame, how {{char}} carries themselves)",
+      "wordCount": 25
+    },
+    "intimacy_anatomy": {
+      "humanName": "anatomy (concrete, vivid; non-human anatomy described frankly when applicable)",
+      "wordCount": 30
+    },
+    "intimacy_markings": {
+      "humanName": "markings (tattoos, scars, piercings, jewelry rarely removed)",
+      "wordCount": 25
+    },
+    "intimacy_sensitivities": {
+      "humanName": "sensitivities (places that get a strong reaction)",
+      "wordCount": 25
+    },
+    "intimacy_scent": {
+      "humanName": "scent (day/work scent vs. fresh-out-of-bath; intimate scent)",
+      "wordCount": 20
+    },
+    "intimacy_turn_ons": {
+      "humanName": "turn-ons",
+      "wordCount": 30,
+      "candidates": {
+        "literal": {
+          "temperature": 0.4,
+          "maxTokens": 200,
+          "instruction": "Write 3-4 specific turn-ons for this character as a bullet list, one '- item' per line. Each item is a short phrase (5-12 words). Lean on the personality and anatomy already given but do not echo them. ~{wordCount} words total."
+        },
+        "creative": {
+          "temperature": 1.0,
+          "maxTokens": 200,
+          "instruction": "Write 3-4 distinctive turn-ons for this character as a bullet list, one '- item' per line. Pick angles the upstream details don't telegraph; surprise the reader. Each item is a short phrase. ~{wordCount} words total."
+        },
+        "terse": {
+          "temperature": 0.5,
+          "maxTokens": 120,
+          "instruction": "Write 3 short turn-ons as a bullet list, one '- item' per line. ≤4 words each. No setup, no qualifiers."
+        }
+      }
+    },
+    "intimacy_kinks": {
+      "humanName": "kinks",
+      "wordCount": 25,
+      "candidates": {
+        "literal": {
+          "temperature": 0.4,
+          "maxTokens": 200,
+          "instruction": "Write 3-4 specific kinks for this character as a bullet list, one '- item' per line. Each item is a concrete preference (3-10 words). Distinct from broader turn-ons. ~{wordCount} words total."
+        },
+        "creative": {
+          "temperature": 1.0,
+          "maxTokens": 200,
+          "instruction": "Write 3-4 distinctive kinks for this character as a bullet list, one '- item' per line. Pick specifics the upstream tags don't already imply. Each item is a concrete preference. ~{wordCount} words total."
+        },
+        "terse": {
+          "temperature": 0.5,
+          "maxTokens": 120,
+          "instruction": "Write 3 short kinks as a bullet list, one '- item' per line. ≤4 words each."
+        }
+      }
+    },
+    "intimacy_limits": {
+      "humanName": "limits",
+      "wordCount": 20,
+      "candidates": {
+        "literal": {
+          "temperature": 0.3,
+          "maxTokens": 160,
+          "instruction": "Write 3-4 hard nos as a bullet list, one '- item' per line. These are neutral starting-point limits the author should review and edit; not character-specific. Examples: family roles, degradation, scat. ~{wordCount} words total."
+        },
+        "creative": {
+          "temperature": 0.6,
+          "maxTokens": 160,
+          "instruction": "Write 3-4 hard nos as a bullet list, one '- item' per line. Pick reasonable defaults the author can keep or replace. ~{wordCount} words total."
+        },
+        "terse": {
+          "temperature": 0.4,
+          "maxTokens": 100,
+          "instruction": "Write 3 short hard nos as a bullet list, one '- item' per line. ≤4 words each."
+        }
+      }
+    }
+  }
+}
