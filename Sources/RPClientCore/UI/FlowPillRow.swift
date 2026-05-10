@@ -186,7 +186,16 @@ final class FlowPillRow: NSView, NSPopoverDelegate {
         if pills.isEmpty {
             return NSSize(width: NSView.noIntrinsicMetric, height: 0)
         }
-        switch mode {
+        // V2_UI_OVERHAUL §4.g.3 fixup — derive the height-driving mode
+        // from CURRENT bounds.width, not the cached `mode` ivar. During
+        // a live window resize the parent reads our intrinsicContentSize
+        // before our own layout() has had a chance to update the cache,
+        // so trusting the ivar reports a stale (often taller) wrap-mode
+        // height for one frame, which propagates up the InputBar and
+        // makes the composer briefly grow before snapping back.
+        let avail = bounds.width > 0 ? bounds.width : 800
+        let liveMode = PillFlow.mode(forWidth: avail)
+        switch liveMode {
         case .inline, .collapsed:
             let h = pills.map { $0.fittingSize.height }.max()
                 ?? overflowButton.fittingSize.height
@@ -194,7 +203,6 @@ final class FlowPillRow: NSView, NSPopoverDelegate {
         case .wrap:
             let pillH = pills.map { $0.fittingSize.height }.max() ?? 0
             let widths = pills.map { $0.fittingSize.width }
-            let avail = bounds.width > 0 ? bounds.width : 800
             let split = PillFlow.split(
                 widths: widths,
                 available: avail,
