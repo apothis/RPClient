@@ -903,19 +903,19 @@ final class TurnView: NSView, NSTextViewDelegate {
         guard let v = muteToggleButton else { return }
         let symbol = isMutedCharacterCache ? "speaker.slash.fill" : "speaker.wave.2.fill"
         let tip = isMutedCharacterCache ? "Unmute this character" : "Mute this character"
-        // Match the caption1 text body's optical size — pointSize 10
-        // with a regular weight reads as caption-furniture, not a
-        // chrome control. tertiaryLabelColor on the un-muted face
-        // matches the timestamp's tint so the icon disappears into
-        // the metadata strip until you mute, where systemOrange
-        // pops it loud.
+        // Match ChatViewController.refreshSpeakerButton's convention
+        // (the global voice toggle): orange when active, dim/default
+        // when muted. The wave icon is the "on" indicator that pops;
+        // the slash icon recedes into the metadata strip. pointSize 10
+        // / regular weight matches the caption1 text body's optical
+        // size so the icon reads as caption-furniture, not chrome.
         let cfg = NSImage.SymbolConfiguration(pointSize: 10, weight: .regular)
         v.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)?
             .withSymbolConfiguration(cfg)
         v.toolTip = tip
         v.contentTintColor = isMutedCharacterCache
-            ? .systemOrange
-            : .tertiaryLabelColor
+            ? .tertiaryLabelColor
+            : .systemOrange
     }
 
     @objc private func muteToggleTapped() {
