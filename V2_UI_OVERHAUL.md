@@ -337,25 +337,35 @@ Refusal-detected (Phase 8 §QuirkDetectors) gets a yellow `exclamationmark.trian
 
 ### 4.11 Implementation sub-stepping
 
-Sub-steps to feed implementation sessions. Each is independently testable; the order minimises rework. Estimated total: 3-4 days focused work.
+Sub-steps. Originally planned as 10 (4.a-4.j); ran longer in practice as several were split mid-execution to keep diffs focused. Current state below — done / in-progress / pending.
 
-| Sub | Title | What | Risk | TDD posture |
-|---|---|---|---|---|
-| 4.a | DesignTokens chat extensions | Add chat-specific tokens to [DesignTokens.swift](Sources/RPClientCore/UI/DesignTokens.swift): `transcriptMaxWidth`, `avatarSize`, `avatarGutter`, `bubbleRadius`, `turnGap`. No raw values in any subsequent sub-step. | Low. | Token presence + value tests — TDD. |
-| 4.b.1 | TurnView re-skin (data + header) | Italics-as-secondary tint in `Markdown.render`. New `Markdown.extractThinking` separates `<think>` content from body (test-pinned no-fork against `stripThinking`). Always-on speaker name + timestamp header on assistant turns (replaces multi-cast-only Phase 8 label). `✦` glyph migration to `person.crop.circle` SF Symbol for free-form-chat assistant placeholder. `glyphCol` / `avatarSize` plumbed through `DesignTokens.Chat`. | Low — additive; the disclosure UI is split into 4.b.2. | Phase11ThinkExtractTests + Phase11ItalicTintTests pinned the data path. Visual treatment is honest UI smoke (header / italic tint / avatar fallback) — eyeball on next app run. |
-| 4.b.2 | `<think>` disclosure UI | Visual disclosure pill (`▸ Thinking`) above the body that expands inline to show the captured `thinkingText` in `secondaryLabelColor` body. Constraint-heavy because the bubble's top anchor depends on disclosure state (hidden / collapsed / expanded); cleanest implementation switches between two row-anchor constraints or wraps the assistant body column in a vertical stack. | Medium — height-delta math is the bug-prone part. | Test the open/close height delta math + click-to-toggle state. Glue test for visual treatment. |
-| 4.c | User-turn subtle bubble | Add user-turn variant to TurnView: 32pt symmetric gutter, persona caption above bubble, `controlBackgroundColor` 14pt-radius bubble. Avatar in `secondaryLabelColor`. | Low. | Layout invariants. |
-| 4.d | Per-turn controls | Hover bar with [copy/regen/edit/branch/⋯]; right-click context menu mirror; variants pill (replace gutter chrome); branches pill on diverging messages; per-character mute as hover-icon over avatar. | Medium — hover detection on variable-height rows is fiddly. | Behavioural tests for state transitions; smoke-test the AppKit hover on a real window. |
-| 4.e | Streaming refactor | Three-stage: typing-dots placeholder → caret → bottom-centre Stop pill. Remove any header spinner / send-button morph. | Medium — chat controller's streaming-state bus needs the right signals. | Unit tests for state machine; smoke for visible behaviour. |
-| 4.f | Header collapse | One-row chat header: title + `with <persona>` subhead + ⓘ + ⋯. Delete server/model/voice/speaker-mute from header. Wire deletions cleanly so the controls' targets don't dangle. | Medium — risk is the deleted controls' wiring still being referenced. | Controller-level tests that the actions still trigger from their new homes. |
-| 4.g | Composer redesign | Two-row composer container with pill row (Persona / Model / Server / Voice) + input + trailing actions. Width-responsive collapse rules per §4.8.6. | High — net-new layout, lots of state. | Layout-stability TestKit suite (§4.8); per-pill controller tests; smoke for the popover pickers. |
-| 4.h | Empty state | Centred avatar + name + scenario + 3 chips drawn from `example_messages` / `scenario`. Click-to-prefill behaviour. | Low. | Chip seeding logic gets unit tests; visual is glue. |
-| 4.i | Layout-stability invariants | TestKit suite for §4.8 rules (scroll-position, no-jump on stream, no-jump on think-toggle, inspector-toggle reflow, resize). Surface "↓ N new" pill on scroll-up state. | Medium — these are the bug-prone invariants users have already complained about. | TDD — write the invariant tests first; let them fail; then fix the controllers to make them pass. |
-| 4.j | Cleanup | Remove `Theme.swift uiFontOffset` (no surface still uses it after 4.b). Remove dead chat-header chrome code. Remove `✦` glyph fallback now that 4.b ships avatars. | Low — pure deletion. | Compile + existing tests. |
+| Sub | Title | Status | What |
+|---|---|---|---|
+| 4.a | DesignTokens chat extensions | ✅ done | `Chat` namespace on `DesignTokens`: `transcriptMaxWidth`, `avatarSize`, `avatarGutter`, `avatarToBodyGap`, `turnGap`, `bubbleRadius`. `Phase11ChatTokensTests` pins values + no-fork aliasing rule. |
+| 4.b.1 | TurnView data + speaker header + ✦→symbol + italic tint | ✅ done | `Markdown.extractThinking` splits trace from body; `stripThinking` becomes a wrapper. Italics in `Markdown.render` re-tinted to `secondaryLabelColor`. Always-on speaker name + timestamp header on assistant turns. `✦` glyph → `person.crop.circle` SF Symbol. Tests: `Phase11ThinkExtract` (10) + `Phase11ItalicTint` (3). |
+| 4.b.2 | `<think>` disclosure UI | ✅ done | `▸ Thinking` capsule above the bubble body that expands inline. `bubbleTopConstraint` ivar swapped via `disclosureExtraHeight(...)` — pinned by `Phase11ThinkDisclosureHeight` (5). |
+| 4.c | User-turn symmetric layout | ✅ done | User turns flipped left-aligned; 32pt avatar gutter + persona caption above bubble. `userTurnDisplayName(personaName:settingsUserName:)` resolver pinned by `Phase11UserDisplayName` (6). |
+| §D.11 | `<think>` trace side-channel detour | ✅ done | `TurnVariant.thinkingTrace: String?` carries the captured trace per-variant. `ThinkBlockFilter.capturedTrace` + AppState stream-finish persist + ChatViewController push from `handleStreamFinished` and `handleChatUpdated` (variant pager). Tests: `Phase11ThinkTraceCapture` (10) + `Phase11ThinkTracePersistence` (7). Memory note: `feedback_turnview_lifecycle.md`. |
+| 4.d.1 | Per-turn controls toolbar restructure | ✅ done | Toolbar slimmed to role-dependent primary set + `⋯` overflow. Variants pill broken out (always-visible). Right-click context menu mirror via `textView(_:menu:for:at:)` delegate hook. `overflowItems(role:isLastAssistant:variantCount:)` pinned by `Phase11OverflowMenu` (6). textView read-only by default — edit mode entered explicitly via the edit button (selection + Cmd-C still work). |
+| 4.d.2 | Branches pill | ✅ done | `branches: N ▸` capsule next to variants pill on diverging messages. Replaces gutter glyph. `CapsulePill: NSStackView` subclass auto-adapts light/dark via `updateLayer()` + `accentBackground` flag. `branchesPillTitle(siblingCount:)` pinned by `Phase11BranchesPill` (4). |
+| 4.e.1 | Typing-dots indicator | ✅ done | `TypingDotsView` — three pulsing circles with phase-shifted opacity animation. Replaces "Thinking…" italic-text body + avatar opacity pulse. Shown when `isThinking || (isStreaming && rawText.isEmpty)`. |
+| 4.e.2 | Streaming caret | ✅ done | Thin `▍` glyph in `controlAccentColor` appended at end of streamed body while `isStreaming`. Removed automatically next render after `isStreaming` flips false. |
+| 4.e.3 | Stop response pill | ✅ done | NSButton bottom-centre 12pt above InputBar; visible during streamStarted → streamFinished. Click → `AppState.shared.stop()`. InputBar's send→stop morph stays as redundant secondary affordance until 4.g.2 cleans it up. Plus `AppState.thinkingReplyTokenCap = 4096` (vs 2048 default) when `thinkingActive`, with `[chat-pane] reply-budget:` log line per stream. |
+| 4.h.1 | Empty-state restructure | ✅ done | Bifurcated layout: 64pt avatar + character name + scenario top-anchored; chips bottom-anchored above composer. SF Symbol fallback for free-form chats. InputBar height cap 220→260 to accommodate the new pill row added in 4.g.1. |
+| 4.j.1 | Cleanup orphan NSButton ivars | ✅ done | Removed `replayButton`, `continueButton`, `discardVariantButton` ivars + their target/action wiring + dead isHidden/isEnabled flips. Selectors stay (used by overflow NSMenu items). |
+| 4.h.2 | Chip seeding from character data | ✅ done | `EmptyStateView.chipSeeds(for: character)` resolves alts → scenario → static fallback. `Phase11ChipSeed` (9). Note: §D.14 — alts-as-chips surface area is narrow because firstMessage seeds turn 0 and suppresses the empty state for character chats. |
+| 4.g.1 | Composer pill row + relocate pickers | ✅ done | `InputBar.pillRow: NSStackView` + `setMetadataPills(_:)` API. Server / Voice / Attribution pickers + speaker mute relocated from chat header. Chat header reduced to 8pt strip (4.f fills it later). |
+| 4.g.2 | Send-button morph removal | NEXT | Replace InputBar's primary button send→stop morph with a pure send button. The §4.e.3 Stop pill is the cancel affordance. Send button stays disabled while streaming. |
+| 4.g.3 | Width-responsive pill collapse | pending | §4.8.6 rules: ≥1100pt pills inline; 700-899pt wrap two rows; <700pt collapse to `…` overflow popup. Likely needs a layout helper that observes the InputBar's bounds and re-arranges pillRow. |
+| 4.g.4 | Persona pill (NEW UI) | pending | First persona-switching UI in the chat pane. Reads `chat.personaId`, lists personas via `AppState.personas`, writes back. NSPopover with persona name + description. Sits leading-most in the pillRow. |
+| 4.f | Header collapse | pending | After 4.g lands, fill chat header with title (editable) + `with <persona>` subhead + ⓘ inspector toggle + `…` chat-scoped overflow. Delete the empty 8pt strip. |
+| 4.i | Layout-stability TestKit suite | pending | TestKit invariants for §4.8 rules (scroll position on send / stream / think-toggle / inspector-toggle / resize). Likely catches the [`project_blank_window_bug`](memory/project_blank_window_bug.md) intermittent. |
+| 4.j.2 | `uiFontOffset` removal | pending | Field on Settings + UI in SettingsWindowController + reading in Theme.swift all need to go. Per §10 anti-pattern; macOS Dynamic Type is the replacement (also pending adoption). Substantial ripple — separate commit. |
+| 4.k | Per-character mute hover-icon over avatar | pending | §D.13 — replaces chat-wide voice toggle. Needs `Chat.mutedCharacterIds: Set<UUID>` schema + Speaker.swift TTS skip + TurnView hover-icon. Three coordinated changes; tracked separately. |
 
-**TDD posture per [feedback_tdd_workflow](memory/feedback_tdd_workflow.md):** sub-steps 4.a / 4.b (height math) / 4.d (state) / 4.e (state machine) / 4.g (responsive collapse) / 4.h (chip seeding) / 4.i (invariants) all have a clean failing-test target before implementation. 4.b/4.c/4.f visual treatment honestly admits glue/UI smoke is the right test — no faking. 4.j is pure deletion.
+**TDD posture per [feedback_tdd_workflow](memory/feedback_tdd_workflow.md):** every pure-data helper got tests-first (see `Phase11*Tests.swift` files). Layout/visual sub-steps land as honest glue/UI smoke — no faked tests. The §4.i layout-stability suite is the next big TDD target.
 
-**Diagnostic logging** per [feedback_diagnostic_logging](memory/feedback_diagnostic_logging.md): bake `DebugLog.shared.write("[chat-pane] …")` calls at every state transition in 4.e (streaming) and 4.i (scroll-position) from the first commit. Prefix is `[chat-pane]` so future grepping is clean.
+**Diagnostic logging** per [feedback_diagnostic_logging](memory/feedback_diagnostic_logging.md): permanent `[chat-pane]` prefix on stream-budget logs (`AppState.assembleAndStream`) and thinkingTrace persistence (stream-finish handler). One-shot diagnostics added during smoke iterations get pulled once they've served their purpose.
 
 ### 4.12 Out of scope for §4
 
@@ -417,13 +427,13 @@ Things that look chat-pane-shaped but belong to other sub-phases:
 
 ## 12. Sequencing + risk notes
 
-Updated 2026-05-09 with §4 spec'd and §5 absorbed.
+Updated 2026-05-10 mid-§4 implementation.
 
 | # | Step | Status | Estimate |
 |---|---|---|---|
 | 1 | Research (§3) | ✅ landed 2026-05-09 — see [V2_PHASE11_UI_RESEARCH.md](V2_PHASE11_UI_RESEARCH.md) | (½ day) |
-| 2 | Chat-pane design pass (§4) | ✅ spec'd 2026-05-09 — sub-steps 4.a-4.j ready to execute | (½ day) |
-| 3 | Chat-pane implementation (§4.a-4.j) | NEXT | 3-4 days, sub-stepped |
+| 2 | Chat-pane design pass (§4) | ✅ spec'd 2026-05-09 | (½ day) |
+| 3 | Chat-pane implementation (§4.a-4.k) | IN PROGRESS — 4.a, 4.b.1, 4.b.2, 4.c, §D.11 detour, 4.d.1, 4.d.2, 4.e.1, 4.e.2, 4.e.3, 4.h.1, 4.j.1, 4.h.2, 4.g.1 done. Remaining: 4.g.2, 4.g.3, 4.g.4, 4.f, 4.i, 4.j.2, 4.k. | ~3 days remaining |
 | 4 | Inspector (§6) — small research pass + impl | After chat pane lands | 2-3 days |
 | 5 | Sidebar (§7) — date grouping + Folders + pinned strip | Can run parallel to inspector | 1-2 days |
 | 6 | Settings + Voice rehome (§9, §10) | After 4.g composer pills land (popover targets settle) | 1 day |
